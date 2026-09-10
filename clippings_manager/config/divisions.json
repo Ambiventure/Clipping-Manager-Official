@@ -1,0 +1,254 @@
+{
+  "_comment": "Per-division caption profiles. Edit freely; the app reloads these at startup, no recompile needed. caption_position: before | after | burned.",
+  "_version": 1,
+  "sections": {
+    "_comment": "Canonical section names and the aliases seen in the real documents. Matched case-insensitively with fuzzy tolerance for typos.",
+    "order": [
+      "Positive",
+      "Neutral",
+      "Digital",
+      "Advertisement",
+      "Negative",
+      "Electronic",
+      "Social"
+    ],
+    "aliases": {
+      "Positive": [
+        "positive news",
+        "positive"
+      ],
+      "Neutral": [
+        "neutral news",
+        "nerutral news",
+        "netural news",
+        "neutral"
+      ],
+      "Digital": [
+        "digital news",
+        "digital media",
+        "digital"
+      ],
+      "Advertisement": [
+        "advertisement",
+        "advertisements",
+        "advt"
+      ],
+      "Negative": [
+        "negative news",
+        "negative nil",
+        "negative news nil",
+        "negative"
+      ],
+      "Electronic": [
+        "electronic media"
+      ],
+      "Social": [
+        "social media"
+      ]
+    },
+    "_titled_comment": "Sections whose name the source document prints on the page itself, over the first item of the run. Only these carry that heading into the exported report. The division documents head their runs too (POSITIVE NEWS :-) and have never printed them.",
+    "titled": [
+      "Electronic",
+      "Social"
+    ],
+    "fuzzy_threshold": 82,
+    "default": "Neutral"
+  },
+  "ignore_caption_patterns": [
+    "^\\s*$",
+    "^dated?\\b",
+    "daily report",
+    "analysis of press",
+    "^northern rail",
+    "^\\s*\\w+\\s+division\\s*$",
+    "division\\s+date",
+    "media coverage"
+  ],
+  "divisions": {
+    "DLI": {
+      "name": "Delhi",
+      "filename_aliases": [
+        "DLI",
+        "DELHI"
+      ],
+      "caption_position": "burned",
+      "needs_ocr": true,
+      "caption_regexes": [],
+      "split_name": true,
+      "full_name": "Delhi Division",
+      "hindi_name": "दिल्ली मंडल",
+      "colour": "#3B82F6",
+      "description": "National Capital Region, Ghaziabad, Meerut, Panipat, Rohtak",
+      "order": 0
+    },
+    "MB": {
+      "name": "Moradabad",
+      "filename_aliases": [
+        "MB",
+        "MORADABAD"
+      ],
+      "caption_position": "before",
+      "needs_ocr": false,
+      "caption_regexes": [
+        "^CITY\\s*[-\\u2013\\u2014]?\\s*(?P<edition>[^-\\u2013\\u2014]+?)\\s*[-\\u2013\\u2014]\\s*(?P<newspaper>[^-\\u2013\\u2014]+?)\\s*[-\\u2013\\u2014]\\s*Page\\s*[-.:]?\\s*(?P<page>\\d+)",
+        "^(?P<edition>[^-\\u2013\\u2014]+?)\\s*[-\\u2013\\u2014]\\s*(?P<newspaper>[^-\\u2013\\u2014]+?)\\s*[-\\u2013\\u2014]\\s*Page\\s*[-.:]?\\s*(?P<page>\\d+)"
+      ],
+      "split_name": false,
+      "full_name": "Moradabad Division",
+      "hindi_name": "मुरादाबाद मंडल",
+      "colour": "#10B981",
+      "description": "Western UP, Uttarakhand, Haridwar, Dehradun, Bareilly",
+      "order": 4
+    },
+    "UMB": {
+      "name": "Ambala",
+      "filename_aliases": [
+        "UMB",
+        "AMBALA"
+      ],
+      "caption_position": "after",
+      "needs_ocr": false,
+      "caption_regexes": [
+        "^(?P<name_blob>.+?)\\s+EDITION\\s+PAGE\\s*[-.:]?\\s*(?P<page>\\d+)\\s*$",
+        "^(?P<name_blob>.+?)\\s+PAGE\\s*[-.:]?\\s*(?P<page>\\d+)\\s*$"
+      ],
+      "split_name": true,
+      "full_name": "Ambala Division",
+      "hindi_name": "अंबाला मंडल",
+      "colour": "#8B5CF6",
+      "description": "Haryana, Chandigarh, Punjab, Himachal Pradesh, Shimla Kalka",
+      "order": 1
+    },
+    "FZR": {
+      "name": "Ferozpur",
+      "filename_aliases": [
+        "FZR",
+        "FEROZPUR",
+        "FIROZPUR"
+      ],
+      "caption_position": "before",
+      "needs_ocr": false,
+      "caption_regexes": [
+        "^(?P<newspaper>.+?)\\s+page\\s*(?:no|on|number)?\\s*[-.:]?\\s*(?P<page>\\d+)\\s+(?P<edition>.+?)\\s*$",
+        "^(?P<newspaper>.+?)\\s+page\\s*(?:no|on|number)?\\s*[-.:]?\\s*(?P<page>\\d+)\\s*$"
+      ],
+      "split_name": false,
+      "full_name": "Ferozpur Division",
+      "hindi_name": "फ़िरोज़पुर मंडल",
+      "colour": "#EC4899",
+      "description": "Punjab, Jammu & Kashmir border routes, Amritsar, Jalandhar",
+      "order": 2
+    },
+    "LKO": {
+      "name": "Lucknow",
+      "filename_aliases": [
+        "LKO",
+        "LUCKNOW"
+      ],
+      "caption_position": "burned",
+      "needs_ocr": true,
+      "caption_regexes": [],
+      "split_name": true,
+      "full_name": "Lucknow Division",
+      "hindi_name": "लखनऊ मंडल",
+      "colour": "#F59E0B",
+      "description": "Central UP, Varanasi, Ayodhya, Prayagraj, Rae Bareli",
+      "order": 3
+    },
+    "JAT": {
+      "name": "Jammu",
+      "filename_aliases": [
+        "JAT",
+        "JAMMU"
+      ],
+      "caption_position": "after",
+      "needs_ocr": false,
+      "caption_regexes": [
+        "^(?P<name_blob>.+?)\\s+(?P<page>\\d+)\\s*$"
+      ],
+      "split_name": true,
+      "full_name": "Jammu Division",
+      "hindi_name": "जम्मू मंडल",
+      "colour": "#6366F1",
+      "description": "Jammu, Kashmir Valley, Udhampur, Katra, Pathankot routes",
+      "order": 5
+    }
+  },
+  "junk_filter": {
+    "_comment": "A clip is only flagged, never deleted. min_dimension applies only when the image is small in BOTH directions, so a wide 688x118 digital-news strip is not mistaken for an icon.",
+    "min_dimension_px": 120,
+    "small_max_dimension_px": 400,
+    "max_aspect_ratio": 8.0,
+    "flag_before_first_section": true,
+    "flag_uncaptioned_before_first_caption": true
+  },
+  "name_matching": {
+    "_comment": "Scores are 0-100. A newspaper only replaces the caption text with its canonical spelling once it scores at least accept_score; below weak_score the text is kept verbatim and the clip is flagged amber for review.",
+    "newspaper_weight": 0.65,
+    "edition_weight": 0.35,
+    "no_edition_score": 50,
+    "accept_score": 85,
+    "weak_score": 65,
+    "partial_min_alias_len": 6
+  },
+  "division_order": [
+    "DLI",
+    "UMB",
+    "FZR",
+    "LKO",
+    "MB",
+    "JAT"
+  ],
+  "sentiment_detection": {
+    "_comment": "Matched as whole tokens against the file name, in this order.",
+    "order": [
+      "Negative",
+      "Neutral",
+      "Digital",
+      "Positive"
+    ],
+    "keywords": {
+      "Negative": [
+        "negative",
+        "neg",
+        "नकारात्मक",
+        "निगेटिव"
+      ],
+      "Neutral": [
+        "neutral",
+        "neu",
+        "nerutral",
+        "netural",
+        "तटस्थ",
+        "न्यूट्रल"
+      ],
+      "Digital": [
+        "digital",
+        "web",
+        "online",
+        "portal",
+        "डिजिटल"
+      ],
+      "Positive": [
+        "positive",
+        "pos",
+        "सकारात्मक",
+        "पॉजिटिव"
+      ]
+    }
+  },
+  "sentiment_board": {
+    "columns": [
+      "Positive",
+      "Neutral",
+      "Negative",
+      "Digital"
+    ],
+    "_comment": "Advertisement, Electronic and Social clippings appear in Digital: they are the ones that carry article links.",
+    "folds_into_digital": [
+      "Advertisement",
+      "Electronic",
+      "Social"
+    ]
+  }
+}

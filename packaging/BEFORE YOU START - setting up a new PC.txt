@@ -1,0 +1,262 @@
+CLIPPINGS MANAGER - SETTING UP A COMPUTER THAT HAS NEVER RUN IT
+Northern Railway PR
+===============================================================================
+
+THE SHORT ANSWER: NOTHING NEEDS INSTALLING.
+
+    No Python. No Qt. No Visual C++ runtime. No Microsoft Office. No internet
+    connection, at setup or afterwards.
+
+    Copy the folder to the computer, double-click the .exe, and it runs.
+
+    This is not a claim made loosely. The application ships with its own copy of
+    Python and of every library it uses - about 350 files in the "_internal"
+    folder
+    beside the .exe. The only things it asks of the computer are parts of
+    Windows itself that are present on every Windows 10 and Windows 11 machine:
+    kernel32, user32, gdi32, ole32, shell32, Direct2D, DirectWrite and the like.
+    Every one of them is checked by the self test described further down.
+
+    If somebody tells you to install Python first, they are describing a
+    different kind of program. Installing Python will not help and is not needed.
+
+
+===============================================================================
+1. WHAT THE COMPUTER HAS TO BE
+===============================================================================
+
+REQUIRED
+
+    Windows 10 (version 1703 or later) or Windows 11, 64-bit.
+
+        Any ordinary office PC bought since about 2017 qualifies, and so does
+        any machine that has taken Windows updates in the last few years.
+
+        1703 is not an arbitrary number: from that release Windows itself ships
+        icuuc.dll, which the interface toolkit loads. On something older the
+        program will start and then close without a window.
+
+        To check: press Windows+R, type   winver   and press Enter.
+        The box names the edition and version, e.g. "Windows 11 23H2".
+
+    About 300 MB of free disk space.
+
+        250 MB for the folder, and room for the day's clippings while you work.
+
+    Permission to write to your own user folder.
+
+        The program keeps your work in
+            %APPDATA%\ClippingsManager
+        which is inside your own profile. This is the folder that lets it
+        recover a morning's work if the machine is turned off mid-way. It needs
+        no administrator rights - every Windows user can write there.
+
+NOT REQUIRED
+
+    Administrator rights.        Not to install, not to run.
+    An internet connection.      Every morning's work is done on this machine.
+                                 It reads, sorts and builds the whole report
+                                 with the cable unplugged and the Wi-Fi
+                                 switched off.
+                                 The one exception is the "Check for updates"
+                                 button, which asks once - only when you press
+                                 it - whether a newer version has been
+                                 published. Nothing else ever reaches out, and
+                                 nothing is uploaded anywhere.
+    Microsoft Office / Word.     Only needed to OPEN the .docx it writes, the
+                                 same as any other Word file. The program builds
+                                 the .docx by itself, with no Word involved.
+    A PDF reader.                Only to open the finished PDF. Windows already
+                                 opens PDFs in Edge.
+    Python, Qt, Visual C++.      All three travel inside the folder.
+
+
+===============================================================================
+2. PUTTING IT ON THE COMPUTER
+===============================================================================
+
+    1. Copy the .zip onto the machine - USB stick, network share, however your
+       office moves files. It is about 95 MB.
+
+    2. Right-click the .zip, choose "Extract All...", and pick somewhere in your
+       own profile. Documents is a good choice:
+
+           C:\Users\<your name>\Documents\Clippings Manager
+
+       Do NOT run it from inside the .zip. Windows will let you double-click the
+       .exe while it is still zipped; it will then fail to find the _internal
+       folder and close immediately with no message. This is the single most
+       common way the first attempt goes wrong.
+
+       Avoid extracting to C:\Program Files - that needs administrator rights
+       and gains you nothing.
+
+    3. Open the folder and double-click
+
+           Clippings Manager.exe
+
+    4. Make it easy to find again: right-click the .exe and choose
+       "Pin to taskbar", or "Show more options" > "Send to" > "Desktop
+       (create shortcut)".
+
+    KEEP THE FOLDER TOGETHER. The .exe will not run on its own. It needs the
+    "_internal" folder next to it. Moving just the .exe to the Desktop is the
+    second most common way the first attempt goes wrong - make a shortcut
+    instead.
+
+
+===============================================================================
+3. "WINDOWS PROTECTED YOUR PC"  (blue box on first run)
+===============================================================================
+
+    This is expected. The application is not code-signed, and Windows shows that
+    warning for any unsigned program it has not seen before. It is not a virus
+    warning and it does not mean anything is wrong.
+
+    To run it anyway:
+
+        Click  "More info"  -  then  "Run anyway".
+
+    You only have to do this once per computer.
+
+    If your office policy blocks unsigned programs outright, the .zip will need
+    to go through whoever administers the machines. The alternative - buying a
+    code-signing certificate - is a purchasing decision, not a technical one.
+
+    If the file came by email or download rather than by USB, Windows may also
+    mark it "blocked". To clear that: right-click the .zip BEFORE extracting,
+    choose Properties, tick "Unblock" at the bottom, click OK, then extract.
+    Doing this on the .zip clears it for every file inside; doing it afterwards
+    means doing it 160 times.
+
+
+===============================================================================
+4. CHECKING THE COMPUTER IS READY
+===============================================================================
+
+    The application can check itself. Open a Command Prompt (press Windows, type
+    cmd, press Enter), then paste this - with your own path - and press Enter:
+
+        "C:\Users\<your name>\Documents\Clippings Manager\Clippings Manager.exe" --selftest
+
+    Easier: double-click
+
+        Check this PC.cmd
+
+    in the same folder. It runs the same check and holds the window open so you
+    can read it.
+
+    It prints a line per item and ends with EVERYTHING PASSED. It checks the
+    things that actually differ between machines: that the configuration
+    travelled with the build, that a Devanagari font is present, that it can
+    write to the folder where your work is kept, that it can build a PDF, a Word
+    file and a JPEG, and that crash recovery survives a round trip.
+
+    The FIRST line is the one to write down:
+
+        build          : 1.6.0 (build 3) - 07.09.2026 - 84a50126dfc1
+
+    Three things, and each answers a different question:
+
+        1.6.0        which release it is
+        (build 3)    which packaging of it - higher is always newer
+        84a50126dfc1 a fingerprint of the code itself
+
+    Two computers showing the same fingerprint are running exactly the same
+    program. Two computers showing different fingerprints are not, whatever the
+    folder is called, and the higher build number is the newer one. That is the
+    usual reason two people get different-looking reports from the same
+    document. See section 6.
+
+
+===============================================================================
+5. HINDI TEXT
+===============================================================================
+
+    Roughly half the newspapers are in Hindi, and their names are printed in
+    Devanagari. Windows normally has the fonts for this already - Nirmala UI and
+    Mangal ship with every Windows 10 and 11 install.
+
+    On a machine stripped down to English only, the self test says so:
+
+        [ FAIL ] Devanagari font
+
+    The Hindi headings then come out as boxes. To fix it - this DOES need
+    administrator rights, and is the only step in this document that does:
+
+        Settings > Time & language > Language & region
+        > Add a language > Hindi > Next > Install
+
+    You do not have to switch Windows into Hindi. Installing the language pack
+    is enough; it brings the fonts, which is all the program wants. Restart the
+    application afterwards and run the check again.
+
+    If the machine has no internet and no language pack, copy Nirmala.ttf from a
+    working Windows machine's C:\Windows\Fonts into the same folder on this one.
+    That also needs administrator rights.
+
+
+===============================================================================
+6. WHEN TWO COMPUTERS DISAGREE ABOUT THE SAME DOCUMENT
+===============================================================================
+
+    Almost always, one of them is running an older copy.
+
+    Check the build on each, three ways, whichever is convenient:
+
+      - The application's title bar shows it while it is running:
+            Clippings Manager - 1.6.0 (build 3) - 07.09.2026 - 84a50126dfc1
+
+      - Right-click "Clippings Manager.exe" > Properties > Details.
+        "Product version" and "Comments" both carry it, without running
+        anything.
+
+      - Any report it has already produced carries it:
+            PDF   - right-click > Properties > Details > "Program name"
+            Word  - File > Info > Properties > "Comments"
+        So a report that has been emailed on can still say what made it.
+
+    Same fingerprint on both machines means the same program. If they differ,
+    the higher build number is the newer one - copy that folder across and try
+    again. That is the fix.
+
+    ONE MORE THING, once the newer copy is in place: import the documents again.
+    Updating the program does not re-read what was imported earlier. Headings,
+    captions and which pictures belong together are all worked out at import and
+    stored with the clipping, so work imported by the old copy keeps the old
+    copy's reading of it. The application says so when it notices - "These were
+    read by a different build of the app" - and re-importing is what clears it.
+
+
+===============================================================================
+7. IF IT STILL WILL NOT START
+===============================================================================
+
+    Nothing happens at all when I double-click it
+        The folder is incomplete, or it is being run from inside the .zip.
+        Extract the whole .zip properly (section 2) and try again.
+
+    "The code execution cannot proceed because ____.dll was not found"
+        A file did not survive the copy. Delete the folder and extract the .zip
+        again. If it happens twice, the .zip itself was damaged in transit -
+        copy it across again and compare the file size.
+
+    It opens and closes straight away
+        Almost always Windows older than 10 version 1703. Check with  winver
+        (section 1). Run the self test from a Command Prompt - the window stays
+        open and prints the reason.
+
+    "This app can't run on your PC"
+        A 32-bit copy of Windows. This build is 64-bit. Check under
+        Settings > System > About > "System type".
+
+    It runs but cannot save my work
+        Something is stopping it writing to %APPDATA%\ClippingsManager - usually
+        a locked-down profile or a full disk. The self test reports this as
+        "crash recovery". Ask whoever administers the machine to allow writing
+        to your own AppData folder.
+
+    Anything else
+        Run  Check this PC.cmd  and send the whole output on. It says which
+        build, which Windows, and which of the checks failed, which is enough to
+        answer most questions without a phone call.

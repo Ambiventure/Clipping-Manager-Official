@@ -1,0 +1,78 @@
+# What must never go into a public repository.
+#
+# The first block is the important one. "Sample clips" is 150 MB of real
+# newspaper clippings - other people's copyrighted photographs, gathered for an
+# internal department report. It is the material the program was built against
+# and it must not be published. It is also read-only working material: nothing
+# in this project writes to it.
+/Sample clips/
+/extracted/
+/extracted_pdf/
+
+# Built things. The zip that people download belongs on a GitHub Release, not
+# in the repository - a release asset can be 2 GB, a file committed to the
+# repository cannot go past 100 MB, and the build is 97 MB.
+/dist/
+/build/
+*.spec.bak
+
+# The virtual environment. Hundreds of megabytes of other people's packages,
+# rebuildable from requirements in a minute.
+/.venv/
+/env/
+/venv/
+
+# Python leavings
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Development screenshots and page renders left in the root. There are about
+# thirty of these, and it is not the disk space that matters - several of them
+# are pictures of the program with a real morning's clippings on screen, so
+# they carry other people's newspaper photographs into a PUBLIC repository the
+# same way the Sample clips folder would. Anything genuinely wanted as
+# documentation can be committed deliberately with "git add -f".
+/*.png
+/*.jpg
+/*.jpeg
+/*.pdf
+/*.docx
+
+# Scratch work and anything a run leaves behind. Anchored for the same reason
+# the settings rules above are: bare "prototypes/" would drop a package
+# directory of that name at any depth, and this project already lost a shipped
+# config file once to an unanchored rule.
+/prototypes/
+*.log
+*.tmp
+~$*.docx
+~$*.xlsx
+
+# Settings belong to whoever is running it, never to the repository. Everything
+# the program remembers lives in %APPDATA%\ClippingsManager, so nothing here
+# should ever appear - this is a backstop in case one is copied in to look at.
+#
+# EVERY RULE HERE IS ANCHORED WITH A LEADING SLASH, and that is not decoration.
+# Written bare, "categories.json" matches a file of that name at ANY depth - and
+# clippings_manager/config/categories.json is SHIPPED source, the 62 publications
+# the program is born knowing. Unanchored, this block silently deleted it from
+# the repository, and the first person to clone the project got a build that
+# could not start. The settings copy only ever appears at the root, so the root
+# is the only place worth guarding.
+/categories.json
+/sections.json
+/wordlist.json
+/duplicate_training.jsonl
+/duplicate_verdicts.jsonl
+/ClippingsManager-setup*.json
+
+# Agent and editor working state, not project source.
+.claude/
+
+# Windows and editors
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

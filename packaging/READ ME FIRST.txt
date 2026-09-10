@@ -1,0 +1,68 @@
+CLIPPINGS MANAGER
+Northern Railway PR - daily newspad
+===============================================================================
+
+TO RUN IT
+    Double-click  "Clippings Manager.exe"  in this folder.
+
+    Nothing needs installing. There is no Python to set up and no internet
+    connection required - the program never goes online, and every document is
+    read on this machine.
+
+    Keep this whole folder together. The .exe on its own will not run; it needs
+    the "_internal" folder beside it. To put it somewhere convenient, copy the
+    whole folder, then right-click the .exe and choose "Pin to taskbar" or
+    "Send to > Desktop (create shortcut)".
+
+
+A MORNING, START TO FINISH
+    1. COVER PAGE - choose your standard cover artwork once. It is remembered on
+       this computer. Set the date; the clipping count fills itself in.
+
+    2. ADD TODAY'S CLIPPINGS
+       - "From Word" / "From PDF" for the division documents. Either format
+         works and gives identical results. The division is read from the file
+         name, so send them in as they arrive.
+       - "Add photos" for loose images already saved on the machine.
+       - Drag images straight from WhatsApp Web onto the dashed panel.
+       - Or copy an image anywhere and press Ctrl+V.
+
+       Most clippings arrive already named: the newspaper, edition and page are
+       read out of the document. Delhi and Lucknow print their newspaper name
+       into the picture itself, so those still need naming by hand.
+
+    3. REVIEW - the list is the running order, and what you see is what gets
+       exported.
+       - Click a clipping to open it full size, where it can be renamed,
+         rotated, split, excluded or deleted.
+       - Type in the headline box; Enter saves it and moves to the next one, so
+         a whole division can be named without touching the mouse.
+       - Drag the handle to reorder. An orange line shows where it will land.
+       - Tick several to move, rotate, merge or delete them together.
+       - Ctrl+Z undoes anything, including a misdrag across the whole list.
+
+    4. EXPORT - "Generate PDF" or "Word (.docx)". One clipping per page, in the
+       order shown, behind a cover carrying the count and the date.
+
+
+IF SOMETHING LOOKS WRONG
+    Run the built-in check. Open a Command Prompt in this folder and type:
+
+        "Clippings Manager.exe" --selftest
+
+    It tests the parts most likely to be missing from an installation and
+    writes a report to your Temp folder. Send that report on if you need help.
+
+
+WHERE YOUR SETTINGS LIVE
+    %APPDATA%\ClippingsManager
+
+    That is the cover artwork you chose, your export preferences, and the
+    newspaper list as it grows. Updating the program never touches them.
+
+
+HINDI NEWSPAPER NAMES
+    Devanagari names print correctly on any Windows PC, because the font that
+    sets them travels inside this application rather than being looked for on
+    the machine. A report built here and a report built on another PC set a
+    Hindi masthead identically. Nothing needs installing for it.

@@ -1,0 +1,55 @@
+# Clippings Manager - what to install to run it from source.
+#
+# Versions below are the ones this was built and tested against. Python 3.13 on
+# Windows; nothing here has been tried on macOS or Linux.
+#
+#   py -3.13 -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+#
+# READ THE TESSEROCR NOTE AT THE BOTTOM BEFORE YOU RUN THAT. It is the one
+# line that will not install by itself on Windows. The program does start
+# without it - it simply cannot read headlines off a clipping, which is half of
+# how repeats are found.
+
+lxml>=6.0          # raw docx XML: VML shapes and srcRect crops python-docx cannot see
+pillow>=11.0       # crop, rotate, resize, thumbnails, merge and split
+python-docx>=1.1   # Word export
+PyMuPDF>=1.26      # PDF read (division files, 360 doc) and PDF write (the newspad)
+rapidfuzz>=3.14    # section-header typo tolerance; OCR name matching
+numpy>=2.0         # label-band detection, split-point detection
+PySide6>=6.9       # the application itself
+pywin32>=306; sys_platform == "win32"   # read a browser drag the way Explorer does
+
+# --------------------------------------------------------------------- OCR
+#
+# tesserocr reads the headline off a clipping, which is half of how repeats
+# are found - the other half is what the picture looks like. The program starts
+# and builds reports without it; it just stops noticing that two cuttings of
+# the same story are the same story.
+#
+# It is a C++ extension around Tesseract, and PyPI publishes no Windows wheel
+# for it - "pip install tesserocr" tries to compile it from source and fails on
+# any machine without the Tesseract development headers, which is every
+# ordinary Windows machine.
+#
+# On Windows, install the prebuilt wheel matching your Python version from
+#     https://github.com/simonflueckiger/tesserocr-windows_build/releases
+# For Python 3.13, 64-bit, that is a file named like
+#     tesserocr-2.10.0-cp313-cp313-win_amd64.whl
+# then:
+#     .venv\Scripts\python.exe -m pip install path\to\that\file.whl
+#
+# It is deliberately NOT an uncommented requirement here: pip would try to build
+# it from source and stop the whole install with a compiler error, which reads
+# like the project is broken when it is not.
+#
+# tesserocr==2.10.0        <- install the wheel by hand, see above
+#
+# The English and Hindi language data is committed under
+# clippings_manager/assets/tessdata/, so no separate Tesseract install is needed
+# once the wheel is in.
+
+# --------------------------------------------------------- building the .exe
+# Only needed to run build.py. Not needed to run the program from source.
+#
+# pyinstaller==6.22.2

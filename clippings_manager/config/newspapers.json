@@ -1,0 +1,725 @@
+{
+  "_comment": "Autocomplete lists for the review grid. The app appends anything new the user types, saved to the user's app-data folder so an update never wipes it. Aliases carry native-script spellings so a Devanagari label from OCR resolves to the same canonical name the newspad prints.",
+  "_version": 1,
+  "newspapers": [
+    {
+      "name": "Aaj",
+      "aliases": [
+        "आज"
+      ]
+    },
+    {
+      "name": "Aaj Tak",
+      "aliases": [
+        "AajTak",
+        "आज तक",
+        "आजतक"
+      ]
+    },
+    {
+      "name": "Ajit",
+      "aliases": [
+        "Ajeet",
+        "ਅਜੀਤ",
+        "अजीत"
+      ]
+    },
+    {
+      "name": "Ajit Samachar",
+      "aliases": [
+        "ਅਜੀਤ ਸਮਾਚਾਰ",
+        "अजीत समाचार"
+      ]
+    },
+    {
+      "name": "Amar Bharti",
+      "aliases": [
+        "अमर भारती"
+      ]
+    },
+    {
+      "name": "Amar Ujala",
+      "aliases": [
+        "Amar Ujjala",
+        "Amarujala",
+        "अमर उजाला",
+        "अमर उजला"
+      ]
+    },
+    {
+      "name": "Amrit Vichar",
+      "aliases": [
+        "Amrit Vichaar",
+        "अमृत विचार"
+      ]
+    },
+    {
+      "name": "Bedaak Kesari",
+      "aliases": [
+        "Bebaak Kesari",
+        "Bebak Kesari",
+        "बेबाक केसरी",
+        "बेदाग केसरी"
+      ]
+    },
+    {
+      "name": "Business Standard",
+      "aliases": []
+    },
+    {
+      "name": "Charhdikala",
+      "aliases": [
+        "ਚੜ੍ਹਦੀਕਲਾ"
+      ]
+    },
+    {
+      "name": "Daily Excelsior",
+      "aliases": [
+        "Excelsior"
+      ]
+    },
+    {
+      "name": "Daily Post",
+      "aliases": []
+    },
+    {
+      "name": "Dainik Bhaskar",
+      "aliases": [
+        "Bhaskar",
+        "दैनिक भास्कर",
+        "भास्कर"
+      ]
+    },
+    {
+      "name": "Dainik Jagran",
+      "aliases": [
+        "Dainik Jagaran",
+        "Danik Jagran",
+        "Jagran",
+        "Jagaran",
+        "Jagran City",
+        "दैनिक जागरण",
+        "जागरण",
+        "दैनिक जागरन"
+      ]
+    },
+    {
+      "name": "Dainik Savera",
+      "aliases": [
+        "Savera Times",
+        "Savera",
+        "दैनिक सवेरा",
+        "सवेरा"
+      ]
+    },
+    {
+      "name": "Dainik Tribune",
+      "aliases": [
+        "दैनिक ट्रिब्यून"
+      ]
+    },
+    {
+      "name": "Dainik Ujala",
+      "aliases": [
+        "दैनिक उजाला"
+      ]
+    },
+    {
+      "name": "Early Times",
+      "aliases": []
+    },
+    {
+      "name": "Haribhoomi",
+      "aliases": [
+        "Hari Bhoomi",
+        "Haribhumi",
+        "हरिभूमि",
+        "हरि भूमि"
+      ]
+    },
+    {
+      "name": "Hindi Milap",
+      "aliases": [
+        "हिंदी मिलाप"
+      ]
+    },
+    {
+      "name": "Hindustan",
+      "aliases": [
+        "Dainik Hindustan",
+        "हिन्दुस्तान",
+        "हिंदुस्तान"
+      ]
+    },
+    {
+      "name": "Hindustan Times",
+      "aliases": [
+        "HT"
+      ]
+    },
+    {
+      "name": "Jag Bani",
+      "aliases": [
+        "Jagbani",
+        "ਜਗ ਬਾਣੀ",
+        "जग बाणी"
+      ]
+    },
+    {
+      "name": "Jagmarg",
+      "aliases": [
+        "Jag Marg",
+        "जगमार्ग",
+        "जग मार्ग"
+      ]
+    },
+    {
+      "name": "Jansatta",
+      "aliases": [
+        "जनसत्ता"
+      ]
+    },
+    {
+      "name": "Journey Line",
+      "aliases": []
+    },
+    {
+      "name": "Kashmir Times",
+      "aliases": []
+    },
+    {
+      "name": "Mail Today",
+      "aliases": []
+    },
+    {
+      "name": "Millennium Post",
+      "aliases": []
+    },
+    {
+      "name": "Nai Duniya",
+      "aliases": [
+        "Naiduniya",
+        "नई दुनिया"
+      ]
+    },
+    {
+      "name": "Navbharat Times",
+      "aliases": [
+        "Nav Bharat Times",
+        "NBT",
+        "नवभारत टाइम्स"
+      ]
+    },
+    {
+      "name": "News Times Ludhiana",
+      "aliases": [
+        "News Times"
+      ]
+    },
+    {
+      "name": "Prath Kiran",
+      "aliases": [
+        "Pratah Kiran",
+        "Pratahkiran",
+        "प्रात: किरण",
+        "प्रातः किरण",
+        "प्रात किरण"
+      ]
+    },
+    {
+      "name": "Punjab Kesari",
+      "aliases": [
+        "Punjab Kesri",
+        "पंजाब केसरी"
+      ]
+    },
+    {
+      "name": "Punjabi Jagran",
+      "aliases": [
+        "Punjabi Jagaran",
+        "Punjab Jagran",
+        "ਪੰਜਾਬੀ ਜਾਗਰਣ",
+        "पंजाबी जागरण"
+      ]
+    },
+    {
+      "name": "Punjabi Tribune",
+      "aliases": [
+        "ਪੰਜਾਬੀ ਟ੍ਰਿਬਿਊਨ"
+      ]
+    },
+    {
+      "name": "Rashtriya News Network",
+      "aliases": [
+        "RNN"
+      ]
+    },
+    {
+      "name": "Rashtriya Sahara",
+      "aliases": [
+        "Sahara",
+        "राष्ट्रीय सहारा"
+      ]
+    },
+    {
+      "name": "Rashtriya Swaroop",
+      "aliases": [
+        "राष्ट्रीय स्वरूप"
+      ]
+    },
+    {
+      "name": "Rozana Spokesman",
+      "aliases": [
+        "Spokesman"
+      ]
+    },
+    {
+      "name": "Samachar Post",
+      "aliases": [
+        "समाचार पोस्ट"
+      ]
+    },
+    {
+      "name": "Samarth Bandhu",
+      "aliases": [
+        "समर्थ बंधु"
+      ]
+    },
+    {
+      "name": "State Times",
+      "aliases": []
+    },
+    {
+      "name": "Surodhay Bharat",
+      "aliases": [
+        "Suryodaya Bharat",
+        "सुरोदय भारत",
+        "सूर्योदय भारत"
+      ]
+    },
+    {
+      "name": "Swatantra Bharat",
+      "aliases": [
+        "स्वतंत्र भारत"
+      ]
+    },
+    {
+      "name": "The Economic Times",
+      "aliases": [
+        "Economic Times"
+      ]
+    },
+    {
+      "name": "The Hindu",
+      "aliases": []
+    },
+    {
+      "name": "The Indian Express",
+      "aliases": [
+        "Indian Express"
+      ]
+    },
+    {
+      "name": "The Pioneer",
+      "aliases": [
+        "Pioneer"
+      ]
+    },
+    {
+      "name": "The Statesman",
+      "aliases": [
+        "Statesman"
+      ]
+    },
+    {
+      "name": "The Times of India",
+      "aliases": [
+        "Times of India",
+        "TOI",
+        "Times Of India"
+      ]
+    },
+    {
+      "name": "The Tribune",
+      "aliases": [
+        "Tribune"
+      ]
+    },
+    {
+      "name": "Times Now",
+      "aliases": [
+        "TimesNow",
+        "टाइम्स नाउ"
+      ]
+    },
+    {
+      "name": "Uttar Kesari",
+      "aliases": [
+        "Utter Kesari",
+        "उत्तर केसरी"
+      ]
+    },
+    {
+      "name": "Uturn",
+      "aliases": [
+        "U Turn",
+        "U-Turn"
+      ]
+    },
+    {
+      "name": "Virat Vaibhav",
+      "aliases": [
+        "विराट वैभव"
+      ]
+    }
+  ],
+  "editions": [
+    {
+      "name": "Delhi",
+      "aliases": [
+        "दिल्ली"
+      ]
+    },
+    {
+      "name": "New Delhi",
+      "aliases": [
+        "Nai Delhi",
+        "नई दिल्ली"
+      ]
+    },
+    {
+      "name": "Lucknow",
+      "aliases": [
+        "लखनऊ"
+      ]
+    },
+    {
+      "name": "Kanpur",
+      "aliases": [
+        "कानपुर"
+      ]
+    },
+    {
+      "name": "Varanasi",
+      "aliases": [
+        "वाराणसी"
+      ]
+    },
+    {
+      "name": "Gorakhpur",
+      "aliases": [
+        "गोरखपुर"
+      ]
+    },
+    {
+      "name": "Prayagraj",
+      "aliases": [
+        "Allahabad",
+        "प्रयागराज"
+      ]
+    },
+    {
+      "name": "Sultanpur",
+      "aliases": []
+    },
+    {
+      "name": "Rae Bareli",
+      "aliases": []
+    },
+    {
+      "name": "Faizabad",
+      "aliases": []
+    },
+    {
+      "name": "Ayodhya",
+      "aliases": []
+    },
+    {
+      "name": "Barabanki",
+      "aliases": []
+    },
+    {
+      "name": "Unnao",
+      "aliases": []
+    },
+    {
+      "name": "Moradabad",
+      "aliases": [
+        "मुरादाबाद"
+      ]
+    },
+    {
+      "name": "Bareilly",
+      "aliases": [
+        "बरेली"
+      ]
+    },
+    {
+      "name": "Haridwar",
+      "aliases": [
+        "हरिद्वार"
+      ]
+    },
+    {
+      "name": "Hapur",
+      "aliases": [
+        "हापुड़"
+      ]
+    },
+    {
+      "name": "Dehradun",
+      "aliases": [
+        "देहरादून"
+      ]
+    },
+    {
+      "name": "Shahjahanpur",
+      "aliases": [
+        "शाहजहांपुर"
+      ]
+    },
+    {
+      "name": "Bijnor",
+      "aliases": [
+        "बिजनौर"
+      ]
+    },
+    {
+      "name": "Rampur",
+      "aliases": [
+        "रामपुर"
+      ]
+    },
+    {
+      "name": "Amroha",
+      "aliases": []
+    },
+    {
+      "name": "Saharanpur",
+      "aliases": [
+        "सहारनपुर"
+      ]
+    },
+    {
+      "name": "Meerut",
+      "aliases": [
+        "मेरठ"
+      ]
+    },
+    {
+      "name": "Ghaziabad",
+      "aliases": [
+        "गाजियाबाद"
+      ]
+    },
+    {
+      "name": "Noida",
+      "aliases": [
+        "नोएडा"
+      ]
+    },
+    {
+      "name": "Agra",
+      "aliases": [
+        "आगरा"
+      ]
+    },
+    {
+      "name": "Aligarh",
+      "aliases": []
+    },
+    {
+      "name": "Roorkee",
+      "aliases": []
+    },
+    {
+      "name": "Kashipur",
+      "aliases": []
+    },
+    {
+      "name": "Ambala",
+      "aliases": [
+        "अंबाला"
+      ]
+    },
+    {
+      "name": "Chandigarh",
+      "aliases": [
+        "चंडीगढ़"
+      ]
+    },
+    {
+      "name": "Panchkula",
+      "aliases": [
+        "पंचकूला"
+      ]
+    },
+    {
+      "name": "Shimla",
+      "aliases": [
+        "शिमला"
+      ]
+    },
+    {
+      "name": "Himachal",
+      "aliases": []
+    },
+    {
+      "name": "Mohali",
+      "aliases": []
+    },
+    {
+      "name": "Yamuna Nagar",
+      "aliases": [
+        "Yamunanagar",
+        "यमुनानगर"
+      ]
+    },
+    {
+      "name": "Yamunanagar",
+      "aliases": []
+    },
+    {
+      "name": "Karnal",
+      "aliases": []
+    },
+    {
+      "name": "Kurukshetra",
+      "aliases": []
+    },
+    {
+      "name": "Rohtak",
+      "aliases": []
+    },
+    {
+      "name": "Patiala",
+      "aliases": [
+        "पटियाला"
+      ]
+    },
+    {
+      "name": "Kalka",
+      "aliases": []
+    },
+    {
+      "name": "Solan",
+      "aliases": []
+    },
+    {
+      "name": "Una",
+      "aliases": []
+    },
+    {
+      "name": "Sirhind",
+      "aliases": []
+    },
+    {
+      "name": "Firozpur",
+      "aliases": [
+        "Ferozpur",
+        "Ferozepur",
+        "फिरोजपुर"
+      ]
+    },
+    {
+      "name": "Ferozpur",
+      "aliases": []
+    },
+    {
+      "name": "Amritsar",
+      "aliases": [
+        "अमृतसर"
+      ]
+    },
+    {
+      "name": "Jalandhar",
+      "aliases": [
+        "जालंधर"
+      ]
+    },
+    {
+      "name": "Ludhiana",
+      "aliases": [
+        "लुधियाना"
+      ]
+    },
+    {
+      "name": "Faridkot",
+      "aliases": []
+    },
+    {
+      "name": "Moga",
+      "aliases": []
+    },
+    {
+      "name": "Bathinda",
+      "aliases": [
+        "बठिंडा"
+      ]
+    },
+    {
+      "name": "Khanna",
+      "aliases": []
+    },
+    {
+      "name": "Kapurthala",
+      "aliases": []
+    },
+    {
+      "name": "Fazilka",
+      "aliases": []
+    },
+    {
+      "name": "Muktsar",
+      "aliases": []
+    },
+    {
+      "name": "Gurdaspur",
+      "aliases": []
+    },
+    {
+      "name": "Pathankot",
+      "aliases": [
+        "पठानकोट"
+      ]
+    },
+    {
+      "name": "Hoshiarpur",
+      "aliases": []
+    },
+    {
+      "name": "Main",
+      "aliases": []
+    },
+    {
+      "name": "Jammu",
+      "aliases": [
+        "जम्मू"
+      ]
+    },
+    {
+      "name": "Kathua",
+      "aliases": []
+    },
+    {
+      "name": "Udhampur",
+      "aliases": []
+    },
+    {
+      "name": "Katra",
+      "aliases": []
+    },
+    {
+      "name": "Srinagar",
+      "aliases": []
+    },
+    {
+      "name": "Kangra",
+      "aliases": []
+    },
+    {
+      "name": "Jalandhar Cantt",
+      "aliases": []
+    }
+  ]
+}

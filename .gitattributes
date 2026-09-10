@@ -1,0 +1,37 @@
+# Line endings, decided here rather than by whoever clones it.
+#
+# Without this, git's behaviour depends on each person's core.autocrlf setting,
+# and a colleague with a different one turns every file in the repository into a
+# diff the first time they save anything. Worse, it can rewrite the line endings
+# inside the .traineddata and .ttf files, which corrupts them silently - the OCR
+# then reads nothing and the Hindi font draws boxes, with no error anywhere.
+
+# Text files: one line ending in the repository, whatever the working copy uses.
+* text=auto eol=lf
+
+# Windows batch and command files must keep CRLF or cmd.exe mis-parses them.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# The hand-over notes are read in Notepad on a department PC. LF alone used to
+# render as one long line there; modern Notepad copes, but CRLF costs nothing
+# and these are the files most likely to be opened by somebody who is not a
+# programmer.
+packaging/*.txt text eol=crlf
+
+# Binary. Never touched, never diffed, never line-ending-converted.
+*.ttf binary
+*.otf binary
+*.ttc binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.docx binary
+*.zip binary
+*.traineddata binary
+
+# Keeps GitHub's language bar describing the project rather than its fonts.
+clippings_manager/assets/** linguist-vendored
+NOTES.md linguist-documentation
