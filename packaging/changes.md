@@ -16,6 +16,36 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.18
+
+Fixed
+
+  * **Adding a section heading works properly now, and it was badly broken.**
+    The box saved what you had typed after every single letter, so typing one
+    heading saved seven, and deleting the "no heading" line saved nine more. It
+    never asked, because it was writing while you were still typing.
+  * Headings are added in their own window now, behind a "Headings" button, and
+    nothing is saved until you press Add. The box beside it only chooses between
+    headings that are already on the list.
+  * The nine nonsense entries that got saved are cleared out the first time you
+    open this version. Anything you added on purpose is kept.
+  * **The box under the cover page can be read.** Its heading was being printed
+    in the same colour as the panel behind it, so it was invisible. The whole
+    box was the wrong colour for where it sits, and now matches the rest of the
+    page.
+  * **The drop-down lists in the preview window can be read.** The line you had
+    chosen was drawn in exactly the colour of the strip behind it - the same
+    colour, not merely similar - so the one line you most needed to see was the
+    one you could not. Newspaper, edition and section were all affected, and so
+    was the list of suggested newspaper names.
+  * **The page number is no longer thrown away when you type a headline.** It
+    was read correctly and printed correctly until somebody typed over the
+    clipping, and then it silently disappeared - which is exactly when it
+    mattered. Both reports keep it now. A headline that already names a page
+    does not get a second one.
+  * Correcting a newspaper or edition name is one undo step again, not one per
+    letter typed.
+
 ## 2.0.17
 
 New

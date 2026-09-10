@@ -673,7 +673,7 @@ def build_pdf(
             title_text = ""
             title_height = 0.0
             if options.include_clip_titles and prints_a_title(clip, column):
-                title_text = _sieve().clean(clip.effective_label.strip())
+                title_text = _sieve().clean(clip.printed_caption.strip())
                 if title_text:
                     scratch = pymupdf.open()
                     measuring = scratch.new_page(width=page_width,
@@ -949,7 +949,7 @@ def build_docx(
                     partner = candidate
 
             if options.include_clip_titles and prints_a_title(clip, column):
-                caption = _sieve().clean(clip.effective_label.strip())
+                caption = _sieve().clean(clip.printed_caption.strip())
                 paragraph = document.add_paragraph()
                 paragraph.alignment = DOCX_ALIGNMENTS[style.align]
                 run = _docx_run(paragraph, caption, style.size, TITLE_COLOUR,

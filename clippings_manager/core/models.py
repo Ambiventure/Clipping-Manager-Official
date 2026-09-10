@@ -9,6 +9,7 @@ applied on render, so a crop is always reversible and never destroys pixels.
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -97,6 +98,12 @@ SECTION_NAMES = {
     Section.ELECTRONIC.value: "ELECTRONIC MEDIA",
     Section.SOCIAL.value: "SOCIAL MEDIA",
 }
+
+
+# "Page 3", "page-3", "pg 4", "p.5" - and never a bare number, so a headline
+# reading "12 new trains announced" or "Platform 5 gets a new roof" is not
+# mistaken for one that already names its page.
+_PAGE_ALREADY = re.compile(r"\bp(?:age|g)?\b\s*[-.:]?\s*\d", re.I)
 
 
 @dataclass
@@ -251,6 +258,29 @@ class Clip:
         if self.no_title:
             return ""
         return self.label.strip() or self.display_caption
+
+    @property
+    def printed_caption(self) -> str:
+        """What prints ABOVE the picture. `effective_label` is its NAME.
+
+        The page number is where the cutting is in the paper - the one thing a
+        reader has who wants to find the story again - so typing a headline
+        must not throw it away. It used not to: `effective_label` returns the
+        typed label OR the assembled caption, and the assembled caption is the
+        only place the page was ever written.
+
+        Two guards. Nothing is added when no headline was typed, because the
+        assembled caption already carries the page and would otherwise get a
+        second one. And nothing is added when the typed headline already names a
+        page itself.
+        """
+        said = self.effective_label
+        if not said:
+            return ""
+        page = self.page.strip()
+        if page and self.label.strip() and not _PAGE_ALREADY.search(said):
+            return f"{said}, Page {page}"
+        return said
 
     @property
     def title_text(self) -> str:

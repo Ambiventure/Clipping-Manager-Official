@@ -326,7 +326,7 @@ def build(
             # Never let Word part a heading from what it heads.
             banner.paragraph_format.keep_with_next = True
 
-        caption = sieve.clean(clip.effective_label.strip())
+        caption = sieve.clean(clip.printed_caption.strip())
         if caption:
             paragraph = document.add_paragraph()
             opening.append(paragraph)

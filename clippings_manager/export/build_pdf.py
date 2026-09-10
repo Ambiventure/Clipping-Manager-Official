@@ -416,7 +416,7 @@ def build(
             progress(number, len(clips), clip.effective_label or "clipping")
 
         sheet = new_page()
-        caption = sieve.clean(clip.effective_label.strip())
+        caption = sieve.clean(clip.printed_caption.strip())
 
         section_name = sieve.clean(banners.get(number - 1, ""))
         band = heading_band if section_name else 0.0

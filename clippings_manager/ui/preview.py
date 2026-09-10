@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import io
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, QStringListModel, Qt, Signal
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -209,8 +209,13 @@ class PreviewDialog(QDialog):
             f"QLineEdit, QComboBox {{ background: #1E293B; border: 1px solid #33415A;"
             f" border-radius: 8px; padding: 7px 9px; color: #E2E8F0; font-size: 12px; }}"
             f"QLineEdit:focus, QComboBox:focus {{ border-color: {theme.ORANGE}; }}"
-            f"QComboBox QAbstractItemView {{ background: #1E293B; color: #E2E8F0;"
-            f" selection-background-color: {theme.NAVY}; border: 1px solid #33415A; }}"
+            # The popup comes from theme.py by name now. Written by hand here,
+            # it set a selection background and no selection colour - and Qt
+            # merges stylesheet properties one at a time, so the missing pen
+            # fell through to the global sheet's near-black NAVY and landed on
+            # this slate ground at 1.03:1. The two are one token pair and are
+            # never written apart.
+            + theme.COMBO_POPUP_SLATE
         )
         body = QVBoxLayout(panel)
         body.setContentsMargins(18, 14, 18, 14)
@@ -257,8 +262,13 @@ class PreviewDialog(QDialog):
         self.section, self.section_label = self._plain_combo(
             "Section", fields, 2, [s.value for s in Section]
         )
-        self.section.setEditable(True)
-        self.section.setInsertPolicy(QComboBox.NoInsert)
+        # NEVER editable, on either screen. It picks from a list and that is
+        # all it does. It used to be typable on the press report, wired to
+        # currentTextChanged - which fires on every keystroke - and every one of
+        # those keystrokes was saved as a new heading. Headings are added in
+        # their own dialog now, behind the List... button, where pressing Add is
+        # the moment a person means it.
+        self.section.setEditable(False)
 
         # Beside it, and only on the press report: how every heading in the
         # report is printed. Report-wide rather than per clipping - two
@@ -278,15 +288,13 @@ class PreviewDialog(QDialog):
         style_column.addWidget(self.heading_style_label)
         style_row = QHBoxLayout()
         style_row.setSpacing(6)
-        # A heading is added by typing one into the picker. Taking one off
-        # again needs somewhere to do it, and it is here rather than in the
-        # picker itself: a list entry that deletes things when clicked is one
-        # misclick away from removing the heading somebody meant to choose.
-        self.heading_list_btn = QPushButton("List…")
+        # The only way in or out of the list. Adding used to happen by typing
+        # into the picker, which saved a heading per keystroke.
+        self.heading_list_btn = QPushButton("Headings…")
         self.heading_list_btn.setStyleSheet(DARK_BUTTON)
         self.heading_list_btn.setToolTip(
-            "Which headings are offered. Add one by typing it into the box; "
-            "take one off here.")
+            "Add a heading to the list, or take one off. The picker beside "
+            "this chooses between them.")
         self.heading_list_btn.clicked.connect(self._manage_headings)
         style_row.addWidget(self.heading_size_btn)
         style_row.addWidget(self.heading_colour_btn)
@@ -411,42 +419,16 @@ class PreviewDialog(QDialog):
             self._set_heading_style(colour=chosen.name().upper())
 
     def _manage_headings(self) -> None:
-        """Take a heading off the list, or put a shipped one back."""
-        known = section_list.load()
-        menu = QMenu(self)
-        head = menu.addAction("Take a heading off the list:")
-        head.setEnabled(False)
-        for row in known.rows:
-            action = menu.addAction(f"    Remove “{row['words']}”")
-            action.triggered.connect(
-                lambda _checked=False, key=row["key"], words=row["words"]:
-                self._drop_heading(key, words))
-        menu.addSeparator()
-        back = menu.addAction("Put the three standard headings back")
-        back.triggered.connect(self._reset_headings)
-        menu.exec(self.heading_list_btn.mapToGlobal(
-            self.heading_list_btn.rect().bottomLeft()))
+        """Add a heading, or take one off. The only route to the stored list."""
+        from .headings_dialog import HeadingsDialog
 
-    def _drop_heading(self, key: str, words: str) -> None:
-        asked = QMessageBox.question(
-            self, "Take this heading off?",
-            f"“{words}” will no longer be offered.\n\n"
-            "Any clipping already carrying it keeps it, and still prints it - "
-            "a report does not quietly lose a heading somebody chose.",
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
-        if asked != QMessageBox.Yes:
-            return
-        section_list.remove(key)
-        self.headingListChanged.emit()
-        if self.row is not None:
-            self.show_row(self.row)
-
-    def _reset_headings(self) -> None:
-        section_list.forget()
-        self.headingListChanged.emit()
-        self.headingStyleChanged.emit()
-        if self.row is not None:
-            self.show_row(self.row)
+        screen = HeadingsDialog(self)
+        screen.exec()
+        if screen.changed:
+            self.headingListChanged.emit()
+            self.headingStyleChanged.emit()
+            if self.row is not None:
+                self.show_row(self.row)
 
     def _set_heading_style(self, size=None, colour=None) -> None:
         section_list.set_style(size=size, colour=colour)
@@ -498,20 +480,29 @@ class PreviewDialog(QDialog):
         self.section.clear()
         if self.for_board:
             self.section_label.setText("Sentiment (which board column)")
-            self.section.setEditable(False)
             self.section.addItems([s.value for s in Section])
-            self.section.setCurrentText(clip.section.value)
+            self.section.setCurrentIndex(
+                max(0, self.section.findText(clip.section.value)))
+            self.section.setToolTip(
+                "Which of the four columns this clipping is filed under.")
         else:
             self.section_label.setText(
                 "Section heading printed over this clipping")
-            self.section.setEditable(True)
-            self.section.setInsertPolicy(QComboBox.NoInsert)
-            self.section.addItems(self._heading_choices())
+            choices = self._heading_choices()
             here = section_list.tidy(clip.section_title)
-            self.section.setCurrentText(here or self.NO_HEADING)
+            # The heading this clipping carries MUST be one of the choices,
+            # even if it has since been taken off the list. Otherwise
+            # setCurrentIndex finds nothing, the box shows "no heading", and
+            # the next interaction writes that back - silently throwing away a
+            # heading the report is still printing.
+            if here and here not in choices:
+                choices.append(here)
+            self.section.addItems(choices)
+            self.section.setCurrentIndex(
+                max(0, self.section.findText(here or self.NO_HEADING)))
             self.section.setToolTip(
                 "Printed in a line above this clipping, once per heading. "
-                "Type a heading that is not on the list to add it.")
+                "Use the Headings button to add one to this list.")
         self.section.blockSignals(False)
         for widget in (self.heading_size_btn, self.heading_colour_btn,
                        self.heading_list_btn, self.heading_style_label):
@@ -541,45 +532,81 @@ class PreviewDialog(QDialog):
         combo.blockSignals(True)
         combo.clear()
         combo.addItems(items)
-        completer = QCompleter(items, combo)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchContains)
-        combo.setCompleter(completer)
+
+        # ONE completer per combo, made once and refilled. It used to be built
+        # fresh for every clipping, and setCompleter does not delete the one it
+        # replaces - so walking a division of two hundred clippings piled up two
+        # hundred completers, each owning a popup view.
+        completer = combo.completer()
+        if completer is None or completer.parent() is not combo:
+            completer = QCompleter(combo)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            combo.setCompleter(completer)
+            # The suggestion list is a TOP-LEVEL QListView with no parent, so
+            # no "QComboBox QAbstractItemView" selector can reach it - not this
+            # program's, and not any theming library's. It is styled here, on
+            # the widget, or it is not styled at all.
+            popup = completer.popup()
+            if popup is not None:
+                popup.setStyleSheet(theme.COMPLETER_POPUP_SLATE)
+        completer.setModel(QStringListModel(items, completer))
+
         combo.setEditText(value)
         combo.blockSignals(False)
 
     def _connect_once(self) -> None:
         if self._connected:
             return
-        self.newspaper.currentTextChanged.connect(
-            lambda text: self._emit("newspaper", text)
-        )
-        self.edition.currentTextChanged.connect(lambda text: self._emit("edition", text))
+        # activated fires when a name is PICKED from the list; editingFinished
+        # when typing stops. Between them that is one undo step per correction.
+        #
+        # These were on currentTextChanged, which on an editable combo fires per
+        # keystroke - so correcting a misread newspaper name pushed one undo
+        # step per letter, and Ctrl+Z had to be pressed once per character to
+        # take it back. Same signal, same mistake, as the heading picker; it
+        # simply cost less because these do not write to disk.
+        self.newspaper.activated.connect(
+            lambda _index: self._emit("newspaper",
+                                      self.newspaper.currentText()))
+        self.newspaper.lineEdit().editingFinished.connect(
+            lambda: self._emit("newspaper", self.newspaper.currentText()))
+        self.edition.activated.connect(
+            lambda _index: self._emit("edition", self.edition.currentText()))
+        self.edition.lineEdit().editingFinished.connect(
+            lambda: self._emit("edition", self.edition.currentText()))
         self.page.textEdited.connect(lambda text: self._emit("page", text))
-        self.section.currentTextChanged.connect(self._section_picked)
+        # currentIndexChanged, NOT currentTextChanged. The latter fires on
+        # every keystroke of an editable combo, which is what saved a heading
+        # per letter typed.
+        self.section.currentIndexChanged.connect(self._section_picked)
         self.label_edit.textEdited.connect(self._emit_label)
         self.link.textEdited.connect(lambda text: self._emit("url", text))
         self._connected = True
 
-    def _section_picked(self, text: str) -> None:
-        """One control, so which field this writes depends on the screen."""
-        if self._loading or self.row is None:
+    def _section_picked(self, index: int) -> None:
+        """A line was chosen. Which field it writes depends on the screen.
+
+        Takes an INDEX, not text. clear() followed by addItems() fires this with
+        -1 and then 0 while a row is being loaded, so the guard below matters as
+        much as the _loading flag does.
+
+        It never adds a heading to the list. Choosing is choosing; adding is a
+        separate, deliberate act behind the Headings button.
+        """
+        if self._loading or self.row is None or index < 0:
             return
+        text = self.section.itemText(index)
         if self.for_board:
             self._emit("section", text)
             return
         words = section_list.tidy(text)
-        if words == section_list.tidy(self.NO_HEADING) or not words:
+        if not words or words == section_list.tidy(self.NO_HEADING):
             self.headingPicked.emit(self.row.id, "", "")
             return
-        known = section_list.load()
-        key = known.key_of_words(words)
-        if not key:
-            # Typed rather than picked. Adding it to the list is what makes it
-            # offerable on the next clipping, which is the whole reason the box
-            # can be typed into.
-            key = section_list.add(words)
-            self.headingListChanged.emit()
+        # It is on the list, or it is the one this clipping already carried and
+        # show_row appended for exactly this reason. Either way it has a key.
+        key = section_list.load().key_of_words(words) or section_list.key_for(words)
         self.headingPicked.emit(self.row.id, key, words)
 
     def _emit(self, field: str, value: str) -> None:

@@ -1,17 +1,17 @@
 VSVersionInfo(
-  ffi=FixedFileInfo(filevers=(2, 0, 17, 0), prodvers=(2, 0, 17, 0),
+  ffi=FixedFileInfo(filevers=(2, 0, 18, 0), prodvers=(2, 0, 18, 0),
                     mask=0x3f, flags=0x0, OS=0x40004,
                     fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', 'Northern Railway'),
       StringStruct('FileDescription', 'Clippings Manager - daily newspad'),
-      StringStruct('FileVersion', '2.0.17'),
+      StringStruct('FileVersion', '2.0.18'),
       StringStruct('InternalName', 'ClippingsManager'),
       StringStruct('OriginalFilename', 'Clippings Manager.exe'),
       StringStruct('ProductName', 'Clippings Manager'),
-      StringStruct('ProductVersion', '2.0.17'),
-      StringStruct('Comments', '4725c1933007 - packaged 11.09.2026')
+      StringStruct('ProductVersion', '2.0.18'),
+      StringStruct('Comments', 'cf6845386bf8 - packaged 11.09.2026')
     ])]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])]),
   ]

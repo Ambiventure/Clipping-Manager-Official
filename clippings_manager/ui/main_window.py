@@ -469,6 +469,18 @@ class MainWindow(QMainWindow):
         # Directly under the cover, where the department asked for it. A word
         # kept out of the report is a decision about the whole report, and the
         # cover is the part of this screen that is about the whole report.
+        # One-time cleanup of headings the old picker saved a letter at a time.
+        # Wrapped, because a settings file on a locked-down share that cannot be
+        # written must not stop the program opening.
+        try:
+            from ..core import sections as _sections
+
+            dropped = _sections.repair_once()
+            if dropped:
+                print(f"  cleared {dropped} heading(s) saved by mistake")
+        except Exception:  # noqa: BLE001 - a read-only settings folder
+            pass
+
         self.word_bar = WordListBar()
         self.word_bar.changed.connect(self._word_list_changed)
         body_layout.addWidget(self.word_bar)

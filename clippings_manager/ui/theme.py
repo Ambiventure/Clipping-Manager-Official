@@ -93,6 +93,8 @@ SLATE_TEXT_LIGHT = "#4C5A72"  # one grey for secondary text on light chrome
 # decision about the artefact, not part of the interface. The viewer is modal,
 # so it never stacks with anything and cannot contribute to the pile-up above.
 DARK_PANEL = "#1E293B"
+SLATE_INK = "#E2E8F0"          # text on the slate panels; 11.87:1 on DARK_PANEL
+SLATE_EDGE = "#33415A"         # their hairline
 DARK_BAR = "#0F172A"
 DARK_VIEWPORT = "#0A0F1D"
 
@@ -158,6 +160,47 @@ COMBO_POPUP_DARK = (
     f" border: 1px solid {SLATE_LINE}; border-radius: 10px;"
     f" selection-background-color: {CROWN_HOVER}; selection-color: white;"
     " outline: none; padding: 4px; }"
+)
+
+# The slate popups on the preview window's dark detail panel. Named here
+# rather than written by hand where they are used, because the one place that
+# hand-rolled its own - preview.py - is the one that got it wrong: it set a
+# selection background and no selection colour, and the pen fell through to the
+# near-black NAVY meant for near-white rows. Measured at 1.03:1.
+#
+# CROWN_HOVER is the selection fill on purpose. It is the only candidate that is
+# both readable under white text AND visible as a highlight against the popup:
+#   CROWN_HOVER   7.19:1 text, 2.03:1 against the ground
+#   CROWN_RAISED  9.09:1 text, 1.61:1 against the ground
+#   NAVY         14.20:1 text, 1.03:1 against the ground - invisible as a fill
+COMBO_POPUP_SLATE = (
+    "QComboBox QAbstractItemView {"
+    f" background: {DARK_PANEL}; color: {SLATE_INK};"
+    f" border: 1px solid {SLATE_EDGE}; border-radius: 8px;"
+    f" selection-background-color: {CROWN_HOVER}; selection-color: #FFFFFF;"
+    " outline: none; padding: 3px; }"
+    "QComboBox QAbstractItemView::item {"
+    f" padding: 5px 8px; color: {SLATE_INK};"
+    " border: none; border-radius: 5px; }"
+    "QComboBox QAbstractItemView::item:selected {"
+    f" background: {CROWN_HOVER}; color: #FFFFFF; }}"
+    "QComboBox QAbstractItemView::item:hover {"
+    f" background: {CROWN_RAISED}; color: #FFFFFF; }}"
+)
+
+# The name-suggestion popup is a top-level QListView with NO PARENT, so no
+# "QComboBox QAbstractItemView" selector reaches it - here or in any theming
+# library. It has to be styled on the widget itself, which is what _fill does.
+COMPLETER_POPUP_SLATE = (
+    "QListView {"
+    f" background: {DARK_PANEL}; color: {SLATE_INK};"
+    f" border: 1px solid {SLATE_EDGE}; border-radius: 8px;"
+    f" selection-background-color: {CROWN_HOVER}; selection-color: #FFFFFF;"
+    " outline: none; padding: 3px; }"
+    "QListView::item {"
+    f" padding: 5px 8px; color: {SLATE_INK}; border-radius: 5px; }}"
+    "QListView::item:selected {"
+    f" background: {CROWN_HOVER}; color: #FFFFFF; }}"
 )
 
 CALENDAR_POPUP = (

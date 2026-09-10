@@ -80,7 +80,7 @@ def compose(clip: Clip, typeface: "build_pdf.Typeface",
     # in here is the one that would survive being sent on as a photograph.
     from ..core import wordlist as _wordlist
 
-    title = _wordlist.Sieve().clean(clip.effective_label.strip())
+    title = _wordlist.Sieve().clean(clip.printed_caption.strip())
     address = (clip.url or "").strip()
     link_size = max(7.0, style.size * LINK_RATIO)
 

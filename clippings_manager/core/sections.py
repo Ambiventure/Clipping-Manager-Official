@@ -215,6 +215,18 @@ def add(words: str) -> str:
     words = tidy(words)
     if not words:
         raise ValueError("A heading needs some words.")
+    # At least one letter or digit. Without this, "---" and a lone em dash are
+    # accepted, and worse, every punctuation-only scrap collides on the same
+    # key: key_for("—") and key_for("---") and key_for("") are all "heading".
+    if not re.search(r"[^\W_]", words, re.UNICODE):
+        raise ValueError("A heading needs at least one letter or number.")
+    if len(words) < 2:
+        raise ValueError("A heading needs to be longer than one character.")
+    # The picker's own placeholder. It is not a heading, and letting it be
+    # saved as one puts two entries reading "no heading" in the list - which is
+    # exactly the confusion the placeholder exists to prevent.
+    if tidy(words).rstrip(" -—") == tidy(SENTINEL).rstrip(" -—"):
+        raise ValueError('"No heading" is already how you choose to print none.')
     key = key_for(words)
     mine = _read(_store())
     # Adding back one that was removed is un-removing it, not a second copy.
@@ -266,6 +278,51 @@ def set_style(size: Optional[float] = None,
             raise ValueError(f"{colour!r} is not a colour like #C00000.")
         mine["colour"] = str(colour).upper()
     _write(mine)
+
+
+#: Bumped only if a later repair is ever needed. Recorded in the file so the
+#: cleanup runs once and never touches anybody's list again.
+REPAIR = 1
+
+#: The placeholder in the picker. Anything that is a left-hand piece of it was
+#: typed by the delete key, not by a person choosing a heading.
+SENTINEL = "— NO HEADING —"
+
+
+def repair_once() -> int:
+    """Clear out the keystroke rubbish the picker used to save. Runs once.
+
+    Two rules, both narrow on purpose, because a cleanup that eats a heading
+    somebody meant is worse than the rubbish it removes:
+
+    *   a heading that is a truncation of the "no heading" placeholder. Every
+        one of these begins with an em dash, so no real heading can match;
+    *   a heading with no letter or digit in it at all.
+
+    Deliberately NOT a general "is this a prefix of another heading" rule. That
+    was tried and measured: it deletes SPORT when SPORTS exists, and PR when PRO
+    exists.
+    """
+    mine = _read(_store())
+    if not mine or mine.get("repair") == REPAIR:
+        return 0
+    rows = [row for row in mine.get("added", []) if isinstance(row, dict)]
+    stem = tidy(SENTINEL).rstrip(" -—")
+    keep = []
+    for row in rows:
+        said = tidy(row.get("words", ""))
+        if not said:
+            continue
+        if said != tidy(SENTINEL) and stem.startswith(said.rstrip(" -—")):
+            continue
+        if not re.search(r"[^\W_]", said, re.UNICODE):
+            continue
+        keep.append(row)
+    dropped = len(rows) - len(keep)
+    mine["added"] = keep
+    mine["repair"] = REPAIR
+    _write(mine)
+    return dropped
 
 
 def forget() -> bool:
