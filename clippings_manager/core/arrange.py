@@ -103,9 +103,20 @@ class Lens:
 
 
 def _value(clip, axis: str, book) -> str:
-    """One clipping's value on one axis."""
+    """One clipping's value on one axis.
+
+    Everything the lens does funnels through here - what is kept, what is
+    counted, what order things come in, what the headings say and what the strip
+    offers. So the language layer goes in at this one line, and chips, counts,
+    order and headings cannot disagree with each other.
+    """
     if axis == BY_NAME:
         return (getattr(clip, "newspaper", "") or "").strip() or categories.UNKNOWN
+    if axis == categories.LANGUAGE:
+        # Not a plain lookup: half a morning has no newspaper name to look up,
+        # because Delhi and Lucknow burn the masthead into the scan. See
+        # categories.language_of.
+        return categories.language_of(clip, book)
     return book.value(getattr(clip, "newspaper", "") or "", axis)
 
 

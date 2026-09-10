@@ -16,6 +16,47 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.19
+
+Fixed
+
+  * **The box on the cover page follows the mouse now.** It did not move at all
+    while you were dragging it, and crept a pixel when you let go. Measured: a
+    drag of 120 pixels moved it none. Pulling a corner to resize used to jump
+    back and forth between a few sizes instead of growing steadily; it grows
+    steadily, and all four corners work, not just two.
+  * **The message strip stops blinking during a duplicate check.** Every message
+    set its own nine-second timer to hide the strip, and a check sends a hundred
+    messages, so they took turns hiding a line the next one had just shown. It
+    is one timer now: the strip stays up while there is news and comes down once
+    when there is not.
+  * **A proper progress bar** in the import panel while the check runs, so a long
+    check reads as work happening rather than as a program that has stopped.
+  * **Filtering by language works on every clipping, not just the named ones.**
+    This was the real fault behind "English first only lifted two": half a
+    morning's clippings carry no newspaper name at all, because Delhi and
+    Lucknow print the masthead into the picture instead of typing it. Those had
+    no language to sort by. The program now reads the clipping itself where
+    there is no name to look up. On a real morning that took the clippings with
+    no language from 87 down to 13, and English first lifted all 24 English
+    clippings instead of a handful.
+  * Your own newspaper list still wins wherever it says something. It is a list
+    you can correct, and a correction outranks anything read off a photograph.
+  * **The preview window follows the filter.** With a filter on, the arrow keys
+    walked through clippings that were not on screen and skipped the ones that
+    were, and the counter counted the wrong list. It walks what you are looking
+    at, in the order you are looking at it.
+  * **The duplicates trainer stops asking about obviously different clippings.**
+    Against your own sitting of 64 answers, of which 63 were "not a duplicate":
+    the same clippings now produce 9 questions instead of 64, and the one real
+    repeat is still among them. It asks when the headlines agree or the pictures
+    nearly match, and not when there is nothing in common at all.
+  * **Words kept out of the report: four faults.** A Hindi word could be cut in
+    half, printing a broken letter; removing a word from the middle of a caption
+    left two commas; the dossier and the burned pictures never said what they
+    had removed; and the list was not being saved with the rest of your setup.
+  * **The page number is kept when you type a headline**, in every report.
+
 ## 2.0.18
 
 Fixed

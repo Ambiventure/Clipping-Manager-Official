@@ -153,6 +153,12 @@ class Clip:
     name_source: str = ""         # "caption" | "ocr" | "manual" | "" (nothing found)
     name_confidence: float = 0.0  # 0.0-1.0, whatever the source
     ocr_text: str = ""            # the headline read off the picture, for matching
+    # What language the clipping itself appears to be in, worked out once from
+    # the script of its own text, and where that answer came from. Only ever
+    # consulted when the newspaper has no name for the list to look up - which
+    # on a real morning is half of them.
+    language_seen: str = ""
+    language_source: str = ""
     ocr_engine: str = ""
     headline_confidence: int = 0  # 0-100, how sure the reader was
 

@@ -163,11 +163,31 @@ FIELD = "field"              # drawn from the rest, so the corpus has a floor
 STRATA = (FLAGGED, WORD_EDGE, PICTURE_EDGE, BLIND, NEAR, FIELD)
 
 #: How many of each to offer in one sitting, filled in this order, any
-#: shortfall spilling into the next. Measured on real mornings: a batch drawn
-#: this way holds about a dozen genuine repeats, where fifty drawn uniformly
-#: hold 0.03 - fifty consecutive "no" answers, and a sitting nobody finishes.
-QUOTAS = {FLAGGED: 8, WORD_EDGE: 8, PICTURE_EDGE: 4, BLIND: 12, NEAR: 8,
-          FIELD: 10}
+#: shortfall spilling into the next.
+#:
+#: Re-cut against a real sitting of 64 answers. The old shares put BLIND first
+#: at 12 and FIELD at 10; between them those two asked 40 questions and found
+#: nothing, because both are picture-only guesses and the picture gate they lean
+#: on is loose. The shares now follow what actually found something: the pairs
+#: where the words say one thing and the pictures another.
+QUOTAS = {FLAGGED: 8, PICTURE_EDGE: 6, WORD_EDGE: 6, BLIND: 3, NEAR: 0,
+          FIELD: 2}
+
+#: A pair is only worth asking about when SOMETHING says it might be one
+#: cutting. Measured on that sitting: 21 of the 63 wasted questions had headline
+#: agreement under 10 out of 100 - no shared words at all - and were being asked
+#: purely because two pictures fell inside a gate wide enough to hold most of a
+#: morning.
+#:
+#: Either of these is enough to make a pair a question:
+ASK_WORDS = 60.0     #: the headlines agree this well or better
+ASK_PICTURES = 8     #: or the pictures are this close, on the 64-bit print
+#:
+#: ASK_PICTURES is deliberately far tighter than duplicates' own PICTURE_APART
+#: of 28. That gate exists to shortlist for a MACHINE, which then weighs the
+#: words as well; this one decides whether to spend a person's attention, and on
+#: the measured sitting a picture distance of 20 to 28 was the ordinary distance
+#: between two unrelated cuttings.
 
 
 # ------------------------------------------------------------------ the rows
@@ -370,6 +390,28 @@ def forget() -> int:
 # holds about a dozen real repeats.
 
 
+#: How many ordinary pairs still go into a sitting. A corpus made only of
+#: near-misses teaches only about near-misses: with nothing easy in it there is
+#: no way to tell later whether a rule is good or merely agrees with the hard
+#: cases. Two is enough to keep that floor and few enough not to waste a sitting.
+FIELD_FLOOR = 2
+_field_taken = 0
+
+
+def _spare_field() -> bool:
+    """Whether this sitting still has room for an ordinary pair."""
+    global _field_taken
+    if _field_taken >= FIELD_FLOOR:
+        return False
+    _field_taken += 1
+    return True
+
+
+def _reset_field() -> None:
+    global _field_taken
+    _field_taken = 0
+
+
 def _readable(clip) -> bool:
     from . import duplicates
 
@@ -395,12 +437,24 @@ def stratum_of(first, second, seen: dict, flagged: bool) -> Optional[str]:
         return WORD_EDGE
     if words_agree and not pictures_agree:
         return PICTURE_EDGE
+    # NOTHING IN COMMON IS NOT A QUESTION.
+    #
+    # Everything below this line is a picture-only guess, and the picture gate
+    # is loose enough to hold most of a morning's pairs. Without this, the
+    # sitting fills with two obviously different cuttings and asks somebody to
+    # confirm it sixty times.
+    worth_asking = (tsr >= ASK_WORDS
+                    or (0 <= whole <= ASK_PICTURES))
+
     if pictures_agree and not could_read:
-        # The rule's own blind spot, and the biggest one it has: the pictures
-        # all but coincide and it cannot act because a headline would not read.
-        # On the morning where independent truth exists, 26 of the rule's 27
-        # misses are here.
-        return BLIND
+        # The rule's own blind spot: the pictures all but coincide and it cannot
+        # act because no headline would read. Still worth asking about - but
+        # only when the pictures REALLY coincide, not merely inside the machine's
+        # shortlisting gate. Measured: at the old width this asked 30 questions
+        # on one morning and found nothing.
+        return BLIND if 0 <= whole <= ASK_PICTURES else None
+    if not worth_asking:
+        return FIELD if _spare_field() else None
     if 0 <= fine <= 105:
         return NEAR
     return FIELD
@@ -421,6 +475,7 @@ def candidates(clips, pairs=None, wanted: int = 50) -> list:
         flagged.add(pair_name(pair.primary, pair.copy))
     settled = set(judged())
 
+    _reset_field()
     piles = {name: [] for name in STRATA}
     for index, first in enumerate(clips):
         for second in clips[index + 1:]:

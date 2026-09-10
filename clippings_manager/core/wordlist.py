@@ -61,6 +61,11 @@ SHIPPED: tuple = ()
 #: What a run of one or more removed words is replaced with. Nothing: the
 #: word goes and the spaces around it are closed up.
 _TIDY = re.compile(r"[ \t ]{2,}")
+#: "Amar Ujala, Ambala, Page 1" with "Ambala" on the list printed
+#: "Amar Ujala,, Page 1". The backreference matters: a repeat of the SAME mark
+#: is the hole where a word used to be, whereas ", ;" is two different marks and
+#: collapsing those would be a guess about what somebody meant.
+_RUN = re.compile(r"([,;:])(?:\s*\1)+")
 _LOOSE_PUNCT = re.compile(r"\s+([,;:.!?)\]])")
 _OPEN_PUNCT = re.compile(r"([(\[])\s+")
 
@@ -145,26 +150,54 @@ def forget() -> bool:
 
 # ------------------------------------------------------------- the matching
 
+#: What counts as "still inside a word" on either side of a match.
+#:
+#: THE FAULT THIS FIXES, which could damage a printed page. Python's \\b
+#: is defined on \\w, and \\w does NOT include a Devanagari vowel sign -
+#: those are combining marks, category Mn and Mc. So a listed Hindi word
+#: sitting inside a longer one matched anyway, the cut landed between a
+#: consonant and the matra belonging to it, and what printed was U+25CC, a
+#: dotted circle where a letter should be. On the burned-JPEG path that is
+#: baked into the picture and cannot be undone by taking the word off the
+#: list again.
+#:
+#: Gurmukhi is here for the same reason, before anybody trips over it:
+#: Ambala and Ferozpur carry Punjabi papers and its matras break in exactly
+#: the same way. There is no Gurmukhi in the sample documents, so that half
+#: is reasoned rather than measured - written down here rather than left to
+#: be discovered by a broken report.
+_JOINS = (r"\w"
+          r"\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962-\u0963"
+          r"\u0a01-\u0a03\u0a3c-\u0a51"
+          r"\ua8e0-\ua8ff\u1cd0-\u1cff"
+          r"\u200c\u200d")
+_JOINS_ONE = re.compile(f"[{_JOINS}]")
+
+
 def _boundary(word: str) -> re.Pattern:
     """A pattern matching this word only where it stands as a word.
 
-    ``\\b`` is defined on word characters, and Python's ``re`` counts Devanagari
-    letters as word characters - so this works for Hindi as well, and a word
-    inside a longer Hindi word is left alone exactly as an English one is.
+    See _JOINS above for why this is not \\b. The short version: \\b cannot
+    see a Devanagari matra, so it calls the middle of a Hindi word a
+    boundary and the report prints a broken letter.
 
-    Where a "word" is really a phrase, the spaces inside it are allowed to be
-    any run of space, because a caption read out of a document can carry a
-    non-breaking space where a plain one is expected.
+    Where a "word" is really a phrase, the spaces inside it are allowed to
+    be any run of space, because a caption read out of a document can carry
+    a non-breaking space where a plain one is expected.
     """
     parts = [re.escape(bit) for bit in tidy(word).split(" ") if bit]
     if not parts:
         return re.compile(r"(?!)")          # matches nothing
     middle = r"[\s ]+".join(parts)
-    # A leading or trailing character that is not a letter or digit does not
-    # need a boundary before or after it - "Sr. No." would never match if it
-    # did, because "." is not a word character.
-    start = r"\b" if _wordish(tidy(word)[0]) else ""
-    end = r"\b" if _wordish(tidy(word)[-1]) else ""
+    # A leading or trailing character that cannot join a word needs no
+    # guard - "Sr. No." would never match if it had one, because "." is not
+    # a word character. Tested with _JOINS_ONE and NOT _wordish, and that is
+    # the half that saves a Hindi word ending in a matra: such a word ends
+    # in a combining mark, which _wordish calls punctuation, so it was given
+    # no guard on its right and matched happily inside longer words.
+    said = tidy(word)
+    start = f"(?<![{_JOINS}])" if _JOINS_ONE.match(said[0]) else ""
+    end = f"(?![{_JOINS}])" if _JOINS_ONE.match(said[-1]) else ""
     return re.compile(start + middle + end, re.IGNORECASE | re.UNICODE)
 
 
@@ -217,6 +250,9 @@ class Sieve:
 def _neaten(text: str) -> str:
     """Close up the hole a removed word leaves behind."""
     out = _TIDY.sub(" ", text)
+    # Before the space-tidying, because taking a word out from between two
+    # commas leaves ", ," and the run has to be seen as a run.
+    out = _RUN.sub(r"\1", out)
     out = _LOOSE_PUNCT.sub(r"\1", out)
     out = _OPEN_PUNCT.sub(r"\1", out)
     # A line that is now nothing but punctuation is not a caption.

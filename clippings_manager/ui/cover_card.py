@@ -406,6 +406,15 @@ class CoverCanvas(QWidget):
         self._over = False
         self._from = None
         self._start_pt = 24
+        # Where the box WAS when the mouse went down, and how wide it was.
+        #
+        # A drag has to be measured from where it began, not from the previous
+        # event. The per-event form threw away every step whose repaint had not
+        # landed - and with the repaint on a 140ms debounce, that was all of
+        # them: measured, 119 of 120 steps lost and the box moving 0 pixels
+        # while the pointer moved 120.
+        self._start_marker = None
+        self._start_width = 0.0
         self.setMouseTracking(True)
         self._text = cover_render.CoverText()
         self._count = 0
@@ -592,6 +601,12 @@ class CoverCanvas(QWidget):
         self._from = event.position()
         if self._holding:
             self._start_pt = int(self._text.font_pt)
+            self._start_marker = self._marker or cover_render.Marker(50.0, 84.0)
+            box = self.caption_rect(target)
+            # Frozen for the whole gesture. Read fresh, it is a function of the
+            # type size, which is the thing the pull is changing - size to width
+            # to divisor to size, a loop that oscillates instead of growing.
+            self._start_width = float(box.width()) if box is not None else 0.0
             self.update()
             return
         # Nothing under the pointer: put the caption here. Clicking an empty
@@ -615,31 +630,47 @@ class CoverCanvas(QWidget):
             return
 
         if self._holding == "move":
+            # Total travel since the press, against the marker as it was then.
+            began = self._start_marker or cover_render.Marker(50.0, 84.0)
             moved = event.position() - self._from
-            self._from = event.position()
             dx = moved.x() / target.width() * 100
             dy = moved.y() / target.height() * 100
-            here = self._marker or cover_render.Marker(50.0, 84.0)
-            self.markerPlaced.emit(
-                min(100.0, max(0.0, here.x_pct + dx)),
-                min(100.0, max(0.0, here.y_pct + dy)))
+            x_pct = min(100.0, max(0.0, began.x_pct + dx))
+            y_pct = min(100.0, max(0.0, began.y_pct + dy))
+            # Drawn NOW, on this frame. Waiting for the debounced re-render of
+            # the whole cover is what made the box sit still under the pointer.
+            self._marker = cover_render.Marker(x_pct=x_pct, y_pct=y_pct)
+            self.update()
+            self.markerPlaced.emit(x_pct, y_pct)
             return
 
         # A corner. How far it was dragged along the box's diagonal, as a share
         # of the box, is how much bigger the type becomes - which is what makes
         # stretching the frame and choosing a size the same fact told two ways.
-        box = self.caption_rect(target)
-        if box is None or box.width() < 1:
-            return
-        pull = event.position().x() - self._from.x()
-        if self._holding in ("tl", "bl"):
-            pull = -pull
-        wanted = self._start_pt * (1 + pull / max(40.0, box.width()))
+        # The width as it was at the press, not as it is now. See _start_width.
+        width = self._start_width
+        if width < 1:
+            box = self.caption_rect(target)
+            if box is None or box.width() < 1:
+                return
+            width = float(box.width())
+        # Both axes, so a corner behaves like a corner. Dragging AWAY from the
+        # box grows it, whichever corner is held - which means each axis is read
+        # in the direction that corner points. Reading only x, as this used to,
+        # made the top-right and bottom-left corners feel dead when pulled the
+        # way they look like they should be pulled.
+        sideways = -1.0 if self._holding in ("tl", "bl") else 1.0
+        upright = -1.0 if self._holding in ("tl", "tr") else 1.0
+        pull = (sideways * (event.position().x() - self._from.x())
+                + upright * (event.position().y() - self._from.y())) / 2.0
+        wanted = self._start_pt * (1 + pull / max(40.0, width))
         self.sizeChanged.emit(int(round(max(8, min(72, wanted)))))
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt name
         if self._holding:
             self._holding = ""
+            self._start_marker = None
+            self._start_width = 0.0
             self.update()
         super().mouseReleaseEvent(event)
 

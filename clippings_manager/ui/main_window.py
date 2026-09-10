@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressDialog,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -891,6 +892,15 @@ class MainWindow(QMainWindow):
             "newspad is built on.",
         )
         layout.addWidget(self.heading)
+
+        # A bar for work that takes long enough to wonder about. Above the
+        # status strip, so the sentence and the bar read as one thing.
+        self.work_bar = QProgressBar()
+        self.work_bar.setObjectName("WorkBar")
+        self.work_bar.setTextVisible(False)
+        self.work_bar.setFixedHeight(6)
+        self.work_bar.hide()
+        layout.addWidget(self.work_bar)
 
         self.status = QLabel()
         self.status.setObjectName("StatusInfo")
@@ -2070,8 +2080,11 @@ class MainWindow(QMainWindow):
         # is the heading picker or the board's sentiment control, and showing
         # the row is what reads it.
         self.preview.for_board = model is getattr(self, "board_model", None)
-        position = model.position_of(clip_id) + 1
-        self.preview.show_row(row, position, len(model.rows))
+        at, walk = self._preview_place(clip_id)
+        # The counter must count what is on screen. With a filter on it used to
+        # read "3 / 40" while the list showed nine.
+        position = (at + 1) if at is not None else 0
+        self.preview.show_row(row, position, len(walk))
         self.preview.show()
         self.preview.raise_()
         self.preview.activateWindow()
@@ -2079,11 +2092,9 @@ class MainWindow(QMainWindow):
     def _refresh_preview(self, clip_id: int) -> None:
         row = self._preview_pool().row_for(clip_id)
         if self.preview and self.preview.isVisible() and row is not None:
+            at, walk = self._preview_place(clip_id)
             self.preview.show_row(
-                row,
-                self._preview_pool().position_of(clip_id) + 1,
-                len(self._preview_pool().rows),
-            )
+                row, (at + 1) if at is not None else 0, len(walk))
 
     def _preview_heading(self, clip_id: int, key: str, words: str) -> None:
         """A heading was chosen for one clipping in the press report preview.
@@ -2155,17 +2166,48 @@ class MainWindow(QMainWindow):
         self._refresh_preview(clip_id)
 
     def _preview_split(self, clip_id: int) -> None:
-        position = self._preview_pool().position_of(clip_id)
+        at, _walk = self._preview_place(clip_id)
         self.undo_stack.push(commands.Split(self._preview_pool(), clip_id))
-        if 0 <= position < len(self._preview_pool().rows):
-            self._refresh_preview(self._preview_pool().rows[position].id)
+        walk = self._preview_walk()
+        if at is not None and 0 <= at < len(walk):
+            self._refresh_preview(walk[at].id)
+
+    def _preview_walk(self) -> list:
+        """The rows the arrows should walk: what is on screen, in that order.
+
+        The lens is a view projection and never rewrites `model.rows`, because
+        that list IS the export order. So the list on screen and the list the
+        preview was walking were two different things, and with a filter on the
+        arrows wandered off through clippings nobody could see.
+        """
+        pool = self._preview_pool()
+        shown = pool.visible_rows() if hasattr(pool, "visible_rows") else None
+        return list(shown) if shown else list(pool.rows)
+
+    def _preview_place(self, row_id: int):
+        """Where this clipping sits in the walk, or None if it is filtered out."""
+        walk = self._preview_walk()
+        for index, row in enumerate(walk):
+            if row.id == row_id:
+                return index, walk
+        return None, walk
 
     def _preview_navigate(self, step: int) -> None:
         if self.preview is None or self.preview.row is None:
             return
-        position = self._preview_pool().position_of(self.preview.row.id) + step
-        if 0 <= position < len(self._preview_pool().rows):
-            self._refresh_preview(self._preview_pool().rows[position].id)
+        at, walk = self._preview_place(self.preview.row.id)
+        if at is None:
+            # Opened on a clipping the filter hides - from the board, or because
+            # the lens changed while this window was open. Stepping from it has
+            # no meaning, so go to whichever end the arrow points at rather than
+            # doing nothing and looking broken.
+            if not walk:
+                return
+            self._refresh_preview(walk[0 if step > 0 else -1].id)
+            return
+        position = at + step
+        if 0 <= position < len(walk):
+            self._refresh_preview(walk[position].id)
 
     # ------------------------------------------------------- context menu
     def _send_to_board(self, clip_ids: list) -> None:
@@ -2462,7 +2504,7 @@ class MainWindow(QMainWindow):
             self.board.status.setText(message)
             self.board.status.setToolTip(detail)
             self.board.status.show()
-            QTimer.singleShot(9000, self.board.status.hide)
+            self._hide_status_later(self.board.status)
             return
         self.status.setObjectName(
             {"info": "StatusInfo", "good": "StatusGood", "bad": "StatusBad"}[kind]
@@ -2473,7 +2515,37 @@ class MainWindow(QMainWindow):
         self.status.setText(message)
         self.status.setToolTip(detail)
         self.status.show()
-        QTimer.singleShot(9000, self.status.hide)
+        self._hide_status_later(self.status)
+
+    #: How long a message stays up once nothing new has replaced it.
+    QUIET_FOR = 9000
+
+    def _hide_status_later(self, strip) -> None:
+        """Take the message down nine seconds after the LAST one, not each one.
+
+        This used to be `QTimer.singleShot(9000, strip.hide)`, once per message.
+        A one-shot timer cannot be cancelled, so a run that reports progress -
+        the duplicate check reports every few clippings - stacked up a hundred
+        of them. Each fired nine seconds after its own message and hid a line
+        that a later message had just put up, and the strip blinked on and off
+        for the whole run.
+
+        One timer, restarted. While messages keep arriving it never fires; nine
+        seconds after they stop, the strip comes down once.
+        """
+        timer = getattr(self, "_status_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            self._status_timer = timer
+        else:
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        timer.timeout.connect(strip.hide)
+        timer.start(self.QUIET_FOR)
 
     def _report(self, problems: list[str]) -> None:
         box = QMessageBox(self)
@@ -2917,15 +2989,40 @@ class MainWindow(QMainWindow):
             unread, self._duplicate_progress, self._duplicate_readings, self,
             measure=False)
 
+    def _work_begin(self, said: str, total: int) -> None:
+        """Put the bar up for a job whose size is known."""
+        bar = getattr(self, "work_bar", None)
+        if bar is None:
+            return
+        bar.setRange(0, max(1, total))
+        bar.setValue(0)
+        bar.show()
+        self._flash(said, "info")
+
+    def _work_end(self) -> None:
+        """Take it down. Called on every way out, including the unhappy ones."""
+        bar = getattr(self, "work_bar", None)
+        if bar is not None:
+            bar.hide()
+        self._last_progress = ""
+
     def _duplicate_progress(self, done: int, total: int) -> None:
-        # Quietly, on the strip that is already there. No dialog: the user did
+        # Quietly, in the card that is already there. No dialog: the user did
         # not ask for this and should not have to dismiss it.
-        #
-        # Only when the words would actually change. The reader says how far it
-        # has got several times a second, and a count sitting still on a
-        # multiple of eight used to rewrite the strip every single time - 1628
-        # rewrites and 716ms of the window's own thread in one check, to say the
-        # same sentence over and over.
+        bar = getattr(self, "work_bar", None)
+        if bar is not None:
+            if bar.maximum() != max(1, total):
+                bar.setRange(0, max(1, total))
+            if not bar.isVisible():
+                bar.show()
+            # The bar itself is cheap and can take every step, so it moves
+            # smoothly rather than in jumps of eight.
+            bar.setValue(done)
+
+        # The SENTENCE is throttled, not the bar. The reader says how far it has
+        # got several times a second, and rewriting a wrapping label that often
+        # cost 1628 rewrites and 716ms of the window's own thread in one check -
+        # to say the same sentence over and over.
         if done != total and done % 8:
             return
         said = f"Reading clippings… {done} of {total}"
@@ -2969,6 +3066,9 @@ class MainWindow(QMainWindow):
 
     def _finish_duplicate_check(self, results) -> None:
         """Compare everything and say what was found. Fast: no reading here."""
+        # FIRST, before the guard below. A bar left up after the window has
+        # started closing is a bar that never comes down.
+        self._work_end()
         if self._gone():
             return
         clips = [row.clip for row in self.model.rows if row.clip is not None]
