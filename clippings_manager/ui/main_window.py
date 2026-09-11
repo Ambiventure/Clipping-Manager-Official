@@ -8,9 +8,11 @@ of WhatsApp Web.
 
 from __future__ import annotations
 
+import functools
 import itertools
 import os
 import sys
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
@@ -54,7 +56,7 @@ from ..core.assemble import (ExtractionError, detect_division, is_advisory,
                              load_config, looks_like_url)
 from ..core.extract_docx import extract_docx
 from ..core.extract_pdf import extract_pdf
-from ..core import duplicates, ocr, sentiment, training, wordlist
+from ..core import duplicates, newspads, ocr, sentiment, training, wordlist
 from ..core.models import Clip, Section
 from ..core.profiles import NameIndex
 from .. import version
@@ -125,6 +127,19 @@ class IconButton(QPushButton):
 DUPLICATE_SETTLE_MS = 400
 
 
+def _pumps(method):
+    """For work that runs its own event loop - an import's progress, an export,
+    the trainer. The newspad button is held while it runs: a switch from inside
+    one would swap the lists out from under the work. A decorator rather than a
+    wrapper around a renamed body, so each keeps its own name and its own body.
+    """
+    @functools.wraps(method)
+    def held(self, *args, **kwargs):
+        with self._busy():
+            return method(self, *args, **kwargs)
+    return held
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -136,12 +151,28 @@ class MainWindow(QMainWindow):
         # card saves its design within moments of existing and that save no
         # longer carries these five.
         self._legacy_dossier = legacy_morning()
-        self.newspad = 1
+        # Which of the four newspads is in the window, and the machinery that
+        # keeps a switch between them from mixing one newspad's work into
+        # another's. See switch_newspad.
+        self.newspad = newspads.active()
+        self._switching = False
+        self._newspad_gen = 0       # bumped by every switch; see _deferred
+        self._pass_gen = 0          # bumped when a reading pass is settled
+        self._pumping = 0           # >0 while something runs its own event loop
+        self._opened = {self.newspad}
+        self._read_only = False
+        # Read-only because a switch went wrong part-way, rather than because
+        # saved work could not be read. See _back_to.
+        self._stuck = False
+        self._winding_down: list = []
+        self._check_pending = ""
+        self._resume_check = ""
+        self._answer_even_if_nothing_read = False
         # The build is in the title because the first question after "it works
         # on my laptop but not on that one" is which build each of them is
         # running, and until this there was nothing anywhere that could answer
         # it. Two machines showing the same digest are running the same code.
-        self.setWindowTitle(f"Clippings Manager  —  {version.describe()}")
+        self.setWindowTitle(self._title())
         self._open_at_a_size_that_fits()
         self.setAcceptDrops(True)
 
@@ -203,7 +234,10 @@ class MainWindow(QMainWindow):
         # gets it, which main.py alone did not guarantee.
         scroll.guard_the_wheel()
 
-        self.store = SessionStore()
+        # Each newspad's own folder. Newspad 1 is the one session folder there
+        # has always been, so the morning on this machine the day this ships
+        # comes through untouched.
+        self.store = SessionStore(newspads.folder(self.newspad))
         self._restoring = False
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -212,6 +246,7 @@ class MainWindow(QMainWindow):
 
         self._build()
         self._wire()
+        self._mark_what_is_whose()
         self._update_counts()
         self._native_drop = None
         QTimer.singleShot(0, self._install_native_drop)
@@ -239,10 +274,24 @@ class MainWindow(QMainWindow):
         return None
 
     # ------------------------------------------------------- saved session
+    def _title(self) -> str:
+        """The build stays in the title: two machines showing the same digest
+        are running the same code. The newspad is there so it is never in
+        doubt which one is open."""
+        return (f"Clippings Manager  —  Newspad {self.newspad}  —  "
+                f"{version.describe()}")
+
     def touch_session(self) -> None:
-        """Something changed - write the manifest shortly."""
-        if not self._restoring:
-            self._save_timer.start()
+        """Something changed - write the manifest shortly.
+
+        Not during a switch: the lists are being emptied and refilled, and a
+        save armed then would write whichever newspad is half on screen into
+        whichever store is current. Not for a newspad that cannot be read
+        either - see _read_only.
+        """
+        if self._restoring or self._switching or self._read_only:
+            return
+        self._save_timer.start()
 
     def _encode_pool(self, pool) -> list:
         """One pool's rows, with the pictures put in the blob folder."""
@@ -270,9 +319,21 @@ class MainWindow(QMainWindow):
             })
         return rows
 
-    def save_session(self) -> None:
-        """Write the manifest, then drop pictures nothing refers to."""
-        if self._restoring:
+    def save_session(self, strict: bool = False) -> None:
+        """Write the manifest, then drop pictures nothing refers to.
+
+        ``strict`` is for a newspad switch, which must not go ahead unless the
+        outgoing newspad is safely on disk: a failed save raises instead of
+        being shrugged off. Tidying away unused pictures is still allowed to
+        fail quietly, because once the manifest is written that is housekeeping.
+
+        Never for a newspad whose saved work could not be read. An empty save
+        there would tidy away every picture of a morning still waiting to be
+        rescued.
+        """
+        if self._restoring or self._read_only:
+            return
+        if self._switching and not strict:
             return
         try:
             standard = self._encode_pool(self.model)
@@ -292,10 +353,15 @@ class MainWindow(QMainWindow):
                 # bumping it made an older build's close wipe the session.
                 "newspad": self._newspad_values(),
             })
+        except Exception:  # noqa: BLE001 - a failed save must not stop the work
+            if strict:
+                raise
+            return
+        try:
             self.store.collect(
                 {r["blob"] for r in standard + sentiment if r["blob"]}
             )
-        except Exception:  # noqa: BLE001 - a failed save must not stop the work
+        except Exception:  # noqa: BLE001 - the manifest is safe; this is tidying
             pass
 
     def _newspad_values(self) -> dict:
@@ -412,6 +478,13 @@ class MainWindow(QMainWindow):
         """
         payload = self.store.load()
         if not payload:
+            if self.store.unreadable():
+                # There IS saved work and it cannot be read. Saving an empty
+                # newspad over it would tidy away every one of its pictures, so
+                # this newspad saves nothing until somebody sets the old work
+                # aside - see _set_aside_unreadable.
+                self._read_only = True
+                self._show_read_only(True)
             self._apply_newspad_values(None, arriving)
             return 0
         # Worked out before anything is restored, because the answer is about the
@@ -483,9 +556,22 @@ class MainWindow(QMainWindow):
                 self.board.select_division(division)
         except Exception:  # noqa: BLE001 - never let a bad file stop the app
             restored = 0
+            # Part of it may already be in the list. A save now would keep that
+            # part and tidy away every picture of the rest, so the newspad is
+            # held read-only until its old work has been set aside.
+            self._read_only = True
         finally:
             QApplication.restoreOverrideCursor()
             self._restoring = False
+        if self._read_only:
+            self._show_read_only(True)
+            # Whatever did come back stays on screen: it can still be looked at
+            # and exported, and once the old work is set aside it is saved.
+            if self.model.rows or self.board_model.rows:
+                self._update_counts()
+                if self.model.rows:
+                    self._show_list()
+                self._refresh_board()
         # After the division, because selecting the board's division is what
         # moves the dossier's generated division line - and a newspad's own
         # saved line has to be the one that ends up on the card.
@@ -499,8 +585,11 @@ class MainWindow(QMainWindow):
             if self.model.rows:
                 self._show_list()
             self._refresh_board()
-            note = (f"Restored {restored} clipping"
-                    f"{'s' if restored != 1 else ''} from your last session.")
+            plural = "s" if restored != 1 else ""
+            note = (f"Newspad {self.newspad}: {restored} clipping{plural}."
+                    if arriving else
+                    f"Restored {restored} clipping{plural} from your last "
+                    f"session.")
             if lost:
                 note += f" {lost} could not be read and were left out."
             if stale:
@@ -517,7 +606,14 @@ class MainWindow(QMainWindow):
         # The clippings come back carrying last time's verdicts, including
         # which were switched off as repeats. That was true of the list as
         # it was; ask again for the list as it is now.
-        self.recheck_duplicates()
+        resume, self._resume_check = self._resume_check, ""
+        if resume == "loud":
+            # The button had been pressed. It is answered out loud when the
+            # check finishes - even if everything was read before the switch
+            # and there is nothing left to read now.
+            self._recheck_out_loud = True
+            self._answer_even_if_nothing_read = True
+        self.recheck_duplicates(force=bool(resume))
         return restored
 
     def _fit_pages(self, *_args) -> None:
@@ -716,6 +812,24 @@ class MainWindow(QMainWindow):
         # item instead of the sum of all of them.
         controls = FlowLayout(spacing=8, vertical_spacing=6)
 
+        # Which of the four newspads is open. A button with a menu, never a
+        # combo box: a combo takes the wheel, and a wheel turned over the header
+        # must scroll the page, never quietly switch somebody's newspad.
+        newspad_label = QLabel("NEWSPAD")
+        newspad_label.setObjectName("ModeLabel")
+        controls.addWidget(newspad_label)
+        self.newspad_btn = QPushButton(f"Newspad {self.newspad} ▾")
+        self.newspad_btn.setObjectName("HeaderButton")
+        self.newspad_btn.setCursor(Qt.PointingHandCursor)
+        self.newspad_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.newspad_btn.setToolTip(newspads.SHARED_IN_ONE_LINE)
+        self.newspad_btn.setStyleSheet(
+            "QPushButton::menu-indicator { image: none; width: 0px; }")
+        self.newspad_menu = QMenu(self.newspad_btn)
+        self.newspad_menu.aboutToShow.connect(self._fill_newspad_menu)
+        self.newspad_btn.setMenu(self.newspad_menu)
+        controls.addWidget(self.newspad_btn)
+
         interface_label = QLabel("INTERFACE")
         interface_label.setObjectName("ModeLabel")
         controls.addWidget(interface_label)
@@ -805,6 +919,10 @@ class MainWindow(QMainWindow):
             label.setObjectName("HeaderHint")
             hints.addWidget(label)
         column.addLayout(hints)
+        # In the header, not between it and the page: it has to be seen on both
+        # interfaces, and nothing but the header, the footer and the overlays
+        # may sit outside the page and take its room. Hidden, it takes none.
+        column.addWidget(self._build_read_only_banner())
 
         outer.addWidget(content, 1)
         accent = QWidget()
@@ -895,6 +1013,11 @@ class MainWindow(QMainWindow):
             # out of what it inherits.
             fresh = dict(os.environ)
             fresh.pop(zoom.VARIABLE, None)
+            # Only one copy may run at a time (see main.py), and this one still
+            # holds the lock until it has finished closing. Told it is a
+            # restart, the new copy waits for the lock instead of reporting that
+            # the program is already open and leaving.
+            fresh["CM_RESTARTED"] = "1"
             subprocess.Popen(command, cwd=str(Path.cwd()), close_fds=True,
                              env=fresh)
         except Exception:  # noqa: BLE001
@@ -1590,7 +1713,31 @@ class MainWindow(QMainWindow):
         if paths:
             self.import_paths([Path(p) for p in paths])
 
+    @contextmanager
+    def _busy(self):
+        """Hold the newspad button while something runs its own event loop.
+        See _pumps."""
+        self._pumping += 1
+        self._sync_newspad_button()
+        try:
+            yield
+        finally:
+            self._pumping = max(0, self._pumping - 1)
+            self._sync_newspad_button()
+
+    def _refuse_if_read_only(self) -> bool:
+        if not self._read_only:
+            return False
+        self._flash("Nothing can be added until the program is opened again."
+                    if self._stuck else
+                    "This newspad cannot save — set its old work aside first.",
+                    "bad")
+        return True
+
+    @_pumps
     def import_paths(self, paths: list[Path]) -> None:
+        if self._refuse_if_read_only():
+            return
         # Whatever is on screen owns what arrives: the press report and the
         # sentiment board keep separate sets of clippings.
         target = self.pool()
@@ -1738,6 +1885,8 @@ class MainWindow(QMainWindow):
 
     def _add_loose(self, clips: list[Clip]) -> None:
         """Hand-added clippings share one group and land at the top, in order."""
+        if self._refuse_if_read_only():
+            return
         target = self.pool()
         self._stamp_pending(clips)
         rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
@@ -1764,7 +1913,8 @@ class MainWindow(QMainWindow):
             first = rows[0].id
             self.raise_()
             self.activateWindow()
-            QTimer.singleShot(80, lambda: self.board.begin_rename(first))
+            QTimer.singleShot(80, self._deferred(
+                lambda: self.board.begin_rename(first)))
             return
 
         self._show_list()
@@ -1779,7 +1929,7 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.list.setFocus()
-        QTimer.singleShot(80, lambda: self._begin_rename(first))
+        QTimer.singleShot(80, self._deferred(lambda: self._begin_rename(first)))
 
     def _begin_rename(self, clip_id: int) -> None:
         """Open the headline box on a newly added clipping, and mean it.
@@ -1790,7 +1940,25 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self.list.open_editor_for(clip_id)
         if self.list.editing_id() != clip_id:
-            QTimer.singleShot(140, lambda: self.list.open_editor_for(clip_id))
+            QTimer.singleShot(140, self._deferred(
+                lambda: self.list.open_editor_for(clip_id)))
+
+    def _deferred(self, call):
+        """Wrap a call that carries a bare clipping id, to run a moment later.
+
+        Ids are only unique within a newspad: newspad 1 and newspad 2 can both
+        have a clipping 5. A call scheduled just before a switch fires just
+        after it, and would open the headline box on the other newspad's
+        clipping 5. So it remembers which newspad it was made in, and does
+        nothing if that is no longer the one in the window.
+        """
+        made_in = self._newspad_gen
+
+        def run():
+            if made_in == self._newspad_gen:
+                call()
+
+        return run
 
     def _clip_from_bytes(self, data: bytes, name: str) -> Clip:
         from PIL import Image
@@ -1962,6 +2130,10 @@ class MainWindow(QMainWindow):
         half-typed address - "https:/", before the second slash - land as a
         headline for as long as it took to type the next character.
         """
+        # The box can be committed by the switch that replaces its newspad, and
+        # arrive after the clipping it belonged to has left the window.
+        if self.model.row_for(clip_id) is None:
+            return
         clip = self.model.by_id(clip_id)
 
         # A web address typed into the headline box is an address, whatever box
@@ -1998,6 +2170,8 @@ class MainWindow(QMainWindow):
 
     def _on_url_edited(self, clip_id: int, text: str) -> None:
         """The address, which prints under the picture as a working link."""
+        if self.model.row_for(clip_id) is None:
+            return
         clip = self.model.by_id(clip_id)
         if text.strip() == clip.url.strip():
             return
@@ -2663,6 +2837,7 @@ class MainWindow(QMainWindow):
         box.setDetailedText("\n\n".join(problems))
         box.exec()
 
+    @_pumps
     def _export(self, prefer: str) -> None:
         """Build the newspad from the included clippings, in the order shown."""
         from .export_dialog import ExportDialog
@@ -2705,12 +2880,23 @@ class MainWindow(QMainWindow):
             cover_baked=bool(built),
             layout_style=self.heading.settings(),
             cover_blocks=self.cover.cover_blocks(),
+            name_suffix=self._export_suffix(),
         )
         if dialog.exec() and dialog.results:
             names = ", ".join(Path(p).name for p in dialog.results)
             self._flash(f"Built {names}.", "good")
             # The brief: undo history clears on export, not on import.
             self.undo_stack.clear()   # the report's history only
+
+    def _export_suffix(self) -> str:
+        """What a file's name carries to say which newspad it came from.
+
+        Nothing for Newspad 1, so the files a morning has always produced keep
+        exactly the names they have always had. Two newspads exporting on the
+        same day would otherwise suggest the same name, and the second would
+        replace the first.
+        """
+        return "" if self.newspad == 1 else f" - Newspad {self.newspad}"
 
     def _division_tag(self) -> str:
         """How a division is written on a file: "Lucknow(LKO)".
@@ -2723,6 +2909,7 @@ class MainWindow(QMainWindow):
             return "All Divisions"
         return f"{division.name}({division.code})"
 
+    @_pumps
     def _export_jpegs(self, clips: list, where: str, stamp) -> None:
         """One picture per clipping, with the masthead burned in.
 
@@ -2744,7 +2931,8 @@ class MainWindow(QMainWindow):
         if not chosen:
             return
 
-        folder = Path(chosen) / build_jpeg.folder_name(self._division_tag(), stamp)
+        folder = Path(chosen) / (build_jpeg.folder_name(self._division_tag(), stamp)
+                                 + self._export_suffix())
         progress = QProgressDialog(
             "Writing the pictures…", "Stop", 0, len(clips), self)
         progress.setWindowTitle("Exporting JPEGs")
@@ -2861,7 +3049,7 @@ class MainWindow(QMainWindow):
         suffix = "docx" if kind == "docx" else "pdf"
         tail = " (burned headlines)" if burned else ""
         stem = (f"News Coverage - {self._division_tag()} - "
-                f"{stamp.strftime('%d.%m.%Y')}{tail}")
+                f"{stamp.strftime('%d.%m.%Y')}{tail}{self._export_suffix()}")
 
         open_after = False
         if burned:
@@ -2967,7 +3155,7 @@ class MainWindow(QMainWindow):
             BurnedReportDialog.open_file(made[0].path)
 
     # ------------------------------------------------------ the same twice
-    def recheck_duplicates(self) -> None:
+    def recheck_duplicates(self, force: bool = False) -> None:
         """Ask for the duplicate check. It runs once, shortly, not now.
 
         This is called from everywhere the list can change, and one of those
@@ -2983,7 +3171,10 @@ class MainWindow(QMainWindow):
         """
         if not hasattr(self, "duplicates_btn"):
             return
-        if not self._auto_duplicates:
+        # force: a check that was already under way when this newspad was
+        # switched away from. It was asked for, so it finishes, whether or not
+        # checking automatically is switched on.
+        if not self._auto_duplicates and not force:
             # Switched off. The button still works, and what has already been
             # flagged stays flagged - turning the check off is not the same as
             # saying the repeats it found are not repeats.
@@ -3004,6 +3195,15 @@ class MainWindow(QMainWindow):
         is the moment somebody most wants to look at what they have just
         brought in.
         """
+        if self._switching:
+            return          # the restore at the end of the switch asks again
+        if self._still_winding_down():
+            # A pass stopped by a switch has not let go of its thread yet. Two
+            # at once raised the window's worst pause to 338ms, measured - so
+            # wait for it, and try again in a moment.
+            if self._duplicate_timer is not None:
+                self._duplicate_timer.start(DUPLICATE_SETTLE_MS)
+            return
         if self._duplicates_running:
             return
         rows = [row for row in self.model.rows if row.clip is not None]
@@ -3025,11 +3225,75 @@ class MainWindow(QMainWindow):
                      and (not c.picture_hash or not c.picture_hash_lower)]
         if unprinted:
             self._duplicates_running = True
-            self._reader_thread, self._reader = reader.start(
-                unprinted, self._duplicate_progress, self._prints_taken, self,
-                read_headlines=False)
+            self._start_pass(unprinted, self._prints_taken,
+                             read_headlines=False)
             return
         self._read_the_shortlist()
+
+    def _start_pass(self, work, on_finished, **options) -> None:
+        """Start a background pass whose answers are dropped if it is settled.
+
+        Every pass is stamped with the generation it started in. A newspad
+        switch settles the pass and bumps the generation, so when the pass's
+        answer does arrive - it is queued, and arrives after the switch - it is
+        recognised as belonging to a newspad no longer in the window and
+        ignored. Measured without this: the late answer ran its follow-on step
+        against the NEW newspad, a 3062ms block, and wiped its flags.
+        """
+        gen = self._pass_gen
+
+        def progress(done, total, gen=gen):
+            if gen == self._pass_gen:
+                self._duplicate_progress(done, total)
+
+        def finished(results, gen=gen):
+            if gen == self._pass_gen:
+                on_finished(results)
+
+        self._reader_thread, self._reader = reader.start(
+            work, progress, finished, self, **options)
+
+    def _still_winding_down(self) -> bool:
+        """Whether a pass stopped by a switch still holds its thread."""
+        alive = []
+        for thread in self._winding_down:
+            try:
+                if thread.isRunning():
+                    alive.append(thread)
+            except RuntimeError:        # the thread object is already gone
+                continue
+        self._winding_down = alive
+        return bool(alive)
+
+    def _copy_back(self, results, headlines: bool) -> None:
+        """Put what a pass measured - and, if it read them, the headlines -
+        back onto the clippings in the window.
+
+        Only when there is something to put: an empty measurement is silence,
+        not an answer, and writing it over a clipping would wipe a reading
+        taken earlier in the morning.
+        """
+        by_uid = {row.clip.uid: row.clip for row in self.model.rows
+                  if row.clip is not None}
+        for got in results or ():
+            clip = by_uid.get(got.uid)
+            if clip is None:
+                continue        # deleted while we were reading; nothing to do
+            if headlines:
+                clip.ocr_text = got.text
+                clip.headline_confidence = got.confidence
+                clip.ocr_engine = got.engine
+            if got.print_all:
+                clip.picture_hash = got.print_all
+            if got.print_low:
+                clip.picture_hash_lower = got.print_low
+            if getattr(got, "print_fine", ""):
+                clip.picture_hash_fine = got.print_fine
+            if getattr(got, "ink", ""):
+                clip.ink_profile = got.ink
+            if getattr(got, "width", 0):
+                clip.content_w = got.width
+                clip.content_h = got.height
 
     def _gone(self) -> bool:
         """True once this window is on its way out. Nothing may touch it then."""
@@ -3050,23 +3314,7 @@ class MainWindow(QMainWindow):
         """
         if self._gone():
             return
-        by_uid = {row.clip.uid: row.clip for row in self.model.rows
-                  if row.clip is not None}
-        for got in results or ():
-            clip = by_uid.get(got.uid)
-            if clip is None:
-                continue
-            if got.print_all:
-                clip.picture_hash = got.print_all
-            if got.print_low:
-                clip.picture_hash_lower = got.print_low
-            if getattr(got, "print_fine", ""):
-                clip.picture_hash_fine = got.print_fine
-            if getattr(got, "ink", ""):
-                clip.ink_profile = got.ink
-            if getattr(got, "width", 0):
-                clip.content_w = got.width
-                clip.content_h = got.height
+        self._copy_back(results, headlines=False)
         self._duplicates_running = False
         self._read_the_shortlist()
 
@@ -3091,9 +3339,7 @@ class MainWindow(QMainWindow):
         # picked them out, moments ago. Measuring them again cost a 767ms pause
         # the instant the reading began, because four threads decoded four
         # pictures at once.
-        self._reader_thread, self._reader = reader.start(
-            unread, self._duplicate_progress, self._duplicate_readings, self,
-            measure=False)
+        self._start_pass(unread, self._duplicate_readings, measure=False)
 
     def _work_begin(self, said: str, total: int) -> None:
         """Put the bar up for a job whose size is known."""
@@ -3147,26 +3393,7 @@ class MainWindow(QMainWindow):
         """
         if self._gone():
             return
-        by_uid = {row.clip.uid: row.clip for row in self.model.rows
-                  if row.clip is not None}
-        for got in results or ():
-            clip = by_uid.get(got.uid)
-            if clip is None:
-                continue        # deleted while we were reading; nothing to do
-            clip.ocr_text = got.text
-            clip.headline_confidence = got.confidence
-            clip.ocr_engine = got.engine
-            if got.print_all:
-                clip.picture_hash = got.print_all
-            if got.print_low:
-                clip.picture_hash_lower = got.print_low
-            if getattr(got, "print_fine", ""):
-                clip.picture_hash_fine = got.print_fine
-            if getattr(got, "ink", ""):
-                clip.ink_profile = got.ink
-            if getattr(got, "width", 0):
-                clip.content_w = got.width
-                clip.content_h = got.height
+        self._copy_back(results, headlines=True)
         self._duplicates_running = False
         self._finish_duplicate_check(results)
 
@@ -3210,8 +3437,10 @@ class MainWindow(QMainWindow):
         # is not the answer the button was pressed for, and consuming the flag
         # on it left the direct answer to be overwritten a moment later by the
         # quiet one.
-        if getattr(self, "_recheck_out_loud", False) and results:
+        if getattr(self, "_recheck_out_loud", False) and (
+                results or self._answer_even_if_nothing_read):
             self._recheck_out_loud = False
+            self._answer_even_if_nothing_read = False
             if found:
                 self._flash(
                     f"Checked {len(clips)} clippings — {found} "
@@ -3333,7 +3562,7 @@ class MainWindow(QMainWindow):
         """
         from ..core import ocr
 
-        if self._duplicates_running:
+        if self._duplicates_running or self._still_winding_down():
             self._flash("Already looking — one moment.", "info")
             return
         clips = [row.clip for row in self.model.rows if row.clip is not None]
@@ -3370,6 +3599,360 @@ class MainWindow(QMainWindow):
         self._flash(f"Looking at all {len(clips)} clippings again…", "info")
         self._run_duplicate_check()
 
+    # ------------------------------------------------------------ newspads
+    def _mark_what_is_whose(self) -> None:
+        """Say, where it is typed, which values belong to this newspad alone.
+
+        Everything else on the two covers is design and shared by all four -
+        the button's tooltip and the menu say so. A tooltip added to, never
+        written over: the date pickers already explain why a future day is
+        refused, and that must stay.
+        """
+        own = "This newspad's own - each newspad keeps its own."
+        cover, dossier = self.cover, self.board.cover
+        for widget in (getattr(cover, "date_edit", None),
+                       getattr(cover, "date_mirror", None),
+                       getattr(dossier, "date_edit", None),
+                       getattr(dossier, "date_text", None),
+                       getattr(dossier, "count_text", None),
+                       getattr(dossier, "division_edit", None),
+                       getattr(dossier, "prepared_edit", None)):
+            if widget is None:
+                continue
+            said = widget.toolTip()
+            widget.setToolTip(f"{said}\n\n{own}" if said else own)
+
+    def _sync_newspad_button(self) -> None:
+        button = getattr(self, "newspad_btn", None)
+        if button is None:
+            return
+        button.setText(f"Newspad {self.newspad} ▾")
+        button.setEnabled(self._pumping == 0 and not self._switching)
+
+    def _fill_newspad_menu(self) -> None:
+        """Built each time it opens, so the counts are the counts now."""
+        menu = self.newspad_menu
+        menu.clear()
+        for number in range(1, newspads.COUNT + 1):
+            if number == self.newspad:
+                count = len(self.model.rows) + len(self.board_model.rows)
+                said = newspads.describe(number, count) + "  (open)"
+            else:
+                # Read off its manifest by path. Never by building a store,
+                # which would create the folder just by looking.
+                seen = newspads.summary(number)
+                if seen:
+                    said = newspads.describe(number, *seen)
+                elif (newspads.folder(number) / "session.json").exists():
+                    # Saved work that will not read. Never "empty": that
+                    # would invite somebody to use it for a fresh morning.
+                    said = f"Newspad {number} — could not be read"
+                else:
+                    said = newspads.describe(number, 0)
+            action = menu.addAction(said)
+            action.setCheckable(True)
+            action.setChecked(number == self.newspad)
+            action.triggered.connect(
+                lambda _on=False, n=number: self.switch_newspad(n))
+        menu.addSeparator()
+        share = menu.addAction("What the four newspads share…")
+        share.triggered.connect(self._show_what_is_shared)
+
+    def _show_what_is_shared(self) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("What the four newspads share")
+        box.setIcon(QMessageBox.Information)
+        box.setText(newspads.WHAT_IS_SHARED)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        # open(), never exec(): nothing here should hold up the window.
+        box.open()
+
+    def _build_read_only_banner(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("ReadOnlyBanner")
+        bar.setAttribute(Qt.WA_StyledBackground, True)
+        bar.setStyleSheet(
+            f"#ReadOnlyBanner {{ background: {theme.FLAG_WASH};"
+            f" border: 1px solid {theme.ORANGE_INK}; border-radius: 10px; }}"
+            f"#ReadOnlyBanner QLabel {{ color: {theme.INK};"
+            f" background: transparent; }}")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(14, 9, 10, 9)
+        row.setSpacing(12)
+        self.read_only_text = QLabel()
+        self.read_only_text.setWordWrap(True)
+        row.addWidget(self.read_only_text, 1)
+        button = QPushButton("Set it aside and start empty")
+        button.setCursor(Qt.PointingHandCursor)
+        button.clicked.connect(self._set_aside_unreadable)
+        row.addWidget(button)
+        self.read_only_button = button
+        bar.hide()
+        self.read_only_banner = bar
+        return bar
+
+    def _show_read_only(self, on: bool, stuck: bool = False) -> None:
+        """The note above the lists while this newspad saves nothing.
+
+        ``stuck`` is the one case with nothing to set aside: a switch went wrong
+        part-way and the window can no longer be trusted to match any folder.
+        """
+        banner = getattr(self, "read_only_banner", None)
+        if banner is None:
+            return
+        if on and stuck:
+            self.read_only_text.setText(
+                "Something went wrong while changing newspads. Your work was "
+                "saved just before it. Close the program and open it again to "
+                "carry on - nothing is saved until then.")
+        elif on:
+            self.read_only_text.setText(
+                f"Newspad {self.newspad}'s saved work could not be read. "
+                f"Nothing is saved in this newspad until it is set aside - "
+                f"the old files are kept, renamed, not deleted.")
+        self.read_only_button.setVisible(on and not stuck)
+        banner.setVisible(on)
+
+    def _set_aside_unreadable(self) -> None:
+        """Rename the unreadable folder out of the way, and start this newspad
+        empty. Renamed, never deleted: whatever is in it may still be rescued."""
+        folder = newspads.folder(self.newspad)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        aside = folder.with_name(f"{folder.name}.unreadable-{stamp}")
+        try:
+            os.replace(folder, aside)
+        except OSError as error:
+            self._flash(f"Could not set it aside: {error}", "bad")
+            return
+        self.store = SessionStore(newspads.folder(self.newspad))
+        self._read_only = False
+        self._show_read_only(False)
+        if self.model.rows or self.board_model.rows:
+            # What could be read is still in the window; from now on it is
+            # saved, into the fresh folder.
+            said = "what could be read is kept and saved from now on"
+            self.touch_session()
+        else:
+            said = f"Newspad {self.newspad} is empty and saves normally"
+        self._flash(f"The old work was kept as {aside.name}; {said}.", "info")
+
+    def switch_newspad(self, number: int) -> bool:
+        """Put this newspad away and open another. Synchronous, and in order.
+
+        1. Commit any headline being typed and hide the preview, so late edits
+           land in the newspad they were made in.
+        2. Settle the duplicate check: stop it, keep whatever it had read,
+           remember it was under way.
+        3. Save this newspad STRICTLY. If that fails, nothing else happens -
+           the switch is refused and this newspad stays open.
+        4. Record which newspad is open, for the next launch.
+        5. Empty the window: undo, filters, selection, both lists.
+        6. Point the window at the other newspad's own folder.
+        7. Load it through the same restore the program has always used.
+
+        Nothing between 5 and 7 processes events, except the question about
+        work left from an earlier day, and while that is up every save and
+        every check is held off. So no timer can ever pair one newspad's lists
+        with another newspad's folder.
+        """
+        if (number == self.newspad or self._switching or self._pumping
+                or not 1 <= int(number) <= newspads.COUNT):
+            return False
+        outgoing = self.newspad
+        self._switching = True
+        self._sync_newspad_button()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            # 1 ---------------------------------------------- commit and hide
+            for commit in (self.list.commit_editor, self.board.commit_editors):
+                try:
+                    commit()
+                except Exception:  # noqa: BLE001 - never block a switch on this
+                    pass
+            if self.preview is not None:
+                try:
+                    self.preview.hide()
+                except RuntimeError:
+                    pass
+            self.preview_model = None
+
+            # 2 ------------------------------------------- settle the check
+            self._settle_reader()
+
+            # 3 ----------------------------------------------------- save out
+            for card in (self.cover, self.board.cover, self.heading,
+                         getattr(self.board, "heading", None)):
+                try:
+                    if card is not None:
+                        card.flush()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._save_timer.stop()
+            if not self._read_only:
+                try:
+                    self.save_session(strict=True)
+                except Exception:  # noqa: BLE001 - refuse rather than lose it
+                    self._switching = False
+                    QApplication.restoreOverrideCursor()
+                    self._sync_newspad_button()
+                    self._flash(f"Newspad {outgoing} could not be saved, so it "
+                                f"stayed open.", "bad")
+                    if self._check_pending:
+                        self._check_pending = ""
+                        self.recheck_duplicates(force=True)
+                    return False
+
+            try:
+                # 4 -------------------------------------------------- pointer
+                try:
+                    newspads.remember(number)
+                except OSError:
+                    pass      # costs only which newspad the next launch opens
+
+                # 5 --------------------------------------------------- empty it
+                self._clear_for_switch()
+
+                # 6 -------------------------------------------------- new store
+                self.newspad = int(number)
+                self.store = SessionStore(newspads.folder(self.newspad))
+                self._read_only = False
+                self._stuck = False
+                self._show_read_only(False)
+                self._check_pending = ""
+
+                # 7 ----------------------------------------------------- load
+                ask = self.newspad not in self._opened
+                self._opened.add(self.newspad)
+                self.restore_session(ask=ask, arriving=True)
+                switched = True
+            except Exception:  # noqa: BLE001 - never leave it half switched
+                self._back_to(outgoing, number)
+                switched = False
+        finally:
+            self._switching = False
+            QApplication.restoreOverrideCursor()
+        self._after_switch()
+        return switched
+
+    def _back_to(self, outgoing: int, wanted: int) -> None:
+        """A switch failed after the outgoing newspad was safely saved.
+
+        The window may be half emptied by now, and a half-emptied window must
+        never be saved - the tidy-up after a save deletes every picture the
+        manifest no longer names. So the newspad that was open is put back, from
+        the save made a moment ago. If even that fails, nothing more is saved
+        at all until the program is opened again.
+        """
+        try:
+            newspads.remember(outgoing)
+        except OSError:
+            pass
+        try:
+            self._clear_for_switch()
+            self.newspad = outgoing
+            self.store = SessionStore(newspads.folder(outgoing))
+            self._read_only = False
+            self._show_read_only(False)
+            self.restore_session(ask=False, arriving=True)
+            self._flash(f"Newspad {wanted} could not be opened, so Newspad "
+                        f"{outgoing} stayed open.", "bad")
+        except Exception:  # noqa: BLE001
+            self._read_only = True
+            self._stuck = True
+            self._show_read_only(True, stuck=True)
+
+    def _settle_reader(self) -> None:
+        """Stop a duplicate check that is under way, keeping what it read.
+
+        The pass is stopped and waited for (half a second, measured), and its
+        readings are copied onto this newspad's clippings before they leave the
+        window - so coming back later reads only what was not reached, rather
+        than starting again. Its late answer, when it arrives, is ignored: the
+        generation it belongs to is over.
+        """
+        pending = ""
+        timer = self._duplicate_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+            pending = "quiet"
+        if self._duplicates_running:
+            pending = "quiet"
+            self._pass_gen += 1
+            worker, thread = self._reader, self._reader_thread
+            headlines = bool(getattr(worker, "_read_headlines", False))
+            try:
+                worker.stop()
+            except Exception:  # noqa: BLE001 - it may already be finished
+                pass
+            finished = False
+            try:
+                finished = bool(thread.wait(3000))
+            except (RuntimeError, AttributeError):
+                finished = True
+            if finished:
+                self._copy_back(getattr(worker, "kept", []) or [], headlines)
+            elif thread is not None:
+                self._winding_down.append(thread)
+            self._duplicates_running = False
+        if getattr(self, "_recheck_out_loud", False):
+            pending = "loud"
+            self._recheck_out_loud = False
+        self._work_end()
+        self._check_pending = pending
+
+    def _clear_for_switch(self) -> None:
+        """Empty the window of one newspad before the next is loaded into it.
+
+        Cleared, never replaced: the undo stacks and the models are the same
+        objects throughout, so the shortcuts and the list keep the wiring they
+        were built with.
+        """
+        self._newspad_gen += 1
+        self.undo_stack.clear()
+        self.board_undo.clear()
+        bar = getattr(self, "filter_bar", None)
+        if bar is not None:
+            was = bar.blockSignals(True)
+            try:
+                bar.clear()
+            finally:
+                bar.blockSignals(was)
+        for pool in (self.model, self.board_model):
+            pool.reset_view()
+            pool.replace_all([])
+        self._duplicate_pairs = []
+        self._duplicate_hints = []
+        self.model.duplicate_files = {}
+        self.duplicates_btn.setVisible(False)
+        # After the stacks are cleared: clearing them stirs _after_undo_change,
+        # which re-arms this very timer.
+        if self._duplicate_timer is not None:
+            self._duplicate_timer.stop()
+        self.board.reset_view()
+        if getattr(self.board, "divisions", None):
+            self.board.select_division(self.board.divisions[0].code)
+        for glide in self.findChildren(scroll.SmoothWheel):
+            try:
+                glide.halt()
+            except Exception:  # noqa: BLE001
+                pass
+        self._last_clicked_id = None
+        self._refresh_board()
+        self._update_counts()
+
+    def _after_switch(self) -> None:
+        self.setWindowTitle(self._title())
+        self._sync_newspad_button()
+        # The strip, if it is open, offers what is in THIS newspad's list.
+        self._refresh_filter_choices()
+        self.list.refresh_height()
+        if (not self._read_only and not self.model.rows
+                and not self.board_model.rows):
+            self._flash(
+                f"Newspad {self.newspad} is empty. Cover design, headings, "
+                f"sections, the newspaper list, the word list and duplicate "
+                f"learning are shared by all four newspads.", "info")
+
     def where_things_are_kept(self) -> None:
         """What the program keeps, where it keeps it, and how to have a copy."""
         from .. import version
@@ -3394,6 +3977,15 @@ class MainWindow(QMainWindow):
             "   That folder is not inside the program's own folder, so "
             "updating the program never touches it. There is nothing you "
             "need to do.",
+            "",
+            "THE FOUR NEWSPADS - each one's clippings, in its own folder",
+        ]
+        for number in range(1, newspads.COUNT + 1):
+            place = newspads.folder(number)
+            state = ("open now" if number == self.newspad
+                     else "in use" if place.exists() else "not used yet")
+            lines.append(f"   Newspad {number}: {place}  ({state})")
+        lines += [
             "",
             "A COPY SOMEWHERE THAT IS BACKED UP",
         ]
@@ -3532,6 +4124,7 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl(found.get("download")
                                           or updates.RELEASES))
 
+    @_pumps
     def open_trainer(self) -> None:
         """Show pairs to judge, and write down what is decided about them."""
         from .trainer_dialog import TrainerDialog
@@ -3541,7 +4134,7 @@ class MainWindow(QMainWindow):
             self._flash("Import some clippings first — the trainer compares "
                         "them against each other.", "info")
             return
-        if self._duplicates_running:
+        if self._duplicates_running or self._still_winding_down():
             self._flash("Still looking through the clippings — one moment.",
                         "info")
             return

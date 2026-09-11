@@ -345,6 +345,10 @@ class ClipList(QListView):
     def _open_editor(self, index, entry, field: str = "label") -> None:
         if entry is None or entry.kind != ENTRY_CLIP:
             return
+        # A call scheduled a moment ago can arrive after the list was emptied
+        # and refilled by a newspad switch. Its row is no longer in the list.
+        if self.model().row_for(entry.row.id) is not entry.row:
+            return
         self.commit_editor()
         rect: QRect = self.delegate.label_rect(self.visualRect(index), entry,
                                                field)

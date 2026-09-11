@@ -122,10 +122,13 @@ class ExportDialog(QDialog):
     def __init__(self, clips: list, parent=None, prefer: str = "pdf",
                  report_date=None, cover_image=None, heading: str = "",
                  cover_baked: bool = False, layout_style: dict | None = None,
-                 cover_blocks: list | None = None):
+                 cover_blocks: list | None = None, name_suffix: str = ""):
         super().__init__(parent)
         self.clips = clips
         self.heading = heading
+        # " - Newspad 2" for newspads 2 to 4, nothing for Newspad 1: two
+        # newspads exported on one day must not suggest the same file name.
+        self.name_suffix = name_suffix or ""
         # The generated cover, handed over as a layout as well as a picture. The
         # PDF takes the picture - nobody edits a PDF - and Word takes the layout,
         # so its cover arrives as text that can be corrected afterwards.
@@ -211,8 +214,7 @@ class ExportDialog(QDialog):
         # every file was called before this box existed; typing over it renames
         # BOTH files, so the PDF and the Word document go on being a pair.
         name_row = QHBoxLayout()
-        self.file_name = QLineEdit(
-            f"{REPORT_NAME} {self.date.date().toPython().strftime('%d.%m.%Y')}")
+        self.file_name = QLineEdit(self._usual_name())
         self.file_name.setToolTip(
             "The name both files are saved under. The extension is added for "
             "you, so there is no need to type .pdf or .docx.")
@@ -298,10 +300,43 @@ class ExportDialog(QDialog):
         layout.addLayout(buttons)
 
     # ------------------------------------------------------------- choosing
-    def _standard_name(self) -> None:
+    def _usual_name(self) -> str:
         stamp = self.date.date().toPython()
-        self.file_name.setText(f"{REPORT_NAME} {stamp.strftime('%d.%m.%Y')}")
+        return f"{REPORT_NAME} {stamp.strftime('%d.%m.%Y')}{self.name_suffix}"
+
+    def _standard_name(self) -> None:
+        self.file_name.setText(self._usual_name())
         self._name_is_ours = True
+
+    def _may_replace(self, folder: Path, base: str) -> bool:
+        """Ask once before a build would write over files already there.
+
+        Re-exporting the same morning under the same name is ordinary, so it is
+        one click, not a refusal - but it is never silent.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        wanted = [("pdf", self.want_pdf), ("docx", self.want_docx)]
+        there = [f"{base}.{ext}" for ext, box in wanted
+                 if box.isChecked() and (folder / f"{base}.{ext}").exists()]
+        if not there:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("Replace the existing file?")
+        box.setIcon(QMessageBox.Question)
+        if len(there) == 1:
+            box.setText(f"A file called {there[0]} already exists in {folder}.")
+        else:
+            box.setText(f"Files called {there[0]} and {there[1]} already exist "
+                        f"in {folder}.")
+        box.setInformativeText("Replace it with the newspad being built now?"
+                               if len(there) == 1 else
+                               "Replace them with the newspad being built now?")
+        replace = box.addButton("Replace", QMessageBox.AcceptRole)
+        cancel = box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is replace
 
     def _name_typed(self, _text: str) -> None:
         self._name_is_ours = False
@@ -365,6 +400,16 @@ class ExportDialog(QDialog):
             self.status.setText("That cover image is not there any more.")
             return
 
+        base = clean_name(self.file_name.text())
+        if not base:
+            base = f"{REPORT_NAME} {stamp.strftime('%d.%m.%Y')}{self.name_suffix}"
+        # Before anything is written - the settings included - so Cancel leaves
+        # everything exactly as it was.
+        if not self._may_replace(folder, base):
+            self.status.setText("Nothing was built. Change the name, or build "
+                                "again and choose Replace.")
+            return
+
         page = self.page_size.currentData()
         fit = self.fit_page.isChecked()
         # The panel and this dialog both offer a paper size. They are kept in
@@ -398,9 +443,6 @@ class ExportDialog(QDialog):
             self.progress.setValue(number)
             QApplication.processEvents()
 
-        base = clean_name(self.file_name.text())
-        if not base:
-            base = f"{REPORT_NAME} {stamp.strftime('%d.%m.%Y')}"
         try:
             if self.want_pdf.isChecked():
                 self.status.setText("Building the PDF…")

@@ -16,6 +16,44 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.20
+
+New
+
+  * **Four newspads.** The Newspad button at the top of the window holds four
+    separate newspads, so up to four reports can be worked on side by side.
+    Pick one and the window shows it exactly as you left it.
+  * **What each newspad keeps for itself:** its clippings on both screens, the
+    press report date, and the dossier cover's date, count, division and
+    prepared-by lines, its report options, and which screen it was on.
+  * **What all four share:** the cover designs, headline style and paper,
+    section headings, the newspaper list, words kept out, the export folder,
+    Check automatically, zoom, and everything the duplicate check has learned.
+    Change one of those in any newspad and it changes in all four. "What the
+    four newspads share…" at the bottom of the button's menu says the same.
+  * Switching newspads clears undo, filters and selection, the same as closing
+    the program does. A duplicate check that was running picks up where it
+    stopped when you come back, and does not start again from the beginning.
+  * Newspad 1 is the newspad you already have. Nothing is moved: it opens with
+    your clippings exactly as before.
+  * **Files exported from Newspads 2 to 4 say which newspad they came from**, so
+    two newspads exported on the same day never write over each other. Newspad
+    1's files keep exactly the names they have always had.
+  * **The export asks before replacing a file** that is already there.
+  * **Only one copy of the program opens at a time.** Opening it a second time
+    says it is already open. Two copies open at once could each tidy away the
+    other's pictures.
+  * "Where your things are kept" lists the four newspads' folders.
+
+Fixed
+
+  * A change to the words kept out, the section headings or the newspaper list
+    that could not be saved - a full disk, a locked folder - now says so. It
+    used to fail without a word.
+  * A newspad whose saved work cannot be read opens with a note and saves
+    nothing over it until you choose to set the old work aside. The old files
+    are kept, renamed, never deleted.
+
 ## 2.0.19
 
 Fixed

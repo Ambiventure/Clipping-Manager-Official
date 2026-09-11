@@ -37,6 +37,16 @@ from PySide6.QtWidgets import (
 from ..core import sections as section_list
 from . import theme
 
+def _not_saved(parent, error) -> None:
+    """A write to the settings folder failed. Said, never swallowed: a list
+    somebody believes they changed, and did not, is worse than a message."""
+    QMessageBox.warning(
+        parent, "Could not save",
+        f"That change could not be saved ({error.strerror or error}).\n\n"
+        "Nothing was changed. Try again in a moment - if it keeps happening, "
+        "the settings folder may be full or locked by another program.")
+
+
 
 class HeadingsDialog(QDialog):
     """The list of headings, with a way in and a way out."""
@@ -160,6 +170,9 @@ class HeadingsDialog(QDialog):
         except ValueError as error:
             QMessageBox.information(self, "That is not a heading", str(error))
             return
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self.entry.clear()
         self.changed = True
         self._fill()
@@ -177,7 +190,11 @@ class HeadingsDialog(QDialog):
             QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
         if asked != QMessageBox.Yes:
             return
-        section_list.remove(item.data(Qt.UserRole))
+        try:
+            section_list.remove(item.data(Qt.UserRole))
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self.changed = True
         self._fill()
 
@@ -191,6 +208,10 @@ class HeadingsDialog(QDialog):
             QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
         if asked != QMessageBox.Yes:
             return
-        section_list.forget()
+        try:
+            section_list.forget()
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self.changed = True
         self._fill()

@@ -39,6 +39,16 @@ from . import theme
 from .fluid import ElidedLabel
 from .scroll import WHEEL_PIXELS, smooth
 
+def _not_saved(parent, error) -> None:
+    """A write to the settings folder failed. Said, never swallowed: a list
+    somebody believes they changed, and did not, is worse than a message."""
+    QMessageBox.warning(
+        parent, "Could not save",
+        f"That change could not be saved ({error.strerror or error}).\n\n"
+        "Nothing was changed. Try again in a moment - if it keeps happening, "
+        "the settings folder may be full or locked by another program.")
+
+
 ZOOM_STEPS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
 
 DARK_BUTTON = """
@@ -431,7 +441,11 @@ class PreviewDialog(QDialog):
                 self.show_row(self.row)
 
     def _set_heading_style(self, size=None, colour=None) -> None:
-        section_list.set_style(size=size, colour=colour)
+        try:
+            section_list.set_style(size=size, colour=colour)
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self._show_heading_style()
         self.headingStyleChanged.emit()
 

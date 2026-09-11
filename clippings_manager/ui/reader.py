@@ -145,6 +145,12 @@ class Reader(QObject):
         self._measure = measure
         self._work: list = []
         self._stop = False
+        # What the pass had read by the time it ended, stopped or not. A stopped
+        # pass sends an empty list, because a partial answer must never be
+        # mistaken for the whole one - but a newspad switch stops a pass and
+        # still wants to keep the readings already taken, rather than read the
+        # same pictures again when the newspad is opened next.
+        self.kept: list = []
         self._done = 0
         # A pass that only fingerprints. Taking a print is a few thousandths of
         # a second and reading a headline is about half of one, so measuring
@@ -243,11 +249,23 @@ class Reader(QObject):
             # Progress is told to Qt from HERE, on the thread Qt made. A signal
             # emitted from a thread Qt does not know about is another way to
             # lose the process without a word.
-            while any(t.is_alive() for t in threads):
-                self.progressed.emit(self._done, total)
-                for t in threads:
-                    t.join(0.15)
+            #
+            # Paced by waiting on a lane that is still RUNNING. This used to wait
+            # on the first lane, finished or not - and once that lane had
+            # finished, the wait returned at once and the loop spun, sending a
+            # progress message as fast as it could until the slowest lane was
+            # done. Measured after a newspad switch: 120,000 of them queued up
+            # for the window, and 1.5 seconds of frozen window draining them.
+            # And only when there is something new to say.
+            said = -1
+            while True:
+                running = [t for t in threads if t.is_alive()]
+                if not running:
                     break
+                if self._done != said:
+                    said = self._done
+                    self.progressed.emit(said, total)
+                running[0].join(0.15)
             for t in threads:
                 t.join()
             for part in results:
@@ -255,6 +273,7 @@ class Reader(QObject):
         except Exception:  # noqa: BLE001 - never let this kill the window
             pass
         self.progressed.emit(total, total)
+        self.kept = list(out)
         self.finished.emit([] if self._stop else out)
         self._end()
 

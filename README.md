@@ -25,6 +25,11 @@ sheet with its caption and its link, as a PDF and as a Word file that say the
 same thing. There is a second interface that files clippings into Positive,
 Neutral, Negative and Digital columns and builds a sentiment dossier instead.
 
+**Keeps four newspads apart.** The Newspad button at the top holds four separate
+reports, each with its own clippings, dates and dossier lines, so several can be
+worked on in the same sitting. The designs, the newspaper list and everything
+the duplicate check has learned are shared by all four.
+
 ## Two things worth knowing
 
 **It works offline.** The whole morning's work is done on the machine, with the

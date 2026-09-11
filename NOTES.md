@@ -827,6 +827,75 @@ before the kill comes back. And on the packaged build itself, since a frozen bui
 resolves `%APPDATA%` differently: a session is planted, the real .exe is started
 against it, closed cleanly, and the manifest it writes back is read from outside.
 
+## Four newspads
+
+Asked for as four "instances": four separate empty copies of the program, to
+work on four newspads at once, sharing what should be shared.
+
+**One window, one newspad loaded at a time.** Three designs were measured: four
+windows in one process, four pages resident in one window, and this. The first
+two each had a way to lose work that this one cannot have - two copies of a
+settings panel each saving the whole file (a heading size of 48 went back to
+18), one window's shutdown stopping another's duplicate check (0 of 40 results
+delivered), and two sessions tidying away each other's pictures. So there is one
+copy of every panel, cache, shortcut and background worker, and a switch swaps
+what they are looking at.
+
+**Each newspad is a whole session folder.** Newspad 1 is the `session` folder
+there has always been, untouched, so the first launch after the upgrade is the
+morning as it was. Newspads 2-4 are `session-2..4`, made the first time each is
+opened and never by looking - the menu reads their manifests by path. Which one
+is open is `instances.json`, written atomically. Instance metadata never goes
+into session.json: an older build rebuilds that file from scratch and would drop
+it. The five dossier "morning" values moved from the shared sentiment_cover.json
+into each newspad's session, under one additive key; VERSION stays 1, because
+bumping it made an older build's close wipe the session.
+
+**The switch, in order, and nothing in between.** Commit editors, settle the
+duplicate check, save the outgoing newspad *strictly* (a failed save refuses the
+switch), write the pointer, clear, point the store at the other folder, restore
+through the same code a launch uses. No events run between the clear and the
+restore except the earlier-day question, and while that is up every save and
+check is held off - so no timer can ever pair one newspad's lists with another
+newspad's folder. If anything fails after the save, the outgoing newspad is put
+back from that save; if even that fails, nothing more is saved until the program
+is opened again. An emptied window must never be saved: the tidy-up after a save
+deletes every picture the manifest no longer names.
+
+**A check under way is settled, not abandoned.** The pass is stopped and waited
+for, and what it had read is copied back before the newspad leaves, so coming
+back reads only the rest (8 of 24 kept, 16 read on return, the same pairs as an
+uninterrupted run). Every reader callback is stamped with a pass generation, and
+every deferred call that carries a bare clipping id with a newspad generation:
+ids are per newspad, and a late answer or a delayed "open the headline box"
+would otherwise land on whichever clipping has that id in the next newspad.
+
+**The switch found an old reader fault.** A mid-check switch was followed by a
+1.5-second freeze. No Python was running in it, so stack samples showed nothing;
+timing every Qt event found 120,000 queued progress messages. The reader's
+progress loop waited on its first lane, and once that lane finished it spun,
+sending progress as fast as it could until the slowest lane was done. Normally
+the window drained them as they came; a switch holds the window for a second,
+and they piled up. Paced on a running lane, and only when the count changes:
+the worst pause after a switch went from 1,500 ms to 57.
+
+**One copy at a time.** Two copies open on one folder delete each other's
+pictures. main.py takes a lock file in the settings folder: a second copy says
+the program is already open and leaves, a killed copy's lock is recognised as
+stale by its process id (taken over in 12 ms, measured), and a zoom restart
+waits up to 30 s for the copy it replaces to finish closing. A lock that cannot
+be made at all never stops the program opening.
+
+**How it was proved.** In-process: every value round-trips, a check interrupted
+at every stage resumes correctly, a failed save or a failed open leaves the
+newspad whole, a stale deferred call does nothing, and memory's high-water mark
+does not rise over eight switches. Out of process: the program killed with
+`os._exit` at eight points of a switch, and each time both manifests read, no
+picture is missing, the headline typed just before the switch is on disk, and a
+relaunch opens the newspad the pointer names. And the 2.0.19 build run against a
+machine with three newspads opens Newspad 1 whole and leaves the rest
+byte-for-byte alone.
+
 ## Making the window narrow
 
 Narrow the window and controls on the right were cut off and could not be

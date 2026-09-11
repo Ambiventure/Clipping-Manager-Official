@@ -283,6 +283,13 @@ class SmoothWheel(QObject):
         self._target = None
         self._expected = None
 
+    def halt(self) -> None:
+        """Stop a glide where it is. A newspad switch replaces the page under it,
+        and a glide still aiming at a position on the old page would carry on
+        writing that position into the new one."""
+        self._anim.stop()
+        self._settled()
+
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt name
         if event.type() != QEvent.Wheel:
             return False

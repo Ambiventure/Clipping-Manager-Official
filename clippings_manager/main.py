@@ -5,6 +5,7 @@ Fully offline. Nothing here opens a socket.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -12,12 +13,49 @@ from pathlib import Path
 if __package__ in (None, ""):  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QTimer  # noqa: E402
+from PySide6.QtCore import QLockFile, QTimer  # noqa: E402
 from PySide6.QtGui import QFont, QIcon  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
+from clippings_manager.core import newspads  # noqa: E402
 from clippings_manager.ui import scroll, theme  # noqa: E402
 from clippings_manager.ui.main_window import MainWindow  # noqa: E402
+
+#: Said to whoever opens a second copy. The four newspads are the way to work on
+#: more than one morning at once; a second copy would share their folders.
+ALREADY_OPEN = ("Clippings Manager is already open — use the Newspad button at "
+                "the top to work on another newspad.")
+
+
+def _one_copy_only(app):
+    """Take the lock that lets one copy run. Returns (lock, carry_on).
+
+    Two copies open at once would each save their own list into the same
+    newspad folder and tidy away each other's pictures - measured, the first
+    copy's pictures went from 3 to 0. So a second copy says so and leaves.
+
+    A restart is the one second copy that must be let in: the copy it replaces
+    still holds the lock while it finishes closing, so the new one waits for it
+    rather than giving up. And a lock that cannot be made at all - a permission
+    problem, a full disk - never stops the program opening on a working morning.
+    """
+    restarted = os.environ.pop("CM_RESTARTED", None) is not None
+    try:
+        where = newspads.root()
+        where.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None, True
+    lock = QLockFile(str(where / "running.lock"))
+    # Never time a lock out while its owner lives. A lock whose owner has died
+    # is recognised as stale by its process id, straight away.
+    lock.setStaleLockTime(0)
+    if lock.tryLock(30000 if restarted else 500):
+        return lock, True
+    if lock.error() == QLockFile.LockFailedError:
+        if app.platformName() != "offscreen":
+            QMessageBox.information(None, "Clippings Manager", ALREADY_OPEN)
+        return None, False
+    return None, True
 
 
 def _own_the_taskbar_button() -> None:
@@ -65,6 +103,10 @@ def main() -> int:
     app.setApplicationName("Clippings Manager")
     app.setOrganizationName("Northern Railway PR")
 
+    lock, carry_on = _one_copy_only(app)
+    if not carry_on:
+        return 0
+
     # The .ico first: it carries all seven sizes Windows picks from, where the
     # .png carries one 320px image that has to be scaled down for a 16px taskbar
     # and looks it. The .png stays as the fallback for anywhere that cannot read
@@ -93,7 +135,12 @@ def main() -> int:
     # application, and a restore done inside the constructor would leave the
     # screen blank for seconds while it worked.
     QTimer.singleShot(0, window.restore_session)
-    return app.exec()
+    code = app.exec()
+    # Here, not left to the interpreter's shutdown: a lock released that late
+    # was measured still on disk afterwards.
+    if lock is not None:
+        lock.unlock()
+    return code
 
 
 if __name__ == "__main__":

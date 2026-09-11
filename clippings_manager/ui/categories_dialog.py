@@ -27,6 +27,16 @@ from . import theme
 from .fluid import ElidedLabel, FlowLayout, ShrinkingCombo
 from .scroll import CardScroll
 
+def _not_saved(parent, error) -> None:
+    """A write to the settings folder failed. Said, never swallowed: a list
+    somebody believes they changed, and did not, is worse than a message."""
+    QMessageBox.warning(
+        parent, "Could not save",
+        f"That change could not be saved ({error.strerror or error}).\n\n"
+        "Nothing was changed. Try again in a moment - if it keeps happening, "
+        "the settings folder may be full or locked by another program.")
+
+
 
 class PaperRow(QWidget):
     """One publication, and a drop-down for each axis."""
@@ -91,7 +101,11 @@ class PaperRow(QWidget):
     def _chose(self, axis: str, pick) -> None:
         if self._quiet:
             return
-        categories.set_value(self.name, axis, pick.currentData())
+        try:
+            categories.set_value(self.name, axis, pick.currentData())
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self._screen.touched()
 
 
@@ -285,8 +299,13 @@ class CategoriesDialog(QDialog):
         name = self.new_name.text().strip()
         if not name:
             return
-        categories.add_paper(
-            name, {key: pick.currentData() for key, pick in self.new_picks.items()})
+        try:
+            categories.add_paper(
+                name, {key: pick.currentData()
+                       for key, pick in self.new_picks.items()})
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self.new_name.clear()
         self._changed = True
         self._fill()
@@ -303,7 +322,11 @@ class CategoriesDialog(QDialog):
         asked.setDefaultButton(QMessageBox.Cancel)
         if asked.exec() != QMessageBox.Yes:
             return
-        categories.remove_paper(name)
+        try:
+            categories.remove_paper(name)
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self._changed = True
         self._fill()
 
@@ -345,6 +368,10 @@ class CategoriesDialog(QDialog):
         asked.setDefaultButton(QMessageBox.Cancel)
         if asked.exec() != QMessageBox.Yes:
             return
-        categories.forget()
+        try:
+            categories.forget()
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self._changed = True
         self._fill()

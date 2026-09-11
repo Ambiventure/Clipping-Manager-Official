@@ -62,6 +62,16 @@ from PySide6.QtWidgets import (
 from ..core import wordlist
 from . import theme
 
+def _not_saved(parent, error) -> None:
+    """A write to the settings folder failed. Said, never swallowed: a list
+    somebody believes they changed, and did not, is worse than a message."""
+    QMessageBox.warning(
+        parent, "Could not save",
+        f"That change could not be saved ({error.strerror or error}).\n\n"
+        "Nothing was changed. Try again in a moment - if it keeps happening, "
+        "the settings folder may be full or locked by another program.")
+
+
 STRIP = """
 QWidget#WordStrip {
     background: %(back)s;
@@ -266,6 +276,9 @@ class WordListDialog(QDialog):
         except ValueError as error:
             QMessageBox.information(self, "Nothing to add", str(error))
             return
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self.entry.clear()
         self._fill()
         self._forget_cached()
@@ -274,7 +287,11 @@ class WordListDialog(QDialog):
         item = self.list.currentItem()
         if item is None:
             return
-        wordlist.remove(item.text())
+        try:
+            wordlist.remove(item.text())
+        except OSError as error:
+            _not_saved(self, error)
+            return
         self._fill()
         self._forget_cached()
 

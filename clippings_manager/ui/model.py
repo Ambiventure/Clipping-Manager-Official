@@ -640,6 +640,19 @@ class ClipModel(QAbstractListModel):
                 last = i
         return last + 1
 
+    def reset_view(self) -> None:
+        """Forget how the list was being looked at: lens, selection, folds.
+
+        None of it is saved and none of it belongs to the next newspad. Kept
+        separate from replace_all, which keeps whatever selection still makes
+        sense - a switch wants none of it to.
+        """
+        self.lens = arrange.Lens()
+        self.selected = set()
+        self.collapsed_groups = set()
+        self.collapsed_row_ids = set()
+        self._lens_collapsed = set()
+
     def replace_all(self, rows: list[Row]) -> None:
         self.rows = list(rows)
         self.by_id_map = {r.id: r for r in self.rows}
