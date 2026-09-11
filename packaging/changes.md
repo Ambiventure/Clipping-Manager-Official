@@ -16,6 +16,17 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.21
+
+Fixed
+
+  * **Opening yesterday's work no longer loses its pictures.** In 2.0.20, when
+    the program asked "You have N clippings left from ...", a save could run
+    behind that question while the window was still empty. If you took more
+    than a second or so to answer, the pictures were deleted, and "Open them
+    again" brought back nothing. Nothing is saved now until the question is
+    answered. 2.0.19 and earlier were not affected.
+
 ## 2.0.20
 
 New

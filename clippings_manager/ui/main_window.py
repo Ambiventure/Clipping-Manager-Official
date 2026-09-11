@@ -430,6 +430,29 @@ class MainWindow(QMainWindow):
         return value
 
     # --------------------------------------------------------- restoring it
+    def _asked(self, payload: dict) -> bool:
+        """_wanted, with every save held off while its question is on screen.
+
+        The question box runs an event loop of its own, and at launch it comes
+        up with the window still EMPTY - nothing has been put back yet - while
+        the session timer is already running: building the window arms it
+        (the board's first recount sets the dossier's division line, which
+        counts as a change). In 2.0.20 that timer fired behind the box, saved
+        the empty window over the morning being asked about, and the tidy-up
+        after the save deleted every one of its pictures. Measured: answer
+        "Open them again" after three seconds and 0 of 6 clippings came back.
+
+        So the timer is stopped, and nothing may arm a save or save - not the
+        timer, not a close, not a logoff - until the question is answered.
+        """
+        self._save_timer.stop()
+        was = self._restoring
+        self._restoring = True
+        try:
+            return self._wanted(payload)
+        finally:
+            self._restoring = was
+
     def _wanted(self, payload: dict) -> bool:
         """Whether to put the saved work back, or start the day clean.
 
@@ -490,7 +513,7 @@ class MainWindow(QMainWindow):
         # Worked out before anything is restored, because the answer is about the
         # manifest on disk rather than about what ends up in the list.
         stale = self.store.saved_by_another_build()
-        if ask and not self._wanted(payload):
+        if ask and not self._asked(payload):
             self.store.clear()
             self._apply_newspad_values(None, arriving)
             return 0
