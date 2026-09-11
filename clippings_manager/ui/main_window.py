@@ -285,9 +285,17 @@ class MainWindow(QMainWindow):
             pass
 
     def _peek_clip_id(self) -> int:
-        """The next id the shared counter would hand out, without spending one."""
+        """The next id the shared counter would hand out, without spending one.
+
+        Peeking replaces the counter, so both pools have to be handed the new
+        one, exactly as restore_session already does. Left on the old one, they
+        went on minting from where it stood while the saved next_clip_id stayed
+        frozen - measured, an id handed out twice.
+        """
         value = next(self._clip_ids)
         self._clip_ids = itertools.count(value)
+        self.model._ids = self._clip_ids
+        self.board_model._ids = self._clip_ids
         return value
 
     def _peek_group_serial(self) -> int:
@@ -369,6 +377,13 @@ class MainWindow(QMainWindow):
                         source_kind=saved.get("source_kind", "image"),
                         source_name=saved.get("source_name", ""),
                         group_key=saved.get("group_key", ""),
+                        # The picture's stored name comes back with it. Without
+                        # this, no restored row carried one - measured, 0 of 163
+                        # - so the first save after every restore hashed every
+                        # picture again: 788ms on the office machine. Once a
+                        # window can switch newspads, every switch is a restore.
+                        blob_name=blob,
+                        blob_of=data if blob else None,
                     )
                     row.thumb_png = self.store.get_thumb(blob) if blob else None
                     if row.thumb_png is None:

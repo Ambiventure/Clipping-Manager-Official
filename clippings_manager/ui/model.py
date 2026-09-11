@@ -207,11 +207,14 @@ class ClipModel(QAbstractListModel):
         self._entries: list[Entry] = []
         self._ids = ids if ids is not None else itertools.count(1)
         self._undo_stack = None
+        self.duplicate_files = {}
 
     # ------------------------------------------------------------ plumbing
     # {group_key: the file it repeats}. Filled by the duplicate check; read
-    # by the delegate, which paints those file headers dark red.
-    duplicate_files: dict = {}
+    # by the delegate, which paints those file headers dark red. Set per model
+    # in __init__ - declared here it was ONE dict shared by both pools, and
+    # would have been shared by every newspad as well.
+    duplicate_files: dict
 
     @property
     def book(self):

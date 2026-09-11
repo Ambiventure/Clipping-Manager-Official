@@ -372,8 +372,13 @@ class ExportDialog(QDialog):
         # person touched last is the one that prints.
         style = export_layout.HeadingStyle.from_settings(
             {**self.layout_style, "page": page})
+        # Merged into what is there, not written over it. The old form wrote
+        # only these seven keys, so every export silently deleted
+        # "auto_duplicates" - "Check automatically" - which lives in the same
+        # file. Measured: it did not survive a single export.
         save_settings(
             {
+                **load_settings(),
                 "pdf": self.want_pdf.isChecked(),
                 "docx": self.want_docx.isChecked(),
                 "folder": str(folder),

@@ -190,6 +190,19 @@ class SessionStore:
             return None
         return payload
 
+    def unreadable(self) -> bool:
+        """A manifest is there, and it cannot be read.
+
+        Different from "nothing saved", and the difference is the whole point.
+        An empty newspad saves an empty list and tidies away every picture it
+        no longer refers to - which, over a manifest that merely failed to
+        parse, would delete every picture of a morning that was still there to
+        be rescued. So a newspad whose manifest cannot be read must not save at
+        all until somebody has set the old one aside.
+        """
+        path = self.folder / MANIFEST
+        return path.exists() and self.load() is None
+
     def saved_by_another_build(self) -> bool:
         """Whether the stored session was read by a different build than this.
 
@@ -234,16 +247,26 @@ class SessionStore:
         """
         wanted = set(keep)
         removed = 0
+        # Each file on its own. A picture held open by the virus scanner, or by
+        # anything else reading it, makes unlink raise WinError 32 - measured -
+        # and one locked file used to abort the whole tidy-up. It is left for
+        # next time instead; the manifest is already safely on disk.
         for path in list(self.blobs.glob("*")):
-            if path.name.endswith(".part"):
-                path.unlink(missing_ok=True)
+            try:
+                if path.name.endswith(".part"):
+                    path.unlink(missing_ok=True)
+                    continue
+                if path.name not in wanted:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+            except OSError:
                 continue
-            if path.name not in wanted:
-                path.unlink(missing_ok=True)
-                removed += 1
         for path in list(self.thumbs.glob("*.png")):
-            if path.stem not in wanted:
-                path.unlink(missing_ok=True)
+            try:
+                if path.stem not in wanted:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
         return removed
 
     def size_on_disk(self) -> int:
