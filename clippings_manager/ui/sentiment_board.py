@@ -734,6 +734,17 @@ class SentimentColumn(QListView):
         editor.deleteLater()
         self.viewport().update()
 
+    def settle_editor(self, clip_id: int) -> None:
+        """As ClipList.settle_editor: typed in, committed; untouched, cancelled,
+        so an empty box cannot blank a caption or a link about to be put on
+        this card."""
+        if self._editor is None or self._editing_id != clip_id:
+            return
+        if self._editor.isModified():
+            self.commit_editor()
+        else:
+            self.cancel_editor()
+
     def eventFilter(self, obj, event):
         if obj is getattr(self, "_editor", None) and event.type() == QEvent.KeyPress:
             if event.key() == Qt.Key_Escape:
@@ -1790,6 +1801,14 @@ class SentimentBoard(QWidget):
         for view in self.columns.values():
             try:
                 view.commit_editor()
+            except Exception:  # noqa: BLE001 - a column mid-teardown
+                continue
+
+    def settle_editors(self, clip_id: int) -> None:
+        """Put away an open box on one card, whichever column it is in."""
+        for view in self.columns.values():
+            try:
+                view.settle_editor(clip_id)
             except Exception:  # noqa: BLE001 - a column mid-teardown
                 continue
 

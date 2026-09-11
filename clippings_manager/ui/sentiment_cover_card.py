@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 from ..core import sentiment_cover
 from . import icons, theme
 from .cover_card import icon_pixmap, settings_dir
+from .design_file import DesignFile
 
 PREVIEW_SCALE = 0.665            # A4 at this scale is 396 x 560, which fits the panel
 SHEET_MIN_WIDTH = 300
@@ -98,7 +99,9 @@ def _file() -> Path:
 
 #: The five values that belong to ONE MORNING rather than to the install. They
 #: live in each newspad's own session now; sentiment_cover.json keeps only the
-#: dossier's design. See legacy_morning for the one-time hand-over.
+#: dossier's design, and each newspad keeps its own copy of that design (see
+#: DesignFile.adopt). See legacy_morning for the one-time hand-over, which
+#: reads the ROOT file - Newspad 1's - and never another newspad's.
 MORNING = ("iso_date", "date_text", "clip_count_text", "division_text",
            "prepared_by_text")
 _MORNING_TEXT = MORNING[1:]
@@ -329,10 +332,13 @@ class SheetPreview(QWidget):
         self.update()
 
 
-class SentimentCoverCard(QFrame):
-    """Designs the dossier's cover sheet, and keeps the settings on this machine."""
+class SentimentCoverCard(QFrame, DesignFile):
+    """Designs the dossier's cover sheet, and keeps each newspad's design on this
+    machine. A bare SentimentCoverCard() is Newspad 1's, reading the root file."""
 
     changed = Signal()
+    designProblem = Signal(str)
+    design_name = "sentiment_cover.json"
     # Raised when the customiser is opened or shut, so whatever is holding this
     # card can make room for it. Carries True when it has just been opened.
     foldChanged = Signal(bool)
@@ -357,6 +363,7 @@ class SentimentCoverCard(QFrame):
         self._count = 0
         self._breakdown: dict = {}
         self._loading = False
+        self._init_design()
 
         # 6ms a render is cheap, but a drag would fire it a hundred times.
         self._debounce = QTimer(self)
@@ -1349,7 +1356,11 @@ class SentimentCoverCard(QFrame):
     def _touch(self) -> None:
         if self._loading:
             return
-        self._save_timer.start()
+        # Saved only when the DESIGN moved. The date, count, division and
+        # prepared-by lines come through here too; they are this newspad's own
+        # and live in its session, and rewriting the design for them would let
+        # a design file that cannot be written trap somebody in a newspad.
+        self._changed_design()
         self._debounce.start()
         self.changed.emit()
 
@@ -1370,9 +1381,12 @@ class SentimentCoverCard(QFrame):
         # recount, and emitting `changed` here loops back through the window's
         # refresh and straight into this method again.
         if current != wanted and (not current or current == generated):
+            was = self._loading
             self._loading = True
-            self._sync_division_quietly()
-            self._loading = False
+            try:
+                self._sync_division_quietly()
+            finally:
+                self._loading = was
             # The division line belongs to the newspad now, not to the design
             # file, so it is the newspad's session that has to hear about it.
             self.morningChanged.emit()
@@ -1571,52 +1585,71 @@ class SentimentCoverCard(QFrame):
         self._refresh_state()
         self._debounce.start()
 
-    def save(self) -> None:
-        try:
-            _file().write_text(
-                json.dumps(self._state(), indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception:  # noqa: BLE001 - settings are a convenience
-            pass
+    # save(), flush(), load(), adopt() and hold() are DesignFile's.
+    def _root_file(self) -> Path:
+        return _file()
 
-    def flush(self) -> None:
-        if self._save_timer.isActive():
-            self._save_timer.stop()
-            self.save()
+    def _design_state(self) -> dict:
+        return self._state()
 
-    def load(self) -> None:
-        try:
-            data = json.loads(_file().read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - nothing saved yet
-            data = {}
+    def _repaint_now(self) -> None:
+        self._debounce.stop()
+        self._repaint()
 
-        self._loading = True
+    def _take_design(self, data: dict) -> None:
+        """Put a sentiment_cover.json on the card: the design only.
+
+        The five morning values are never read from this file. They belong to a
+        newspad and come from its session, so restoring a setup file, or
+        reading the design again, or switching newspads, can never overwrite
+        the morning somebody is working on - the card carries its own across.
+        Each value is checked against the type it should be, and all of it is
+        put on the card at once.
+        """
+        # A "Click to place" armed in one newspad must not place a pill in the
+        # next one's design.
+        self.sheet.arm(None)
         fresh = sentiment_cover.SentimentCoverConfig()
         for field in sentiment_cover.SentimentCoverConfig.__dataclass_fields__:
-            # The five morning values are never read from this file. They
-            # belong to a newspad and come from its session, so restoring a
-            # setup file, or reading the design again, can never overwrite the
-            # morning somebody is working on.
-            if field in MORNING:
+            if field in MORNING or data.get(field) is None:
                 continue
-            if field in data and data[field] is not None:
-                value = data[field]
-                if field in ("date_pos", "clip_count_pos") and value:
-                    value = (int(value[0]), int(value[1]))
-                setattr(fresh, field, value)
+            value = data[field]
+            default = getattr(fresh, field)
+            if field in ("date_pos", "clip_count_pos"):
+                try:
+                    value = (int(value[0]), int(value[1])) if value else None
+                except (TypeError, ValueError, IndexError, KeyError):
+                    continue
+            elif isinstance(default, bool):
+                if not isinstance(value, bool):
+                    continue
+            elif isinstance(default, float):
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
+                value = float(value)
+            elif isinstance(default, int):
+                if not isinstance(value, int) or isinstance(value, bool):
+                    continue
+            elif isinstance(default, str) and not isinstance(value, str):
+                continue
+            setattr(fresh, field, value)
         # Carry the morning that is on the card across the reload.
         for field in _MORNING_TEXT:
             setattr(fresh, field, getattr(self.config, field))
-        self.config = fresh
-        if self.iso_date > date.today():
-            self.iso_date = date.today()
-        if not self.config.date_text.strip():
-            self.config.date_text = f"Date: {self.iso_date.strftime('%d.%m.%Y')}"
 
-        self._write_widgets()
-        self._apply_pill_sizes()
-        self._loading = False
+        was = self._loading
+        self._loading = True
+        try:
+            self.config = fresh
+            if self.iso_date > date.today():
+                self.iso_date = date.today()
+            if not self.config.date_text.strip():
+                self.config.date_text = (
+                    f"Date: {self.iso_date.strftime('%d.%m.%Y')}")
+            self._write_widgets()
+            self._apply_pill_sizes()
+        finally:
+            self._loading = was
         self._refresh_state()
         self._debounce.start()
 

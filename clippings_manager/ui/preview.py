@@ -528,7 +528,9 @@ class PreviewDialog(QDialog):
         if clip.probable_junk:
             notes.append(f"Flagged: {clip.junk_reason}")
         if clip.caption_raw:
-            notes.append(f"Caption in the document: {clip.caption_raw}")
+            where = ("Caption copied" if clip.name_source == "copied"
+                     else "Caption in the document")
+            notes.append(f"{where}: {clip.caption_raw}")
         if clip.ocr_text:
             notes.append(f"Read from the image: {clip.ocr_text}")
         if notes:

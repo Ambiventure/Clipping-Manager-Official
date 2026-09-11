@@ -16,6 +16,76 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.22
+
+New
+
+  * **Each newspad has its own cover pages.** The press report cover, the
+    dossier cover, and the headline style and paper now belong to one newspad,
+    so two reports with different titles can be worked on side by side.
+  * A newspad that has no cover pages of its own yet starts with a copy of the
+    ones in the newspad you came from. From then on each keeps its own.
+  * **Still shared by all four:** the section headings' size and colour, the
+    newspaper list, words kept out, the export folder and formats, Check
+    automatically, zoom, and what the duplicate check has learned.
+  * **Collect from WhatsApp.** Switch it on with the button at the top, then
+    stay in WhatsApp Web: right-click a photo and choose Copy image, and it
+    becomes a clipping here. Select its caption and press Ctrl+C, and its
+    newspaper, city and page are filled in. There is no need to come back to
+    this window between clippings.
+  * A caption that is not clearly a caption - a greeting, half a line, a second
+    caption for a photo that already has one - is not used. The bar at the top
+    says why, and offers one button to put it where it was meant.
+  * Collect never reads copies marked private: passwords, and anything copied
+    in a Chrome Incognito or Guest window. It switches itself off when you
+    change newspad or close the program.
+  * **Include on the selection bar.** Tick clippings that are already left out
+    and the Exclude button says Include.
+  * **Move to: on the selection bar.** It lists every file in the list, and
+    "Clipboard images", with how many clippings each has. Choose one and the
+    ticked clippings join that file, at its end, and print among its pages.
+    Ctrl+Z puts them back where they were. The same list is on the right-click
+    menu.
+  * A clipping moved this way still says where it really came from. A move
+    that would change where a section heading such as ELECTRONIC MEDIA
+    prints is greyed out in the list, with the reason.
+
+Changed
+
+  * Rotate is no longer on the selection bar. Every clipping still has its own
+    Rotate button.
+  * Ctrl+Z undoes on the screen you are looking at: the sentiment board's own
+    changes on the board, the press report's in the press report.
+  * Saving your setup to a file now carries each newspad's cover pages.
+  * The export no longer remembers a cover picture from another newspad.
+  * An older copy of the program opening the same folder shows Newspad 1's
+    cover pages in every newspad. Nothing is lost: the newer copy still has
+    each newspad's own.
+
+Fixed
+
+  * Right-clicking several clippings and choosing "Exclude these" put them
+    back into the report instead of leaving them out.
+  * With several clippings ticked, one already left out, Exclude takes the
+    others out and leaves that one exactly as it was.
+  * Undoing "Send to the sentiment board" could bring back a card deleted on
+    the board since, or leave the same clipping on both screens. It now puts
+    back only what was sent. Sending starts the board's own undo history
+    afresh, because the old history no longer matches the board.
+  * With "Filter and arrange" sorting the list, its headings (a newspaper, a
+    language) now show their name and count. They used to be drawn blank.
+  * **A clipping deleted and brought back with Ctrl+Z could lose its picture**
+    the next time the program opened, if the program had saved in between. It
+    now keeps it.
+  * A headline typed in the full-size view of a sentiment card now reaches the
+    card. It was dropped without a word.
+  * Changes made in the full-size view of a sentiment card are undone by Ctrl+Z
+    on the sentiment board, like the board's other changes.
+  * The press report's selection bar no longer appears over the sentiment
+    board, where its buttons changed clippings you could not see.
+  * A caption written in Hindi as हिंदुस्तान टाइम्स is now read as Hindustan
+    Times, in imported files as well. It was read as Hindustan.
+
 ## 2.0.21
 
 Fixed

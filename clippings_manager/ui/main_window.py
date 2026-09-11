@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import itertools
+import json
 import os
 import sys
 from contextlib import contextmanager
@@ -61,8 +62,8 @@ from ..core.models import Clip, Section
 from ..core.profiles import NameIndex
 from .. import version
 from ..core.session import SessionStore, decode_clip, encode_clip
-from . import (commands, datefield, dropped, export_dialog, icons, reader,
-               theme, win_drop, zoom)
+from . import (collect, commands, datefield, dropped, export_dialog, icons,
+               reader, theme, win_drop, zoom)
 from .clip_list import ClipList
 from .cover_card import CoverCard
 from .fluid import ElidedLabel, FlowLayout, ShrinkingCombo
@@ -81,7 +82,7 @@ from .model import (
 from .modeswitch import ModeSwitch, ZoomButtons
 from .preview import PreviewDialog
 from .sentiment_board import SentimentBoard
-from .sentiment_cover_card import legacy_morning
+from .sentiment_cover_card import MORNING, legacy_morning
 from .wordlist_bar import WordListBar
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
@@ -168,6 +169,21 @@ class MainWindow(QMainWindow):
         self._check_pending = ""
         self._resume_check = ""
         self._answer_even_if_nothing_read = False
+        # What a switch has to say when it is over, said once, together - see
+        # _after_switch. The arrival note carries warnings (clippings that
+        # could not be read, work from another build) and must never be
+        # replaced by a later, cheerier message.
+        self._arrival = None
+        self._design_notes: list = []
+        # "Collecting was switched off for the change", said with the rest.
+        self._collect_note = ""
+        # The board column an Add button, a drop onto a column or a paste has
+        # asked for, until the import it started has stamped it. Set here, not
+        # first by a paste: Collect reads it before every photo it adds.
+        self._pending_section = None
+        # A switch refused because a cover or headline setting would not save.
+        # Asked for again, the switch goes ahead without that change.
+        self._design_refused = None
         # The build is in the title because the first question after "it works
         # on my laptop but not on that one" is which build each of them is
         # running, and until this there was nothing anywhere that could answer
@@ -244,7 +260,15 @@ class MainWindow(QMainWindow):
         self._save_timer.setInterval(1500)
         self._save_timer.timeout.connect(self.save_session)
 
+        # Collect from WhatsApp. Made before the window is built, because the
+        # header holds its button and its bar. Off at every launch, and never
+        # remembered: it reads the clipboard only when somebody asks it to.
+        self.collector = collect.Collector(self)
         self._build()
+        # Before _wire and before the window is shown: from here on the four
+        # design panels are this newspad's, so nothing edited in the first
+        # second can land in another newspad's files.
+        self._point_designs_at_launch()
         self._wire()
         self._mark_what_is_whose()
         self._update_counts()
@@ -278,8 +302,9 @@ class MainWindow(QMainWindow):
         """The build stays in the title: two machines showing the same digest
         are running the same code. The newspad is there so it is never in
         doubt which one is open."""
+        collecting = getattr(getattr(self, "collector", None), "is_on", False)
         return (f"Clippings Manager  —  Newspad {self.newspad}  —  "
-                f"{version.describe()}")
+                f"{version.describe()}" + ("  —  Collecting" if collecting else ""))
 
     def touch_session(self) -> None:
         """Something changed - write the manifest shortly.
@@ -301,7 +326,14 @@ class MainWindow(QMainWindow):
             # Worked out once per picture. The test is on the bytes themselves,
             # not on whether they look the same: if anything ever does replace a
             # clipping's picture, this notices and names it again.
-            if data and row.blob_name and row.blob_of is data:
+            #
+            # And only while the file is still there. A clipping deleted, saved,
+            # and brought back with Ctrl+Z still remembers its name, but the
+            # tidy-up after that save had removed the picture; trusting the name
+            # wrote a manifest pointing at nothing, and the clipping was gone at
+            # the next launch.
+            if (data and row.blob_name and row.blob_of is data
+                    and self.store.has_blob(row.blob_name)):
                 blob = row.blob_name
             else:
                 blob = self.store.put_blob(data) if data else ""
@@ -314,6 +346,8 @@ class MainWindow(QMainWindow):
                 "source_kind": row.source_kind,
                 "source_name": row.source_name,
                 "group_key": row.group_key,
+                "home_title": row.home_title,
+                "home_kind": row.home_kind,
                 "blob": blob,
                 "clip": encode_clip(row.clip),
             })
@@ -541,6 +575,8 @@ class MainWindow(QMainWindow):
                         source_kind=saved.get("source_kind", "image"),
                         source_name=saved.get("source_name", ""),
                         group_key=saved.get("group_key", ""),
+                        home_title=saved.get("home_title", ""),
+                        home_kind=saved.get("home_kind", ""),
                         # The picture's stored name comes back with it. Without
                         # this, no restored row carried one - measured, 0 of 163
                         # - so the first save after every restore hashed every
@@ -625,7 +661,10 @@ class MainWindow(QMainWindow):
                 note += (" These were read by a different build of the app — "
                          "import the documents again if the report comes out "
                          "wrong.")
-            self._flash(note, "good" if not (lost or stale) else "info")
+            self._arrive(note, "good" if not (lost or stale) else "info")
+        elif self._design_notes and not self._switching:
+            notes, self._design_notes = self._design_notes, []
+            self._flash(" ".join(notes), "bad")
         # The clippings come back carrying last time's verdicts, including
         # which were switched off as repeats. That was true of the list as
         # it was; ask again for the list as it is now.
@@ -863,6 +902,19 @@ class MainWindow(QMainWindow):
         self.mode_switch.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         controls.addWidget(self.mode_switch)
 
+        # Collect from WhatsApp: a button, never a switch position or a combo -
+        # it is a way of working, not a place, and a combo here would take the
+        # wheel. Narrower than the interface switch, so the header's floor does
+        # not move. Checked and green while collecting.
+        self.collect_btn = QPushButton(collect.LABEL_OFF)
+        self.collect_btn.setObjectName("HeaderButton")
+        self.collect_btn.setCheckable(True)
+        self.collect_btn.setCursor(Qt.PointingHandCursor)
+        self.collect_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.collect_btn.setToolTip(collect.TIP_OFF)
+        self.collect_btn.clicked.connect(self._toggle_collect)
+        controls.addWidget(self.collect_btn)
+
         # Beside the interface switch rather than inside it, and the difference
         # is measured. A FlowLayout asks for the width of its WIDEST item, and
         # the switch is already that item, so every pixel a third entry added
@@ -946,6 +998,9 @@ class MainWindow(QMainWindow):
         # interfaces, and nothing but the header, the footer and the overlays
         # may sit outside the page and take its room. Hidden, it takes none.
         column.addWidget(self._build_read_only_banner())
+        # What Collect has just done, and what it needs. In the header, like the
+        # banner above: on screen on both interfaces, never scrolled away.
+        column.addWidget(self.collector.build_bar())
 
         outer.addWidget(content, 1)
         accent = QWidget()
@@ -1006,6 +1061,8 @@ class MainWindow(QMainWindow):
     def _restart(self) -> bool:
         """Save everything, start a second copy, and let this one go."""
         import subprocess
+
+        self.collector.stop("closing")
 
         for card in (self.cover, self.board.cover, self.heading,
                      getattr(self.board, "heading", None)):
@@ -1500,6 +1557,9 @@ class MainWindow(QMainWindow):
             f"QPushButton#BatchMerge:hover {{ background: {theme.ORANGE_DEEP}; }}"
             f"QPushButton#BatchDelete {{ background: #DC2626; font-weight: 700; }}"
             f"QPushButton#BatchDelete:hover {{ background: #B91C1C; }}"
+            # The arrow is in the words; Qt's own would sit on top of them.
+            f"QPushButton::menu-indicator {{ image: none; width: 0px; }}"
+            f"QPushButton#BatchMove:open {{ background: rgba(255,255,255,0.24); }}"
         )
         row = QHBoxLayout(self.batch)
         row.setContentsMargins(14, 9, 10, 9)
@@ -1521,7 +1581,28 @@ class MainWindow(QMainWindow):
         self.batch_up = QPushButton("Up")
         self.batch_down = QPushButton("Down")
         self.batch_bottom = QPushButton("Bottom")
-        self.batch_rotate = QPushButton("Rotate")
+        # Into another file's group, at its end. A button with a menu rather
+        # than a combo box: a combo on this bar would take the wheel from the
+        # list scrolling under it. The menu is filled as it opens, so it is
+        # always the list as it is now.
+        self.batch_move_to = QPushButton("Move to: ▾")
+        self.batch_move_to.setObjectName("BatchMove")
+        self.batch_move_to.setToolTip(
+            "Move the ticked clippings into another file's group - to its end, "
+            "in the order they are in now. Nothing that stays is moved, and no "
+            "heading changes place.")
+        # Parented to the window, not the button: the bar's navy stylesheet
+        # must never reach into it, and it looks like every other menu.
+        self.batch_move_menu = QMenu(self)
+        self.batch_move_menu.setToolTipsVisible(True)
+        self.batch_move_menu.aboutToShow.connect(
+            lambda: self._fill_move_menu(self.batch_move_menu,
+                                         self._selected_ids()))
+        self.batch_move_to.setMenu(self.batch_move_menu)
+        # No Rotate here: turning a picture is something done to one clipping
+        # while looking at it, and every card has its own button for it.
+        # "Exclude" reads "Include" when every ticked clipping is already out -
+        # see _sync_exclude_button.
         self.batch_exclude = QPushButton("Exclude")
         self.batch_delete = QPushButton("Delete")
         self.batch_delete.setObjectName("BatchDelete")
@@ -1529,12 +1610,33 @@ class MainWindow(QMainWindow):
         self.batch_close.setFixedWidth(30)
         for button in (
             self.batch_merge, self.batch_name, self.batch_top, self.batch_up,
-            self.batch_down, self.batch_bottom, self.batch_rotate,
+            self.batch_down, self.batch_bottom, self.batch_move_to,
             self.batch_exclude, self.batch_delete, self.batch_close,
         ):
             button.setCursor(Qt.PointingHandCursor)
             row.addWidget(button)
         self.batch.hide()
+
+        # What a move did, said where the bar was. The status line lives at
+        # the top of the page, scrolled away while somebody works down the
+        # list, so a move reported only there would look like nothing happened.
+        self.move_note = QFrame(parent)
+        self.move_note.setObjectName("BatchNote")
+        self.move_note.setStyleSheet(
+            f"#BatchNote {{ background: {theme.NAVY}; border-radius: 16px; }}"
+            f"QLabel {{ color: white; font-size: 12px; font-weight: 600;"
+            f" background: transparent; }}")
+        note_row = QHBoxLayout(self.move_note)
+        note_row.setContentsMargins(16, 10, 16, 10)
+        self.move_note_text = QLabel()
+        self.move_note_text.setWordWrap(True)
+        note_row.addWidget(self.move_note_text)
+        self.move_note.hide()
+        self._move_note_above = False
+        self._move_note_timer = QTimer(self)
+        self._move_note_timer.setSingleShot(True)
+        self._move_note_timer.setInterval(6000)
+        self._move_note_timer.timeout.connect(self._hide_move_note)
 
     # -------------------------------------------------------------- wiring
     def _wire(self) -> None:
@@ -1559,8 +1661,17 @@ class MainWindow(QMainWindow):
 
         self.model.countsChanged.connect(self._update_counts)
         self.model.selectionChanged.connect(self._update_selection_ui)
+        # A move's note goes as soon as anything else happens to the list.
+        self.model.selectionChanged.connect(self._hide_move_note)
+        self.undo_stack.indexChanged.connect(self._hide_move_note)
         self.board_model.countsChanged.connect(self._update_counts)
         self.board_model.selectionChanged.connect(self._update_selection_ui)
+
+        # A cover or headline panel that could not write its file says so.
+        for card in self._design_cards():
+            signal = getattr(card, "designProblem", None)
+            if signal is not None:
+                signal.connect(self._design_problem)
 
         # This newspad's own values. Saved with its session rather than in a
         # shared settings file, so each has to tell the session it moved.
@@ -1615,7 +1726,6 @@ class MainWindow(QMainWindow):
         self.batch_up.clicked.connect(lambda: self._batch_move("up"))
         self.batch_down.clicked.connect(lambda: self._batch_move("down"))
         self.batch_bottom.clicked.connect(lambda: self._batch_move("bottom"))
-        self.batch_rotate.clicked.connect(self._batch_rotate)
         self.batch_exclude.clicked.connect(self._batch_exclude)
         self.batch_delete.clicked.connect(self._batch_delete)
         self.batch_close.clicked.connect(self.model.clear_selection)
@@ -1623,9 +1733,13 @@ class MainWindow(QMainWindow):
         self.btn_pdf_out.clicked.connect(lambda: self._export("pdf"))
         self.btn_docx_out.clicked.connect(lambda: self._export("docx"))
 
-        QShortcut(QKeySequence.Undo, self, self.undo_stack.undo)
-        QShortcut(QKeySequence.Redo, self, self.undo_stack.redo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self.undo_stack.redo)
+        # Through the group, which follows the interface on screen (set_mode
+        # makes its stack the active one). Bound straight to undo_stack, as it
+        # was, Ctrl+Z pressed on the sentiment board quietly undid work on the
+        # press report instead.
+        QShortcut(QKeySequence.Undo, self, self.undo_group.undo)
+        QShortcut(QKeySequence.Redo, self, self.undo_group.redo)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self.undo_group.redo)
         QShortcut(QKeySequence.Paste, self, self.paste_clipboard)
         QShortcut(QKeySequence("Ctrl+A"), self, self._select_all)
         QShortcut(QKeySequence("Home"), self, lambda: self.list.scrollToTop())
@@ -1906,10 +2020,15 @@ class MainWindow(QMainWindow):
             section=Section.NEUTRAL,
         )
 
-    def _add_loose(self, clips: list[Clip]) -> None:
-        """Hand-added clippings share one group and land at the top, in order."""
+    def _add_loose(self, clips: list[Clip], quiet: bool = False) -> list:
+        """Hand-added clippings share one group and land at the top, in order.
+
+        ``quiet`` is Collect from WhatsApp, where the person is in Chrome, not
+        here: nothing comes forward, no headline box opens, nothing takes the
+        keyboard - the clipping simply appears. Returns the rows added.
+        """
         if self._refuse_if_read_only():
-            return
+            return []
         target = self.pool()
         self._stamp_pending(clips)
         rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
@@ -1921,6 +2040,28 @@ class MainWindow(QMainWindow):
                 at=at,
             )
         )
+        # Every route in comes through here, so this is where Collect learns
+        # which clipping a copied caption belongs to - dragged in or collected.
+        collector = getattr(self, "collector", None)
+        if collector is not None:
+            collector.note_arrival(target, rows)
+        if quiet:
+            if target is not self.model:
+                self._refresh_board()
+            else:
+                self._show_list()
+                # In view if the window is behind Chrome, without moving the
+                # page under somebody who is looking at it.
+                if rows and not self.isActiveWindow():
+                    at_row = self.model.entry_row_for_clip(rows[0].id)
+                    if at_row >= 0:
+                        self.list.scrollTo(self.model.index(at_row, 0))
+                self.list._place_editor()
+            return rows
+        headline = ("Type the headline and press Enter, "
+                    + collect.DROP_SUFFIX
+                    if collector is not None and collector.is_on else
+                    "Type the headline and press Enter.")
         if target is not self.model:
             self._refresh_board()
             # Name the column. A paste that lands silently gives nobody anything
@@ -1930,7 +2071,7 @@ class MainWindow(QMainWindow):
             into = f" into {', '.join(sorted(where))}" if where else ""
             self._flash(
                 f"Added {len(rows)} clipping{'s' if len(rows) != 1 else ''}"
-                f"{into}. Type the headline and press Enter.",
+                f"{into}. {headline}",
                 "good",
             )
             first = rows[0].id
@@ -1938,12 +2079,12 @@ class MainWindow(QMainWindow):
             self.activateWindow()
             QTimer.singleShot(80, self._deferred(
                 lambda: self.board.begin_rename(first)))
-            return
+            return rows
 
         self._show_list()
         self._flash(
             f"Added {len(rows)} clipping{'s' if len(rows) != 1 else ''} at the top. "
-            f"Type the headline and press Enter.",
+            f"{headline}",
             "good",
         )
         first = rows[0].id
@@ -1953,6 +2094,7 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self.list.setFocus()
         QTimer.singleShot(80, self._deferred(lambda: self._begin_rename(first)))
+        return rows
 
     def _begin_rename(self, clip_id: int) -> None:
         """Open the headline box on a newly added clipping, and mean it.
@@ -2024,6 +2166,14 @@ class MainWindow(QMainWindow):
         is not something a person can see, so a paste went somewhere they had
         not chosen and had to be dragged back.
         """
+        # Collect has already taken what is on the clipboard: pasting it too
+        # would add it twice - and a copied caption would open the "nothing to
+        # add" box.
+        collector = getattr(self, "collector", None)
+        if (collector is not None and collector.is_on
+                and collector.watcher.already_read()):
+            self._flash(collect.PASTE_NOT_NEEDED, "info")
+            return
         section = None
         if self.mode == "sentiment":
             # A pair, not a QPoint: _section_under indexes what it is given,
@@ -2242,26 +2392,209 @@ class MainWindow(QMainWindow):
 
     def _batch_move(self, where: str) -> None:
         ids = self._selected_ids()
-        if not ids:
+        if not ids or self.mode != "standard":
             return
         if self._lens_holds(self.model):
             return
         rows = commands.move_relative(self.model, ids, where)
         self.undo_stack.push(
-            commands.Reorder(self.model, rows, f"{len(ids)} clippings moved")
+            commands.Reorder(self.model, rows, f"{len(ids)} clippings moved"
+                             if len(ids) != 1 else "Clipping moved")
         )
 
-    def _batch_rotate(self) -> None:
-        ids = self._selected_ids()
-        if ids:
-            self.undo_stack.push(commands.Rotate(self.model, ids))
+    def _all_excluded(self, ids: list) -> bool:
+        return bool(ids) and not any(self.model.by_id(i).include for i in ids)
 
     def _batch_exclude(self) -> None:
-        ids = self._selected_ids()
-        if not ids:
+        self._toggle_included(self._selected_ids())
+
+    def _toggle_included(self, ids: list) -> None:
+        """Take these clippings out of the report - or, when every one of them
+        is out already, put them all back. The button and the menu say which.
+
+        A mixed selection is taken OUT, never put back in. Putting back a
+        clipping the duplicate check left out also marks it "not a duplicate"
+        for good (see SetIncluded), and nobody who ticked five clippings and
+        pressed a button meant that for the one among them they had not
+        noticed was out.
+        """
+        if not ids or self.mode != "standard":
+            return              # the bar and the list menu are the report's
+        if self._all_excluded(ids):
+            self.undo_stack.push(commands.SetIncluded(self.model, ids, True))
             return
-        want = not all(self.model.by_id(i).include for i in ids)
-        self.undo_stack.push(commands.SetIncluded(self.model, ids, want))
+        going = [i for i in ids if self.model.by_id(i).include]
+        self.undo_stack.push(commands.SetIncluded(self.model, going, False))
+        if len(going) != len(ids):
+            out = len(ids) - len(going)
+            self._flash(
+                f"Excluded {len(going)} — the other {out} "
+                f"{'were' if out != 1 else 'was'} already out of the report.",
+                "info")
+
+    def _sync_exclude_button(self) -> None:
+        back = self._all_excluded(self._selected_ids())
+        self.batch_exclude.setText("Include" if back else "Exclude")
+        self.batch_exclude.setToolTip(
+            "Put these back into the report" if back else
+            "Leave these out of the report — they stay in the list, greyed")
+
+    @staticmethod
+    def _elide_middle(text: str, most: int) -> str:
+        return text if len(text) <= most else (
+            text[:most - 20].rstrip() + " … " + text[-17:].lstrip())
+
+    def _move_line(self, run, ids: list, part: str, number_it: bool):
+        """One file's line in the Move to list: (words, can it be chosen, tip).
+
+        The file's own header words on the left - '&' doubled, or Qt would take
+        it for a keyboard shortcut and swallow it - and on the right, after a
+        tab, how many it holds and anything that stops a move there.
+        """
+        model = self.model
+        name = self._elide_middle(run.title, 56).replace("&", "&&") + part
+        count = f"{run.count} clip" + ("s" if run.count != 1 else "")
+        if number_it:
+            first = model.position_of(run.rows[0].id) + 1
+            last = model.position_of(run.rows[-1].id) + 1
+            count += f" · No. {first}–{last}" if last != first else f" · No. {first}"
+        inside = [i for i in ids if i in set(run.row_ids)]
+        tip = run.title
+        if ids and len(inside) == len(ids):
+            n = len(ids)
+            return f"{name}\t{'all ' + str(n) if n != 1 else 'it is'} already here", \
+                False, tip
+        if run.key in getattr(model, "duplicate_files", {}):
+            return (f"{name}\ta repeat of another file", False,
+                    "This whole file repeats another one - clear it rather than "
+                    "fill it.")
+        plan = commands.plan_move_into(model, ids, run)
+        if plan.refused:
+            words = plan.refused_words.replace("&", "&&")
+            return (f"{name}\twould move {words}", False,
+                    f"Not here: {plan.refused}.")
+        if inside:
+            count += f" · {len(inside)} of the {len(ids)} already here"
+        return f"{name}\t{count}", True, tip
+
+    def _fill_move_menu(self, menu: QMenu, ids: list) -> None:
+        """The file groups these clippings can be moved into, as they are now.
+
+        What the earlier AI Studio version called its categories: every file in
+        the list, and "Clipboard images" for everything added by hand, in list
+        order. Filled as the menu opens, so it is always the list as it stands.
+        """
+        menu.clear()
+        model = self.model
+        if model.lens.busy:
+            menu.addAction("Clear the filter first — while one is on, what you "
+                           "see is not the real order").setEnabled(False)
+            return
+        ids = [r.id for r in model.rows if r.id in set(ids)]
+        n = len(ids)
+        menu.addAction(f"Move {n} clipping{'s' if n != 1 else ''} to:").setEnabled(False)
+        menu.addSeparator()
+        runs = model.file_runs()
+        parts: dict = {}
+        shown: dict = {}
+        for run in runs:
+            parts[run.key] = parts.get(run.key, 0) + 1
+            # Counted on the words as shown: two long names that differ only
+            # in the middle shorten to the same line, and have to be told apart.
+            seen = self._elide_middle(run.title, 56)
+            shown[seen] = shown.get(seen, 0) + 1
+        headed = False
+        for run in runs:
+            part = f" — part {run.occurrence + 1}" if parts[run.key] > 1 else ""
+            number_it = (parts[run.key] > 1
+                         or shown[self._elide_middle(run.title, 56)] > 1)
+            text, enabled, tip = self._move_line(run, ids, part, number_it)
+            headed = headed or text.split("\t")[-1].startswith("would move")
+            action = menu.addAction(text)
+            action.setEnabled(enabled and n > 0)
+            action.setToolTip(tip)
+            action.triggered.connect(
+                lambda _checked=False, ident=run.ident, first=run.rows[0].id:
+                self._move_into(ids, ident, first))
+        if headed:
+            menu.addSeparator()
+            menu.addAction("Greyed: moving them there would change where a "
+                           "heading prints in the report.").setEnabled(False)
+
+    def _move_into(self, ids: list, ident: str, first_id: int = -1) -> None:
+        """File these clippings under another file's group, at its end.
+
+        One undo step (MoveIntoFile). Refused, and said so, when it would
+        change where any section heading prints - see plan_move_into.
+        """
+        model = self.model
+        if self.mode != "standard":
+            return              # the bar and its menu belong to the press report
+        if self._lens_holds(model):
+            return
+        run = next((g for g in model.file_runs() if g.ident == ident), None)
+        if run is None or (first_id >= 0 and run.rows[0].id != first_id):
+            self._flash("The list changed while the menu was open — nothing was "
+                        "moved.", "info")
+            return
+        if run.key in getattr(model, "duplicate_files", {}):
+            self._flash("That file repeats another one, so nothing is moved into "
+                        "it.", "bad")
+            return
+        plan = commands.plan_move_into(model, ids, run)
+        if plan.refused:
+            said = f"Not moved — {plan.refused}."
+            self._flash(said, "bad")
+            self._show_move_note(said, above_bar=True)
+            return
+        if not plan.moving:
+            self._flash(f"Those clippings are already in {run.title}.", "info")
+            return
+        n = len(plan.moving)
+        title = self._elide_middle(run.title, 40)
+        text = (f"{n} clippings moved to {title}" if n != 1
+                else f"Clipping moved to {title}")
+        self.undo_stack.push(commands.MoveIntoFile(model, plan, text))
+        # After the push: the push moves the undo index, which hides the note.
+        said = self._move_message(plan)
+        self._flash(said, "good")
+        self._show_move_note(said)
+
+    def _move_message(self, plan) -> str:
+        model = self.model
+        n = len(plan.moving)
+        places = [model.position_of(i) + 1 for i in plan.moving]
+        where = (f"No. {min(places)}–{max(places)}" if n > 1
+                 else f"No. {places[0]}")
+        said = (f"Moved {n} into {self._elide_middle(plan.run_title, 48)} — now "
+                f"{where}. Ctrl+Z puts {'them' if n != 1 else 'it'} back.")
+        for _from_id, to_id, words in plan.handoffs:
+            said += f" {words} now prints over No. {model.position_of(to_id) + 1}."
+        if plan.now_under and plan.now_under not in plan.was_under:
+            said += f" They now print under {plan.now_under}." if n != 1 else \
+                f" It now prints under {plan.now_under}."
+        gone = [w for w in plan.was_under if w != plan.now_under]
+        if gone:
+            said += (f" {'They' if n != 1 else 'It'} no longer "
+                     f"print{'' if n != 1 else 's'} under {', '.join(gone)}.")
+        if plan.already:
+            k = len(plan.already)
+            said += (f" {k} {'were' if k != 1 else 'was'} already there and "
+                     f"stayed put.")
+        return said
+
+    def _show_move_note(self, text: str, above_bar: bool = False) -> None:
+        self.move_note_text.setText(text)
+        self._move_note_above = above_bar
+        self.move_note.show()
+        self._place_floating()
+        self._move_note_timer.start()
+
+    def _hide_move_note(self, *_args) -> None:
+        note = getattr(self, "move_note", None)
+        if note is not None and note.isVisible():
+            self._move_note_timer.stop()
+            note.hide()
 
     def _batch_delete(self) -> None:
         if self.mode != "standard":
@@ -2275,6 +2608,8 @@ class MainWindow(QMainWindow):
 
     def _merge_selected(self) -> None:
         ids = self._selected_ids()
+        if self.mode != "standard":
+            return
         if len(ids) < 2:
             self._flash("Pick at least two clippings to merge.", "info")
             return
@@ -2283,7 +2618,7 @@ class MainWindow(QMainWindow):
 
     def _bulk_field(self, field: str) -> None:
         ids = self._selected_ids()
-        if not ids:
+        if not ids or self.mode != "standard":
             return
         options = (
             self.name_index.newspaper_names if field == "newspaper"
@@ -2373,7 +2708,7 @@ class MainWindow(QMainWindow):
             self.preview.headingPicked.connect(self._preview_heading)
             self.preview.headingListChanged.connect(self._headings_changed)
             self.preview.headingStyleChanged.connect(self._headings_changed)
-            self.preview.labelChanged.connect(self._on_label_edited)
+            self.preview.labelChanged.connect(self._preview_label)
             self.preview.excludeRequested.connect(self._preview_include)
             self.preview.deleteRequested.connect(self._preview_delete)
             self.preview.rotateRequested.connect(self._preview_rotate)
@@ -2413,12 +2748,11 @@ class MainWindow(QMainWindow):
         if (getattr(clip, "section_key", "") == key
                 and clip.section_title == words):
             return
-        self.undo_stack.beginMacro("Section heading")
-        self.undo_stack.push(
-            commands.EditField(pool, clip_id, "section_key", key))
-        self.undo_stack.push(
-            commands.EditField(pool, clip_id, "section_title", words))
-        self.undo_stack.endMacro()
+        stack = self.stack_for(pool)
+        stack.beginMacro("Section heading")
+        stack.push(commands.EditField(pool, clip_id, "section_key", key))
+        stack.push(commands.EditField(pool, clip_id, "section_title", words))
+        stack.endMacro()
         # The card chip and the report have to agree about which clipping opens
         # which section, and both read the same recomputed map.
         pool.recompute_openers()
@@ -2447,17 +2781,38 @@ class MainWindow(QMainWindow):
             self.name_index.add_edition(value)
         if getattr(self._preview_pool().by_id(clip_id), field) == value:
             return
-        self.undo_stack.push(commands.EditField(self._preview_pool(), clip_id, field, value))
+        self._preview_stack().push(
+            commands.EditField(self._preview_pool(), clip_id, field, value))
+
+    def _preview_stack(self):
+        """The history of the screen the previewed clipping belongs to.
+
+        Ctrl+Z undoes on the screen being looked at. A board card's edit made
+        here and put on the report's history was skipped by Ctrl+Z on the
+        board, which undid the step before it instead, and undoing it later
+        from the report reached into the board's list.
+        """
+        return self.stack_for(self._preview_pool())
+
+    def _preview_label(self, clip_id: int, text: str) -> None:
+        """A headline typed in the preview, for whichever screen it belongs to.
+        A board card's used to go to the press report's handler, which could
+        not find it there and dropped it without a word."""
+        if self._preview_pool() is getattr(self, "board_model", None):
+            self._on_board_title(clip_id, text)
+        else:
+            self._on_label_edited(clip_id, text)
 
     def _preview_include(self, clip_id: int, included: bool) -> None:
-        self.undo_stack.push(commands.SetIncluded(self._preview_pool(), [clip_id], included))
+        self._preview_stack().push(
+            commands.SetIncluded(self._preview_pool(), [clip_id], included))
         self._refresh_preview(clip_id)
 
     def _preview_delete(self, clip_id: int) -> None:
         if not self._confirm_delete(1):
             return
         position = self._preview_pool().position_of(clip_id)
-        self.undo_stack.push(commands.RemoveClips(self._preview_pool(), [clip_id]))
+        self._preview_stack().push(commands.RemoveClips(self._preview_pool(), [clip_id]))
         if self._preview_pool().rows:
             following = self._preview_pool().rows[min(position, len(self._preview_pool().rows) - 1)]
             self._refresh_preview(following.id)
@@ -2465,12 +2820,12 @@ class MainWindow(QMainWindow):
             self.preview.close()
 
     def _preview_rotate(self, clip_id: int) -> None:
-        self.undo_stack.push(commands.Rotate(self._preview_pool(), [clip_id]))
+        self._preview_stack().push(commands.Rotate(self._preview_pool(), [clip_id]))
         self._refresh_preview(clip_id)
 
     def _preview_split(self, clip_id: int) -> None:
         at, _walk = self._preview_place(clip_id)
-        self.undo_stack.push(commands.Split(self._preview_pool(), clip_id))
+        self._preview_stack().push(commands.Split(self._preview_pool(), clip_id))
         walk = self._preview_walk()
         if at is not None and 0 <= at < len(walk):
             self._refresh_preview(walk[at].id)
@@ -2518,11 +2873,15 @@ class MainWindow(QMainWindow):
         ids = [i for i in clip_ids if self.model.row_for(i) is not None]
         if not ids:
             return
+        # The send lives on the report's history; the board's own history is
+        # cleared whenever clippings cross, because its snapshots of the board
+        # stop being true. See MoveToInterface.
         self.undo_stack.push(
             commands.MoveToInterface(
                 self.model, self.board_model, ids,
                 f"{len(ids)} sent to the sentiment board" if len(ids) != 1
                 else "Clipping sent to the sentiment board",
+                forget=self.board_undo.clear,
             )
         )
         self._refresh_board()
@@ -2557,10 +2916,23 @@ class MainWindow(QMainWindow):
         menu.addAction(QAction(send, self,
                                triggered=lambda: self._send_to_board(ids)))
         menu.addSeparator()
-        label = (f"Exclude these {len(ids)}" if many
-                 else ("Exclude" if clip.include else "Include again"))
-        menu.addAction(QAction(label, self, triggered=lambda: self.undo_stack.push(
-            commands.SetIncluded(self.model, ids, many or not clip.include))))
+        # Apart from the send above it, so a slip of the mouse cannot take
+        # clippings out of the report when they were only meant to change file.
+        if len(self.model.file_runs()) > 1:
+            move = menu.addMenu("Move to")
+            move.setToolTipsVisible(True)
+            self._fill_move_menu(move, ids)
+        menu.addSeparator()
+        # The same rule as the bar's button. This used to push "included" for
+        # any group of clippings, so "Exclude these 3" put them back in.
+        back = self._all_excluded(ids)
+        if many:
+            label = (f"Include these {len(ids)} again" if back
+                     else f"Exclude these {len(ids)}")
+        else:
+            label = "Include again" if back else "Exclude"
+        menu.addAction(QAction(label, self,
+                               triggered=lambda: self._toggle_included(ids)))
         menu.addAction(QAction("Set newspaper…", self,
                                triggered=lambda: self._bulk_field("newspaper")))
         menu.addAction(QAction("Set edition…", self,
@@ -2597,6 +2969,7 @@ class MainWindow(QMainWindow):
         """Swap between the press report and the sentiment board."""
         self.mode = mode if mode in ("standard", "sentiment") else "standard"
         sentiment_mode = self.mode == "sentiment"
+        self._hide_move_note()
         self.pages.setCurrentIndex(1 if sentiment_mode else 0)
 
         self.mode_switch.set_mode(self.mode)
@@ -2617,6 +2990,9 @@ class MainWindow(QMainWindow):
         self.mode_badge.setText(
             "Division sentiment" if sentiment_mode else "Daily newspad"
         )
+        collector = getattr(self, "collector", None)
+        if collector is not None:
+            collector.refresh()          # the bar names where photos now go
         self.tagline.setText(
             "Sorts each division's coverage into positive, neutral, negative and "
             "digital."
@@ -2764,6 +3140,9 @@ class MainWindow(QMainWindow):
         self.batch_count.setText(str(count))
         self.clear_selection_btn.setVisible(count > 0)
         self.batch_merge.setVisible(count >= 2)
+        self._sync_exclude_button()
+        # Somewhere else to go only when there is more than one file.
+        self.batch_move_to.setVisible(count > 0 and len(self.model.file_runs()) > 1)
         self.select_all_btn.setText(
             "Deselect all"
             if count and count == self.model.clip_count
@@ -2774,15 +3153,20 @@ class MainWindow(QMainWindow):
                 f"{count} selected — use the bar below, or drag any one of them "
                 f"to move the block"
             )
-            self.batch.adjustSize()
-            self.batch.show()
-            self.batch.raise_()
-            self._place_floating()
         else:
             self.select_hint.setText(
                 "Hold Ctrl to pick several, Shift for a run, or drag the handle to "
                 "move a block anywhere"
             )
+        # The bar acts on the press report's ticks, so it is shown only there.
+        # On the board it used to come back whenever anything recounted, with
+        # an Exclude that changed clippings nobody could see.
+        if count and self.mode == "standard":
+            self.batch.adjustSize()
+            self.batch.show()
+            self.batch.raise_()
+            self._place_floating()
+        else:
             self.batch.hide()
 
     def _after_undo_change(self) -> None:
@@ -3525,11 +3909,20 @@ class MainWindow(QMainWindow):
         """
         where = {}
         titles = {}
+        # Files holding a clipping moved in from somewhere else ("Move to") that
+        # is not itself a repeat. Marked red, their one-click delete would take
+        # that clipping with them - the same reason the loose bracket is never
+        # marked, below.
+        foreign = set()
         for row in self.model.rows:
             if row.clip is None:
                 continue
             where[row.clip.uid] = row.group_key
-            titles.setdefault(row.group_key, row.source_name or row.group_key)
+            titles.setdefault(row.group_key,
+                              row.home_title or row.source_name or row.group_key)
+            if (row.home_title and row.home_title != row.source_name
+                    and not row.clip.duplicate_of):
+                foreign.add(row.group_key)
         try:
             repeats = duplicates.whole_files(
                 clips, lambda clip: where.get(clip.uid, ""))
@@ -3545,6 +3938,7 @@ class MainWindow(QMainWindow):
             # lot, and the ones that were not repeats would go with them.
             for key, other in repeats.items()
             if key and key != LOOSE_KEY and other != LOOSE_KEY
+            and key not in foreign
         }
 
     def _auto_duplicates_toggled(self, on: bool) -> None:
@@ -3626,11 +4020,18 @@ class MainWindow(QMainWindow):
     def _mark_what_is_whose(self) -> None:
         """Say, where it is typed, which values belong to this newspad alone.
 
-        Everything else on the two covers is design and shared by all four -
-        the button's tooltip and the menu say so. A tooltip added to, never
+        The two covers' design is this newspad's own too, but it is set once
+        rather than every morning, so it is said once, on the press cover's
+        header, rather than on every control. A tooltip added to, never
         written over: the date pickers already explain why a future day is
         refused, and that must stay.
         """
+        note = getattr(self.cover, "saved_note", None)
+        if note is not None:
+            note.setToolTip(
+                "Each newspad keeps its own cover pages and headline style. A "
+                "newspad opened for the first time starts with a copy of the "
+                "one you were in; after that, changes stay in that newspad.")
         own = "This newspad's own - each newspad keeps its own."
         cover, dossier = self.cover, self.board.cover
         for widget in (getattr(cover, "date_edit", None),
@@ -3644,6 +4045,31 @@ class MainWindow(QMainWindow):
                 continue
             said = widget.toolTip()
             widget.setToolTip(f"{said}\n\n{own}" if said else own)
+
+    def _toggle_collect(self, checked: bool) -> None:
+        if checked:
+            self.collector.start()
+        else:
+            self.collector.stop()
+        self._sync_collect_button()
+
+    def _sync_collect_button(self) -> None:
+        """The button says what Collect is doing, and cannot start it in a
+        newspad that cannot save."""
+        button = getattr(self, "collect_btn", None)
+        collector = getattr(self, "collector", None)
+        if button is None or collector is None:
+            return
+        on = collector.is_on
+        was = button.blockSignals(True)
+        try:
+            button.setChecked(on)
+        finally:
+            button.blockSignals(was)
+        button.setText(collect.LABEL_ON if on else collect.LABEL_OFF)
+        button.setEnabled(not self._read_only)
+        button.setToolTip(collect.TIP_READ_ONLY if self._read_only
+                          else collect.TIP_ON if on else collect.TIP_OFF)
 
     def _sync_newspad_button(self) -> None:
         button = getattr(self, "newspad_btn", None)
@@ -3720,6 +4146,9 @@ class MainWindow(QMainWindow):
         ``stuck`` is the one case with nothing to set aside: a switch went wrong
         part-way and the window can no longer be trusted to match any folder.
         """
+        collector = getattr(self, "collector", None)
+        if on and collector is not None:
+            collector.stop("read-only")
         banner = getattr(self, "read_only_banner", None)
         if banner is None:
             return
@@ -3735,6 +4164,7 @@ class MainWindow(QMainWindow):
                 f"the old files are kept, renamed, not deleted.")
         self.read_only_button.setVisible(on and not stuck)
         banner.setVisible(on)
+        self._sync_collect_button()
 
     def _set_aside_unreadable(self) -> None:
         """Rename the unreadable folder out of the way, and start this newspad
@@ -3782,6 +4212,16 @@ class MainWindow(QMainWindow):
                 or not 1 <= int(number) <= newspads.COUNT):
             return False
         outgoing = self.newspad
+        # Collect never follows a switch: what is copied next belongs to
+        # whichever newspad the person chooses to collect into.
+        was_collecting = self.collector.is_on
+        dropped_copies = self.collector.stop("newspad")
+        self._hide_move_note()
+        self._collect_note = ""
+        if was_collecting:
+            self._collect_note = collect.FLASH_SWITCH.format(n=number) + (
+                collect.FLASH_DROPPED.format(k=dropped_copies)
+                if dropped_copies else "")
         self._switching = True
         self._sync_newspad_button()
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -3803,27 +4243,55 @@ class MainWindow(QMainWindow):
             self._settle_reader()
 
             # 3 ----------------------------------------------------- save out
-            for card in (self.cover, self.board.cover, self.heading,
-                         getattr(self.board, "heading", None)):
-                try:
-                    if card is not None:
-                        card.flush()
-                except Exception:  # noqa: BLE001
-                    pass
+            # The covers and headline styles first, each into the outgoing
+            # newspad's OWN files, while every panel still points there. Then
+            # the clippings, strictly. Then - only if both are safe - a copy of
+            # this look for a newspad that has none yet. Nothing has moved
+            # until all three have worked; any of them failing refuses the
+            # switch with nothing changed.
             self._save_timer.stop()
-            if not self._read_only:
+            self._arrival = None
+            refusal = None
+            forgive = self._design_refused == (outgoing, number)
+            try:
+                dropped = self._flush_designs(outgoing, forgive=forgive)
+            except Exception:  # noqa: BLE001 - refuse, and say how to go on
+                self._design_refused = (outgoing, number)
+                refusal = (f"Newspad {outgoing}'s cover page or headline "
+                           f"settings could not be saved, so it stayed open. "
+                           f"Switch again to leave without that last change.")
+            else:
+                self._design_refused = None
+                if dropped:
+                    self._design_notes.append(
+                        f"The last change to Newspad {outgoing}'s "
+                        f"{', '.join(dropped)} could not be saved and was left "
+                        f"behind.")
+            if refusal is None and not self._read_only:
                 try:
                     self.save_session(strict=True)
                 except Exception:  # noqa: BLE001 - refuse rather than lose it
-                    self._switching = False
-                    QApplication.restoreOverrideCursor()
-                    self._sync_newspad_button()
-                    self._flash(f"Newspad {outgoing} could not be saved, so it "
-                                f"stayed open.", "bad")
-                    if self._check_pending:
-                        self._check_pending = ""
-                        self.recheck_duplicates(force=True)
-                    return False
+                    refusal = (f"Newspad {outgoing} could not be saved, so it "
+                               f"stayed open.")
+            seeded = False
+            if refusal is None:
+                try:
+                    seeded = self._seed_designs(outgoing, number)
+                except Exception:  # noqa: BLE001
+                    refusal = (f"Newspad {number}'s cover pages could not be set "
+                               f"up, so Newspad {outgoing} stayed open.")
+            if refusal is not None:
+                # The cursor goes back in the finally below, once.
+                self._switching = False
+                self._sync_newspad_button()
+                self._design_notes = []
+                self._collect_note = ""
+                self._flash(refusal, "bad")
+                self.touch_session()
+                if self._check_pending:
+                    self._check_pending = ""
+                    self.recheck_duplicates(force=True)
+                return False
 
             try:
                 # 4 -------------------------------------------------- pointer
@@ -3843,10 +4311,18 @@ class MainWindow(QMainWindow):
                 self._show_read_only(False)
                 self._check_pending = ""
 
+                # 6b ------------------------------------------- its own look
+                # Before the restore, whose earlier-day question is the one
+                # event loop in a switch: by then every panel points at, and
+                # shows, the incoming newspad's look, and no panel save is armed.
+                self._adopt_designs(self.newspad, seed=True, back_to=outgoing)
+
                 # 7 ----------------------------------------------------- load
                 ask = self.newspad not in self._opened
-                self._opened.add(self.newspad)
                 self.restore_session(ask=ask, arriving=True)
+                # Only once it has worked. Added before, a first open that
+                # failed would skip the earlier-day question the next time.
+                self._opened.add(self.newspad)
                 switched = True
             except Exception:  # noqa: BLE001 - never leave it half switched
                 self._back_to(outgoing, number)
@@ -3854,8 +4330,188 @@ class MainWindow(QMainWindow):
         finally:
             self._switching = False
             QApplication.restoreOverrideCursor()
-        self._after_switch()
+        self._after_switch(seeded_from=outgoing if (switched and seeded) else None)
         return switched
+
+    # ------------------------------------------------ each newspad's look
+    def _design_cards(self) -> list:
+        """The four panels that make a newspad's look."""
+        board = getattr(self, "board", None)
+        return [card for card in (
+            getattr(self, "cover", None), getattr(board, "cover", None),
+            getattr(self, "heading", None), getattr(board, "heading", None))
+            if card is not None]
+
+    @staticmethod
+    def _design_label(card) -> str:
+        return {"cover.json": "press cover page",
+                "sentiment_cover.json": "dossier cover page",
+                "heading_standard.json": "press headline style",
+                "heading_sentiment.json": "dossier headline style",
+                }.get(card.design_name, "design")
+
+    def _flush_designs(self, outgoing: int, forgive: bool = False) -> list:
+        """Write every panel's pending edit into the OUTGOING newspad's files.
+
+        Returns the panels whose change had to be left behind - only ever when
+        ``forgive`` is set, which is the second time somebody asks for the same
+        switch after being told the first one could not save.
+        """
+        dropped = []
+        for card in self._design_cards():
+            if card.design_file() != card.file_for(outgoing):
+                # Only reachable after a switch that went wrong part-way: a
+                # panel pointing at another newspad's file must write nothing.
+                card.hold()
+                continue
+            try:
+                card.flush(strict=True)
+                # A newspad 2-4 panel with no file yet gets one now, so that
+                # "missing" keeps meaning "never had a look of its own".
+                if (outgoing != 1 and card.trusted
+                        and not card.design_file().exists()):
+                    card.save(strict=True)
+            except Exception:
+                if not forgive:
+                    raise
+                card.drop_pending()
+                dropped.append(self._design_label(card))
+        return dropped
+
+    def _seed_designs(self, outgoing: int, number: int) -> bool:
+        """Give a newspad seen for the first time a copy of the look on screen.
+
+        Only files that are not there - an existing file is that newspad's own,
+        whatever it holds. Only a look that can be trusted: a panel showing the
+        defaults because its own file would not read is never copied, or a
+        newspad would inherit "DAILY PRESS CLIPPINGS REPORT" for good. Then the
+        outgoing newspad's file itself is copied, if IT reads; otherwise
+        nothing is. Returns whether anything was copied.
+        """
+        if number == 1:
+            return False
+        wrote = False
+        for card in self._design_cards():
+            target = card.file_for(number)
+            if target.exists():
+                continue
+            if card.trusted:
+                card.save(strict=True, to=target)
+                wrote = True
+                continue
+            try:
+                data = json.loads(card.file_for(outgoing).read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001 - nothing trustworthy to copy
+                continue
+            if not isinstance(data, dict):
+                continue
+            if card.design_name == "sentiment_cover.json":
+                for key in MORNING:
+                    data.pop(key, None)
+            newspads.write_design(target, json.dumps(data, indent=2,
+                                                     ensure_ascii=False))
+            wrote = True
+        return wrote
+
+    def _adopt_designs(self, number: int, seed: bool, back_to=None) -> None:
+        """Point all four panels at a newspad's files, and show them.
+
+        If any panel fails, they are all pointed back at ``back_to`` before the
+        error goes on, so the rollback starts from panels that agree with each
+        other - never some on one newspad's files and some on another's.
+        """
+        cards = self._design_cards()
+        try:
+            for card in cards:
+                card.adopt(card.file_for(number), seed=seed and number != 1)
+        except Exception:
+            if back_to is not None:
+                for card in cards:
+                    try:
+                        card.adopt(card.file_for(back_to), seed=False)
+                    except Exception:  # noqa: BLE001
+                        card.hold()
+            raise
+        finally:
+            # The board's "cover" tick follows the dossier card only when it
+            # is edited, and a load is not an edit.
+            mirror = getattr(self.board, "_mirror_cover_switch", None)
+            if callable(mirror):
+                try:
+                    mirror()
+                except Exception:  # noqa: BLE001
+                    pass
+        for card in cards:
+            if getattr(card, "_unreadable", False):
+                self._design_notes.append(
+                    f"Newspad {number}'s {self._design_label(card)} could not "
+                    f"be read, so it shows its defaults; the file is kept and "
+                    f"is only set aside if you change it.")
+
+    def _point_designs_at_launch(self) -> None:
+        """At launch the panels were built reading Newspad 1's files. If the
+        program opens on another newspad, point them at its own before anything
+        can be edited. A failure never stops the program opening: the panels
+        that are not on the right files are held, and it says so."""
+        if self.newspad == 1:
+            for card in self._design_cards():
+                if getattr(card, "_unreadable", False):
+                    self._design_notes.append(
+                        f"Newspad 1's {self._design_label(card)} could not be "
+                        f"read, so it shows its defaults; the file is kept and "
+                        f"is only set aside if you change it.")
+            return
+        try:
+            self._adopt_designs(self.newspad, seed=True)
+        except Exception:  # noqa: BLE001 - the program must still open
+            for card in self._design_cards():
+                if card.design_file() != card.file_for(self.newspad):
+                    card.hold()
+            self._design_notes.append(
+                f"Newspad {self.newspad}'s cover pages could not be opened, so "
+                f"changes to them are not being saved. Close the program and "
+                f"open it again.")
+
+    def _design_problem(self, message: str) -> None:
+        """A panel could not write its file while somebody was working."""
+        if self._switching:
+            self._design_notes.append(message)
+        else:
+            self._flash(message, "bad")
+
+    def _arrive(self, note: str, kind: str) -> None:
+        """Say what a restore brought back - now, or with the rest of a switch."""
+        if self._switching:
+            self._arrival = (note, kind)
+            return
+        if self._design_notes:
+            notes, self._design_notes = self._design_notes, []
+            note = " ".join([note, *notes])
+            kind = "bad"
+        self._flash(note, kind)
+
+    def designs_before_restore(self) -> None:
+        """A saved setup is about to be put back: write what is pending first."""
+        for card in self._design_cards():
+            try:
+                card.flush()
+            except Exception:  # noqa: BLE001 - the restore replaces it anyway
+                pass
+
+    def designs_after_restore(self, restored_names=None) -> None:
+        """Show what a saved setup just put back - never write over it."""
+        wanted = set(restored_names or [])
+        for card in self._design_cards():
+            key = newspads.design_key(self.newspad, card.design_name)
+            if wanted and key not in wanted:
+                continue
+            try:
+                card.reload()
+            except Exception:  # noqa: BLE001
+                card.hold()
+        mirror = getattr(self.board, "_mirror_cover_switch", None)
+        if callable(mirror):
+            mirror()
 
     def _back_to(self, outgoing: int, wanted: int) -> None:
         """A switch failed after the outgoing newspad was safely saved.
@@ -3871,15 +4527,20 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
         try:
+            # The panels first: they may already point at the other newspad's
+            # files, and must never save the outgoing look into them.
+            self._adopt_designs(outgoing, seed=False)
             self._clear_for_switch()
             self.newspad = outgoing
             self.store = SessionStore(newspads.folder(outgoing))
             self._read_only = False
             self._show_read_only(False)
             self.restore_session(ask=False, arriving=True)
-            self._flash(f"Newspad {wanted} could not be opened, so Newspad "
-                        f"{outgoing} stayed open.", "bad")
+            self._arrival = (f"Newspad {wanted} could not be opened, so Newspad "
+                             f"{outgoing} stayed open.", "bad")
         except Exception:  # noqa: BLE001
+            for card in self._design_cards():
+                card.hold()
             self._read_only = True
             self._stuck = True
             self._show_read_only(True, stuck=True)
@@ -3963,18 +4624,46 @@ class MainWindow(QMainWindow):
         self._refresh_board()
         self._update_counts()
 
-    def _after_switch(self) -> None:
+    def _after_switch(self, seeded_from=None) -> None:
+        """One message for the whole switch.
+
+        What the restore said comes first and keeps its warnings; the note
+        about a copied look and anything a panel could not do are added to it,
+        never put in its place - the status strip shows only the last message.
+        """
         self.setWindowTitle(self._title())
         self._sync_newspad_button()
         # The strip, if it is open, offers what is in THIS newspad's list.
         self._refresh_filter_choices()
         self.list.refresh_height()
-        if (not self._read_only and not self.model.rows
-                and not self.board_model.rows):
-            self._flash(
-                f"Newspad {self.newspad} is empty. Cover design, headings, "
-                f"sections, the newspaper list, the word list and duplicate "
-                f"learning are shared by all four newspads.", "info")
+        arrival, self._arrival = self._arrival, None
+        notes, self._design_notes = self._design_notes, []
+        n = self.newspad
+        empty = (not self._read_only and not self.model.rows
+                 and not self.board_model.rows)
+        parts, kind = [], "info"
+        if arrival is not None:
+            parts.append(arrival[0])
+            kind = arrival[1]
+        elif empty:
+            parts.append(f"Newspad {n} is empty.")
+        if seeded_from is not None:
+            parts.append(f"Its cover pages and headline style start as a copy "
+                         f"of Newspad {seeded_from}'s - changes made here stay "
+                         f"in Newspad {n}.")
+        elif empty and arrival is None:
+            parts.append("Its cover pages and headline style are its own; "
+                         "sections, the newspaper list, the word list and "
+                         "duplicate learning are shared by all four newspads.")
+        if notes:
+            parts.extend(notes)
+            kind = "bad"
+        if self._collect_note:
+            parts.append(self._collect_note.replace(
+                f"Newspad {n} is open. ", "", 1) if parts else self._collect_note)
+            self._collect_note = ""
+        if parts:
+            self._flash(" ".join(parts), kind)
 
     def where_things_are_kept(self) -> None:
         """What the program keeps, where it keeps it, and how to have a copy."""
@@ -3994,20 +4683,27 @@ class MainWindow(QMainWindow):
             "when you press it - whether a newer version has been published.",
             "",
             "WHAT IT REMEMBERS BY ITSELF",
-            "   " + (", ".join(said for _n, said, _s in here)
+            "   " + (", ".join(dict.fromkeys(said for _n, said, _s in here))
                      if here else "nothing set up yet"),
             f"   kept in {backup._folder()}",
             "   That folder is not inside the program's own folder, so "
             "updating the program never touches it. There is nothing you "
             "need to do.",
             "",
-            "THE FOUR NEWSPADS - each one's clippings, in its own folder",
+            "THE FOUR NEWSPADS - each one's clippings, cover pages and "
+            "headline style",
         ]
         for number in range(1, newspads.COUNT + 1):
             place = newspads.folder(number)
             state = ("open now" if number == self.newspad
                      else "in use" if place.exists() else "not used yet")
             lines.append(f"   Newspad {number}: {place}  ({state})")
+            look = newspads.design_folder(number)
+            lines.append(
+                f"      cover pages and headline style: {look}"
+                if number == 1 or look.exists() else
+                "      cover pages and headline style: copied from the newspad "
+                "you are in, the first time it is opened")
         lines += [
             "",
             "A COPY SOMEWHERE THAT IS BACKED UP",
@@ -4254,6 +4950,9 @@ class MainWindow(QMainWindow):
         # Before anything else, so a background pass that finishes during the
         # close finds the door shut rather than a half-deleted window.
         self._closing = True
+        collector = getattr(self, "collector", None)
+        if collector is not None:
+            collector.stop("closing")
         reader_thread = getattr(self, "_reader", None)
         if reader_thread is not None:
             try:
@@ -4338,6 +5037,20 @@ class MainWindow(QMainWindow):
                 self.height() - footer - self.batch.height() - 14,
             )
             self.batch.raise_()
+
+        # What a move did: where the bar was, or just above it when the bar is
+        # still there because the move was refused and the ticks stayed.
+        note = getattr(self, "move_note", None)
+        if note is not None and note.isVisible():
+            note.setFixedWidth(max(240, min(680, self.width() - 16)))
+            note.adjustSize()
+            x = max(8, (self.width() - note.width()) // 2)
+            if self.batch.isVisible():
+                y = self.batch.y() - note.height() - 8
+            else:
+                y = self.height() - footer - note.height() - 14
+            note.move(x, y)
+            note.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

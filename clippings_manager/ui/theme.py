@@ -74,6 +74,10 @@ HEADER_B = "#22385C"          # the crown itself, 4.5x lighter than the old void
 CROWN_WELL = "#1B3057"        # a group of controls, sunk into the crown
 CROWN_RAISED = "#2E4877"      # controls sitting on the crown
 CROWN_HOVER = "#3A5691"
+# Collect from WhatsApp, switched on: white on this green is 7.13:1, and the
+# light green edge stands out 8.36:1 against the crown.
+COLLECT_ON = "#166534"
+COLLECT_ON_LINE = "#86EFAC"
 CROWN_SUB = "#D7E1F2"         # secondary text on the crown
 CROWN_DIM = "#B3C2DC"         # tertiary text on the crown
 CROWN_AMBER = "#FDBA74"       # the crown's orange, readable where ORANGE is not
@@ -122,6 +126,9 @@ SOURCE_STYLES = {
     "pdf":       {"label": "PDF",       "fg": "#991B1B", "bg": "#FEE2E2", "line": "#FCA5A5"},
     "clipboard": {"label": "Clipboard", "fg": "#5B21B6", "bg": "#EDE9FE", "line": "#C4B5FD"},
     "image":     {"label": "Photo",     "fg": "#065F46", "bg": "#D1FAE5", "line": "#6EE7B7"},
+    # The headings of a list that "Filter and arrange" has sorted - "Hindi",
+    # "Dainik Jagran" - which are not files at all.
+    "arranged":  {"label": "Sorted",    "fg": "#122A52", "bg": "#EEF2FA", "line": "#AFC0DD"},
 }
 
 # QColor shortcuts for the painters
@@ -309,6 +316,9 @@ QPushButton#HeaderButton {{
 }}
 QPushButton#HeaderButton:hover {{
     background: {CROWN_HOVER}; border-color: {ORANGE}; color: #FFFFFF;
+}}
+QPushButton#HeaderButton:checked {{
+    background: {COLLECT_ON}; border: 1px solid {COLLECT_ON_LINE}; color: #FFFFFF;
 }}
 /* Brand ORANGE is only 4.0:1 on the crown and this is 10px text. */
 #ModeLabel {{

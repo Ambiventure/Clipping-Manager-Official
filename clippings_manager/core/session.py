@@ -134,6 +134,15 @@ class SessionStore:
             self._atomic_bytes(target, data)
         return name
 
+    def has_blob(self, name: str) -> bool:
+        """Whether this picture is still on disk. The tidy-up after a save
+        removes pictures the manifest no longer names, and Ctrl+Z can then bring
+        back a clipping whose picture has gone."""
+        try:
+            return bool(name) and (self.blobs / name).is_file()
+        except OSError:
+            return False
+
     def get_blob(self, name: str) -> Optional[bytes]:
         target = self.blobs / name
         try:

@@ -4,10 +4,11 @@ Until now the caption above every clipping printed at one fixed size, centred, i
 one face, on A4 - the numbers were constants in ``export/layout.py``. This is that
 same set of decisions, handed to the person compiling the newspad.
 
-Each interface keeps its own copy. The press report and the sentiment dossier are
-different documents for different readers, and this project has treated them as
-independent in every other respect; a division dossier set in 12pt serif should not
-quietly re-set tomorrow's newspad.
+Each interface keeps its own copy, and each newspad its own copy of both. The
+press report and the sentiment dossier are different documents for different
+readers, and this project has treated them as independent in every other respect;
+a division dossier set in 12pt serif should not quietly re-set tomorrow's newspad,
+and one report's headline style should not re-set another's.
 
 **The defaults are today's behaviour, exactly.** 15pt because that is what
 ``layout.CAPTION_SIZE`` has always been - not the 11pt a word processor would
@@ -23,7 +24,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from . import theme
 from .cover_card import Segmented, settings_dir
+from .design_file import DesignFile
 from .fluid import ElidedLabel, FlowLayout
 
 # Every choice, and what it is called on screen.
@@ -106,18 +108,26 @@ def defaults_for(key: str) -> dict:
 
 
 def settings_for(key: str) -> Path:
-    """One file per interface, so neither can disturb the other."""
+    """Newspad 1's file for one interface, so neither can disturb the other. The
+    other newspads' are in their design folders - see DesignFile.adopt."""
     return settings_dir() / f"heading_{key}.json"
 
 
-def load_layout(key: str) -> dict:
-    """The saved choices for one interface, filled in with today's behaviour."""
+def load_layout(key: str, path: Optional[Path] = None) -> dict:
+    """The saved choices for one interface, filled in with today's behaviour.
+
+    Newspad 1's file unless another is named."""
+    try:
+        saved = json.loads(Path(path or settings_for(key)).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a missing or broken file is just defaults
+        saved = {}
+    return normalise_layout(key, saved)
+
+
+def normalise_layout(key: str, saved) -> dict:
+    """Whatever a file said, made into choices the exporter can use."""
     fallbacks = defaults_for(key)
     data = dict(fallbacks)
-    try:
-        saved = json.loads(settings_for(key).read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 - a missing or broken file is just defaults
-        return data
     if not isinstance(saved, dict):
         return data
     for name, fallback in fallbacks.items():
@@ -150,14 +160,21 @@ def load_layout(key: str) -> dict:
     return data
 
 
-class HeadingLayoutCard(QFrame):
-    """The heading and page settings for one interface."""
+class HeadingLayoutCard(QFrame, DesignFile):
+    """The heading and page settings for one interface, in one newspad.
+
+    A bare HeadingLayoutCard(key) is Newspad 1's, reading heading_{key}.json in
+    the settings folder as every older build does. See ui/design_file.py.
+    """
 
     changed = Signal()
+    designProblem = Signal(str)
 
     def __init__(self, key: str, subtitle: str = "", parent=None):
         super().__init__(parent)
         self.key = key
+        self.design_name = f"heading_{key}.json"
+        self._init_design()
         self.setObjectName("LayoutStrip")
         self.setStyleSheet(
             f"#LayoutStrip {{ background: {theme.THUMB_BG};"
@@ -165,7 +182,7 @@ class HeadingLayoutCard(QFrame):
             f"#LayoutStrip QLabel {{ background: transparent; border: none; }}"
         )
         self._defaults = defaults_for(key)
-        self._values = load_layout(key)
+        self._values = dict(self._defaults)
         self._loading = True
 
         # Settings live in APPDATA, which is a roaming network profile in a lot of
@@ -176,7 +193,7 @@ class HeadingLayoutCard(QFrame):
         self._save_timer.timeout.connect(self.save)
 
         self._build(subtitle)
-        self._apply()
+        self.load()
         self._loading = False
 
     # ------------------------------------------------------------------ build
@@ -310,7 +327,7 @@ class HeadingLayoutCard(QFrame):
             "align": self.align_pick.value(),
             "page_numbers": self.page_box.isChecked(),
         }
-        self._save_timer.start()
+        self._changed_design()
         self.changed.emit()
 
     def reset(self) -> None:
@@ -319,26 +336,33 @@ class HeadingLayoutCard(QFrame):
         self._loading = True
         self._apply()
         self._loading = False
-        self._save_timer.start()
+        self._changed_design()
         self.changed.emit()
 
     # ------------------------------------------------------------------ disk
-    def save(self) -> None:
-        try:
-            path = settings_for(self.key)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._values, indent=1), encoding="utf-8")
-        except Exception:  # noqa: BLE001 - a settings write must never stop work
-            pass
+    # save(), flush(), load(), adopt() and hold() are DesignFile's.
+    def _root_file(self) -> Path:
+        return settings_for(self.key)
 
-    def flush(self) -> None:
-        """Write anything the debounce is still holding."""
-        if self._save_timer.isActive():
-            self._save_timer.stop()
-            self.save()
+    def _design_state(self) -> dict:
+        return dict(self._values)
 
-    def load(self) -> None:
-        self._values = load_layout(self.key)
+    def _design_dump(self, state: dict) -> str:
+        return json.dumps(state, indent=1)
+
+    def _take_design(self, data: dict) -> None:
+        """Put a heading file's choices on the controls. _loading AND blocked
+        signals: _read takes every control at once, so a single stray signal
+        part-way through would save a mix of two newspads' choices."""
+        self._values = normalise_layout(self.key, data)
+        was = self._loading
         self._loading = True
-        self._apply()
-        self._loading = False
+        blockers = [QSignalBlocker(control) for control in (
+            self.page_pick, self.family_pick, self.size_pick, self.bold_box,
+            self.page_box, self.align_pick)]
+        try:
+            self._apply()
+        finally:
+            for blocker in blockers:
+                blocker.unblock()
+            self._loading = was

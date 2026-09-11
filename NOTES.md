@@ -862,6 +862,29 @@ back from that save; if even that fails, nothing more is saved until the program
 is opened again. An emptied window must never be saved: the tidy-up after a save
 deletes every picture the manifest no longer names.
 
+**Each newspad has its own look (2.0.22).** Two reports with different titles
+need two different covers - the first build shared the covers and the user said
+so at once. So the two cover cards and the two headline-style panels became each
+newspad's own: Newspad 1's in the four root files every older build reads,
+newspads 2-4's under the same names in `design-N`, beside their session folders
+and never inside them, so Start fresh, the tidy-up and set-aside cannot reach
+them. The danger this moved to the switch is the measured one - a panel saving
+the whole file into the wrong place - so the rules live once, in
+`ui/design_file.py`: a panel's file is its own state, never worked out at save
+time; pending edits go to the file being left before the panel moves; a load
+never saves; a save is armed only when the DESIGN changed (a date or a division
+line is the newspad's own and lives in its session, and letting it rewrite the
+design meant a file that would not write could trap somebody in a newspad for
+changing the day); every write is whole or nothing. A newspad seen for the first
+time gets a copy of the look on screen - only a look that can be trusted: never
+the defaults a panel shows because its own file would not read, which would
+otherwise become that newspad's cover for good. A file that will not read is
+never written over; it is set aside, renamed, only when somebody changes that
+design. A failed design save refuses the switch once and says so; asked again,
+the switch goes ahead and names the change it left behind. Saved setups carry
+every newspad's look, and a restore reloads only the open panels whose file it
+put back.
+
 **A check under way is settled, not abandoned.** The pass is stopped and waited
 for, and what it had read is copied back before the newspad leaves, so coming
 back reads only the rest (8 of 24 kept, 16 read on return, the same pairs as an
@@ -895,6 +918,121 @@ picture is missing, the headline typed just before the switch is on disk, and a
 relaunch opens the newspad the pointer names. And the 2.0.19 build run against a
 machine with three newspads opens Newspad 1 whole and leaves the rest
 byte-for-byte alone.
+
+## Collect from WhatsApp (2.0.22)
+
+The loose clippings arrive in WhatsApp Web as photos with a caption under each.
+Adding one used to be: drag or copy the photo, come back to this window, type
+the newspaper. Collect lets somebody stay in Chrome - Copy image, then select
+the caption and Ctrl+C - and the program takes each copy as it happens.
+
+**Why the clipboard and nothing cleverer.** WhatsApp's terms forbid automating
+it. Its "Export chat" keeps the captions, but without media every picture is
+"<image omitted>", and with media the export has to be made on the phone and
+carried across - slower than the copying it would replace, and its layout could
+not be checked against a real one. The clipboard is the one thing the person
+already does by hand. It is read only while Collect is on, from the button, and
+never remembered across launches.
+
+**The watcher (ui/clipwatch.py).** The "clipboard changed" signal only counts;
+the read happens 150 ms later, never inside the notification, because the
+copying program may still be writing. If another program holds the clipboard
+open it retries at 150/300/600/1200 ms rather than blocking. Copies marked
+private are not read at all: password managers set
+ExcludeClipboardContentFromMonitorProcessing, and Chrome sets
+CanIncludeInClipboardHistory to zero on every copy from an Incognito or Guest
+window. Only pictures, plain text and a file list (to say files are not
+collected) are asked for; formats a browser renders on demand never are.
+
+**Pairing never guesses (ui/collect.py).** A caption goes on the photo added
+most recently, and only if that photo has no name yet. A caption with no photo
+waiting, a second caption for a named photo, text that is not clearly a caption:
+refused out loud, with one button that puts it where it was probably meant. One
+missed photo copy therefore cannot shift every later caption along by one,
+which is the mistake that would print a wrong newspaper on a morning's worth of
+clippings. Every photo and every naming is one undo step on the stack of the
+interface it went to.
+
+**The caption reader is strict on purpose (core/copied.py).** parse_caption is
+built to make the best of a document, and measured it reads "Sir please see
+Amar Ujala today" as Amar Ujala. On a clipboard that is the wrong instinct. The
+paper has to be at one end and spelt as the list spells it - vowel signs kept,
+one typing slip forgiven only in a name of seven letters or more - because the
+index's containment score read "Muzaffarnagar" as Srinagar and "शाम"
+("evening") as Shimla, both at full confidence. The words after the paper have
+to be a listed city, all of them, or a real town from the reader's own PLACES
+list (about 340, with Hindi and Punjabi spellings), printed in English at 0.8:
+a word merely missing from the list printed "Amar Ujala nahi mila" as the Nahi
+Mila edition. Three adversaries threw 58 misreads at it; after the fixes a
+sweep of every listed paper against every listed city (33,170 readings) gives
+no wrong name, and the worst read is 5 ms. Reasons for a refusal are fixed
+sentences: a refused copy might be a password, and it is never shown back on
+screen.
+
+**Quiet arrival.** A collected photo does not raise the window, take focus or
+open the headline box, because the person is in Chrome. A headline box that a
+drag had opened and left empty is put away before a copied caption fills that
+clipping - committed if typed in, cancelled if not - or its empty text would be
+taken for "no headline" and hide the name. Ctrl+V after Collect has taken the
+copy says it is not needed instead of adding the photo twice.
+
+**It stops itself** on a newspad switch (copies waiting are dropped and
+counted), on close, and in a newspad that cannot save.
+
+**Found by its suite.** Collect read `_pending_section` before every photo,
+and the window only created it on the first paste or column Add, so the first
+collected photo of a session failed. It is now set in the window's constructor.
+One trap in the testing itself: data a script puts on Qt's offscreen clipboard
+crashes the interpreter on exit (0xC0000005) with or without Collect. The
+program never writes to the clipboard; the suites clear it before quitting.
+
+## The selection bar: Include, Move to, no Rotate (2.0.22)
+
+Asked for together, and pinned until Collect was done.
+
+**Exclude reads Include** when every ticked clipping is already out. A mixed
+selection is taken OUT, never put back: putting back a clipping the duplicate
+check excluded also marks it "not a duplicate" for good (SetIncluded), which
+nobody pressing a button for five clippings meant for the one they had not
+noticed. The right-click "Exclude these N" had been pushing included=True for
+any group, so it put them back in; it now goes through the same function.
+
+**"Move to" means another file's bracket.** What "category" meant was settled
+from the user's own earlier AI Studio build, whose navy bar this one copied: it
+had "Move to Category ▾" in the same place, listing the file groups, and its
+screens called file groups categories. A move changes Row.group_key and nothing
+else - source_kind and source_name keep saying where the picture came from,
+because the card tag, the preview and the duplicate review all show them.
+
+Two things made it more than a reorder, both found by a design review before it
+shipped:
+
+*   **Section headings are positional.** A heading is carried by the one
+    clipping that opens a run; everything after it prints under it until the
+    next. Moving the ELECTRONIC MEDIA opener into an earlier file put an
+    unmoved Positive clipping under ELECTRONIC MEDIA. plan_move_into hands the
+    heading to the next clipping that stays, then runs the exporter's own rule
+    (section_banners, through openers_of - the same path as the card's red
+    chip) over the proposed order, and refuses unless every staying clipping
+    prints under exactly the heading it did before. WhatsApp pictures never
+    carry headings, so the everyday move never meets a refusal.
+*   **Ticks add up.** A card's checkbox never replaces the selection, so ticks
+    left after a move rode along with the next one. They are cleared inside the
+    undo step, and undo brings them back.
+
+Moved rows take the fold of the bracket they arrive in; fold sets are worked out
+again from the rows, because run idents are numbered by order and a move can
+renumber them. The note about what happened sits where the bar was: the status
+line is at the top of the page, scrolled away while somebody works down the list.
+
+**Found while mapping it, fixed with it.** "Send to the sentiment board" undid
+from whole-list snapshots on the report's history while the board kept its own:
+a card deleted on the board came back, and the board's undo could then put the
+sent clipping on both screens as one shared object. It now moves rows one by one
+and clears the board's history whenever rows cross. And a list sorted by "Filter
+and arrange" painted its headings blank: the badge-icon lookup indexed a dict
+that had no entry for arranged groups, so the KeyError stopped the header after
+its badge - no title, no count, invisible but working buttons.
 
 ## Making the window narrow
 

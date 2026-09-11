@@ -150,7 +150,7 @@ class Clip:
     page: str = ""
 
     # --- where the name came from, and how sure we are --------------------------
-    name_source: str = ""         # "caption" | "ocr" | "manual" | "" (nothing found)
+    name_source: str = ""         # "caption" | "ocr" | "manual" | "copied" | ""
     name_confidence: float = 0.0  # 0.0-1.0, whatever the source
     ocr_text: str = ""            # the headline read off the picture, for matching
     # What language the clipping itself appears to be in, worked out once from

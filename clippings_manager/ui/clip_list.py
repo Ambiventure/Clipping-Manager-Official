@@ -454,6 +454,23 @@ class ClipList(QListView):
         editor.removeEventFilter(self)
         editor.deleteLater()
 
+    def settle_editor(self, clip_id: int) -> None:
+        """Put away an open headline box on this clipping before something else
+        names it.
+
+        Typed in: committed - the person's words win, as their own undo step.
+        Untouched: cancelled. Committed untouched, its empty text would be
+        taken as "no headline" and hide the caption about to be put there,
+        because a box opened on an unnamed clipping starts empty and switching
+        to another window does not close it.
+        """
+        if self._editor is None or self._editing_id != clip_id:
+            return
+        if self._editor.isModified():
+            self.commit_editor()
+        else:
+            self.cancel_editor()
+
     def _commit_and_advance(self, step: int = 1) -> None:
         """Enter commits and drops into the next clipping's label box."""
         clip_id = self._editing_id

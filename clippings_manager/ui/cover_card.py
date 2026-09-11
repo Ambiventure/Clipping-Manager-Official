@@ -2,7 +2,8 @@
 
 The department's newspad opens with the same cover every day, carrying only two
 lines that change: how many clippings there are, and today's date. Option 1 keeps
-that habit - the office artwork is chosen once, remembered on this machine, and the
+that habit - the office artwork is chosen once for each newspad, remembered on this
+machine, and the
 two lines are composited onto it wherever the user clicks. Option 2 is for the days
 there is no artwork: a blank A4 page built from a heading, a logo and a date.
 
@@ -54,6 +55,7 @@ from PySide6.QtWidgets import (
 from ..core import cover_render
 from . import icons, theme
 from .datefield import DayEdit, refuse_future  # noqa: F401
+from .design_file import DesignFile
 
 # The preview has to be big enough to read. A 24pt caption on a 1240px-wide
 # scan is 30px tall - 1.7% of the page - so at the old 300px box it landed at
@@ -809,10 +811,17 @@ class PagePreview(QLabel):
         self._rescale()
 
 
-class CoverCard(QFrame):
-    """Cover artwork and page settings, with a live preview of the real cover."""
+class CoverCard(QFrame, DesignFile):
+    """Cover artwork and page settings, with a live preview of the real cover.
+
+    One newspad's own: which file it reads and writes is set by adopt(), and a
+    bare CoverCard() is Newspad 1's, reading cover.json exactly as every older
+    build does. See ui/design_file.py for the rules a switch depends on.
+    """
 
     changed = Signal()
+    designProblem = Signal(str)
+    design_name = "cover.json"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -825,6 +834,7 @@ class CoverCard(QFrame):
         self._count = 0
         self._loading = False
         self._artwork_cache: tuple[str, Optional[QImage]] = ("", None)
+        self._init_design()
 
         # Rendering the whole A4 page on every keystroke would make typing feel
         # sticky, so edits coalesce into one repaint.
@@ -881,7 +891,9 @@ class CoverCard(QFrame):
         step.setAlignment(Qt.AlignCenter)
         title = QLabel("Cover Page Template")
         title.setObjectName("CardTitle")
-        self.saved_note = QLabel("(Optional / Saved on device)")
+        # Each newspad keeps its own cover - see _mark_what_is_whose, which
+        # says so in the tooltip.
+        self.saved_note = QLabel("(Optional / Per newspad)")
         self.saved_note.setObjectName("SubtleHint")
         header.addWidget(step)
         header.addWidget(title)
@@ -1012,7 +1024,7 @@ class CoverCard(QFrame):
 
         blurb = QLabel(
             "Upload your standard cover page image with your brand or logo. Once "
-            "chosen it is saved on this computer for future sessions."
+            "chosen it is saved on this computer for this newspad."
         )
         blurb.setWordWrap(True)
         blurb.setStyleSheet(
@@ -1364,6 +1376,12 @@ class CoverCard(QFrame):
         self.template = self.template_pick.itemData(index) or 1
         self.pages.setCurrentIndex(0 if self.template == 1 else 1)
         self._touch()
+        # At once, not on the debounce. The page just brought forward still shows
+        # whatever it last drew - after a newspad switch, another report's cover
+        # - and 140ms of that is long enough to be seen.
+        if not self._loading:
+            self._debounce.stop()
+            self._repaint_preview()
 
     def _choose_cover(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1487,7 +1505,9 @@ class CoverCard(QFrame):
             self._loading = True
             self.date_mirror.setDate(self.date_edit.date())
             self._loading = False
-        self._save_timer.start()
+        # Only a change to the DESIGN is saved. The date comes through here too,
+        # and it is the newspad's own value, kept in its session.
+        self._changed_design()
         self._refresh_state()
         self._debounce.start()
         self.changed.emit()
@@ -1696,57 +1716,90 @@ class CoverCard(QFrame):
             "option2": asdict(self.option2),
         }
 
-    def save(self) -> None:
+    # save(), flush(), load(), adopt() and hold() are DesignFile's: which
+    # newspad's file this is, and when it may be written, are decided there.
+    def _root_file(self) -> Path:
+        return _file()
+
+    def _design_state(self) -> dict:
+        return self._state()
+
+    def _repaint_now(self) -> None:
+        self._debounce.stop()
+        self._repaint_preview()
+
+    def _take_design(self, data: dict) -> None:
+        """Put a cover.json on the panel. Checked value by value, and all of it
+        at once, so a bad value can never leave half of one newspad's cover and
+        half of another's on screen."""
+        def words(value, default=""):
+            return value if isinstance(value, str) else default
+
         try:
-            _file().write_text(
-                json.dumps(self._state(), indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception:  # noqa: BLE001 - settings are a convenience
-            pass
+            template = 2 if int(data.get("template", 1) or 1) == 2 else 1
+        except (TypeError, ValueError):
+            template = 1
 
-    def flush(self) -> None:
-        """Write any settings the debounce is still holding."""
-        if self._save_timer.isActive():
-            self._save_timer.stop()
-            self.save()
-
-    def load(self) -> None:
-        try:
-            data = json.loads(_file().read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - no settings yet
-            data = {}
-
-        self._loading = True
-        self.cover_path = data.get("cover", "") or ""
-        self.template = 2 if int(data.get("template", 1) or 1) == 2 else 1
-
+        # Always reset. Keeping the marker when a file had none carried one
+        # newspad's caption position into the next newspad's cover.
+        marker = None
         spot = data.get("marker")
-        if isinstance(spot, dict) and "x" in spot and "y" in spot:
-            self.marker = cover_render.Marker(
-                x_pct=float(spot["x"]), y_pct=float(spot["y"])
-            )
+        if isinstance(spot, dict):
+            try:
+                marker = cover_render.Marker(
+                    x_pct=min(100.0, max(0.0, float(spot["x"]))),
+                    y_pct=min(100.0, max(0.0, float(spot["y"]))))
+            except (KeyError, TypeError, ValueError):
+                marker = None
 
-        text = data.get("text") or {}
-        self.text = cover_render.CoverText(
-            font_pt=int(text.get("font_pt", 24)),
-            bold=bool(text.get("bold", True)),
-            colour=str(text.get("colour", "white")),
-            align=str(text.get("align", "center")),
+        stored_text = data.get("text") if isinstance(data.get("text"), dict) else {}
+        try:
+            font_pt = int(stored_text.get("font_pt", 24))
+        except (TypeError, ValueError):
+            font_pt = 24
+        align = stored_text.get("align")
+        text = cover_render.CoverText(
+            font_pt=font_pt,
+            bold=bool(stored_text.get("bold", True)),
+            colour=("black" if str(stored_text.get("colour", "white")).lower()
+                    == "black" else "white"),
+            align=align if align in ("left", "center", "right") else "center",
         )
 
-        stored = data.get("option2") or {}
+        stored = data.get("option2") if isinstance(data.get("option2"), dict) else {}
         fresh = cover_render.Option2()
         for key, value in stored.items():
-            if hasattr(fresh, key) and value is not None:
+            if not hasattr(fresh, key) or value is None:
+                continue
+            default = getattr(fresh, key)
+            if isinstance(default, bool):
+                ok = isinstance(value, bool)
+            elif isinstance(default, int):
+                ok = isinstance(value, int) and not isinstance(value, bool)
+            elif isinstance(default, float):
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+                value = float(value) if ok else value
+            else:
+                ok = isinstance(value, str)
+            if ok:
                 setattr(fresh, key, value)
+        if fresh.title_align not in ("left", "center", "right"):
+            fresh.title_align = "center"
         # An older settings file only knew one heading field.
-        if not stored and data.get("heading"):
+        if not stored and words(data.get("heading")):
             fresh.title = data["heading"]
-        self.option2 = fresh
 
-        self._write_widgets()
-        self._loading = False
+        was = self._loading
+        self._loading = True
+        try:
+            self.cover_path = words(data.get("cover"))
+            self.template = template
+            self.marker = marker
+            self.text = text
+            self.option2 = fresh
+            self._write_widgets()
+        finally:
+            self._loading = was
         self._refresh_state()
         self._debounce.start()
 

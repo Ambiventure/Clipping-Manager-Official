@@ -243,7 +243,11 @@ class ExportDialog(QDialog):
 
         # --- cover ---------------------------------------------------------
         cover_row = QHBoxLayout()
-        self.cover = QLineEdit(cover_image or saved.get("cover", ""))
+        # The newspad's own cover card's picture, or nothing. It used to fall
+        # back to the last picture chosen in this box - remembered in the one
+        # shared export.json - which put one report's cover on another
+        # newspad's report.
+        self.cover = QLineEdit(cover_image or "")
         self.cover.setPlaceholderText("optional — your standard cover artwork")
         pick_cover = QPushButton("Choose…")
         clear_cover = QPushButton("Clear")
@@ -421,13 +425,16 @@ class ExportDialog(QDialog):
         # only these seven keys, so every export silently deleted
         # "auto_duplicates" - "Check automatically" - which lives in the same
         # file. Measured: it did not survive a single export.
+        # No "cover": a cover belongs to its newspad, and this file is shared
+        # by all four. One an older build left here is dropped.
+        kept = {key: value for key, value in load_settings().items()
+                if key != "cover"}
         save_settings(
             {
-                **load_settings(),
+                **kept,
                 "pdf": self.want_pdf.isChecked(),
                 "docx": self.want_docx.isChecked(),
                 "folder": str(folder),
-                "cover": "" if self.cover_baked else (cover or ""),
                 "open_after": self.open_after.isChecked(),
                 "page": page,
                 "fit": fit,

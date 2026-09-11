@@ -144,10 +144,14 @@ class EntryDelegate(QStyledItemDelegate):
         painter.setBrush(QColor(style["bg"]))
         painter.drawRoundedRect(QRectF(geo.badge).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
         icon_box = QRectF(geo.badge.left() + 5, geo.badge.center().y() - 7, 14, 14)
+        # .get, never an index: a heading of an arranged list has no file
+        # behind it, and a KeyError here used to stop the header half-painted -
+        # no title, no count, and buttons that worked but could not be seen.
         drawer = {
             "word": icons.file_word, "pdf": icons.file_pdf,
             "clipboard": icons.image, "image": icons.image,
-        }[group.source_kind]
+            "arranged": icons.layers,
+        }.get(group.source_kind, icons.image)
         drawer(painter, icon_box, QColor(style["fg"]))
         font = painter.font()
         font.setPixelSize(11)
@@ -524,6 +528,8 @@ class EntryDelegate(QStyledItemDelegate):
             bits.append("· title is printed on the clipping")
         elif clip.name_source == "caption":
             bits.append("· read from the caption")
+        elif clip.name_source == "copied":
+            bits.append("· from a copied caption")
         elif clip.name_source == "ocr":
             bits.append("· read from the image")
         elif clip.name_source == "manual":

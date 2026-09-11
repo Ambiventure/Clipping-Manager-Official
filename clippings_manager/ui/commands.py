@@ -7,6 +7,7 @@ reorder, the batch delete and the merge are all commands like everything else.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable
 
 from PySide6.QtGui import QUndoCommand
@@ -157,6 +158,46 @@ class EditField(_Base):
         self.model.refresh_clip(self.clip_id)
 
 
+class FillFromCopy(_Base):
+    """A caption or a link copied in WhatsApp, put on one clipping in one step.
+
+    Everything it may change is recorded before and after, so undo puts back
+    exactly what was there. It never merges with anything: one copy, one step,
+    so "undo that" means the copy and nothing else. The printed headline is not
+    among the fields - a headline somebody typed keeps printing, with the page
+    added after it.
+    """
+
+    FIELDS = ("caption_raw", "newspaper", "edition", "page", "name_source",
+              "name_confidence", "no_title", "url", "show_url_box")
+
+    def __init__(self, model: "ClipModel", clip_id: int, values: dict,
+                 text: str = "Caption copied"):
+        super().__init__(model, text)
+        clip = model.by_id(clip_id)
+        self.clip_id = clip_id
+        self.before = {name: getattr(clip, name) for name in self.FIELDS}
+        self.after = {**self.before,
+                      **{key: value for key, value in values.items()
+                         if key in self.FIELDS}}
+
+    def _put(self, values: dict) -> None:
+        row = self.model.row_for(self.clip_id)
+        if row is None:
+            return
+        for key, value in values.items():
+            setattr(row.clip, key, value)
+        self.model.refresh_clip(self.clip_id)
+        # A card that gains its link box as well is a taller row.
+        self.model.layoutChanged.emit()
+
+    def redo(self) -> None:
+        self._put(self.after)
+
+    def undo(self) -> None:
+        self._put(self.before)
+
+
 class SetFieldOnMany(_Base):
     """Set one field across a selection, in a single undo step."""
 
@@ -267,14 +308,17 @@ class Rotate(_Base):
 
 def _identity(rows) -> dict:
     """Which bracket each row belongs to, captured by value."""
-    return {r.id: (r.group_key, r.source_kind, r.source_name) for r in rows}
+    return {r.id: (r.group_key, r.source_kind, r.source_name,
+                   getattr(r, "home_title", ""), getattr(r, "home_kind", ""))
+            for r in rows}
 
 
 def _restore(rows, identity: dict) -> None:
     for row in rows:
         remembered = identity.get(row.id)
         if remembered:
-            row.group_key, row.source_kind, row.source_name = remembered
+            (row.group_key, row.source_kind, row.source_name,
+             row.home_title, row.home_kind) = remembered
 
 
 def reparent(rows, clip_ids, group_key: str, source_kind: str, source_name: str) -> None:
@@ -325,6 +369,239 @@ def move_to(model: "ClipModel", clip_ids: Iterable[int], target: int) -> list:
     above = sum(1 for r in model.rows[:target] if r.id in ids)
     at = max(0, min(target - above, len(rest)))
     return rest[:at] + moving + rest[at:]
+
+
+# ------------------------------------------------------------ Move to a file
+#
+# "Move to:" on the selection bar files the ticked clippings under another
+# file's bracket, at its end - what the earlier AI Studio version called moving
+# them to another category. Two things make it more than a reorder.
+#
+# The bracket is Row.group_key and nothing else. The file name and kind on the
+# row say where the picture really came from - the card's tag, the preview, the
+# duplicate review all show them - so they are left alone.
+#
+# And a section heading belongs to ONE clipping, while which clippings print
+# under it depends only on order. Moving the clipping that opens ELECTRONIC MEDIA
+# would take the heading with it, and the clippings it leaves behind would print
+# under whatever came before. So the heading is handed to the next clipping that
+# stays, and a move that would still change where any heading prints is refused.
+# Every clipping that stays prints under exactly the heading it did before.
+
+@dataclass
+class MovePlan:
+    """What a move into a file would do, worked out without doing any of it."""
+
+    run_ident: str
+    run_key: str
+    run_title: str
+    run_kind: str
+    moving: list                 # ids that change file, in list order
+    already: list                # ticked ids already in that file: they stay put
+    rows_after: list
+    fields: list = field(default_factory=list)    # (clip id, field, old, new)
+    handoffs: list = field(default_factory=list)  # (from id, to id, words)
+    now_under: str = ""          # the heading the moved ones print under after
+    was_under: list = field(default_factory=list)
+    refused: str = ""            # why not, in words for the person
+    refused_words: str = ""      # the heading that stopped it
+
+
+def _stored_words(clip, chosen) -> str:
+    """The heading words a clipping carries, printing or not."""
+    return (clip.section_title or "").strip() or (
+        chosen.words_for(clip.section_key) if clip.section_key else "")
+
+
+def plan_move_into(model: "ClipModel", clip_ids: Iterable[int], run) -> MovePlan:
+    """Work out moving these clippings to the end of ``run``. Changes nothing."""
+    from ..core import sections as section_list
+    from .model import heading_over, openers_of
+
+    wanted = set(clip_ids)
+    in_run = set(run.row_ids)
+    ordered = [r.id for r in model.rows if r.id in wanted]
+    plan = MovePlan(
+        run_ident=run.ident, run_key=run.key, run_title=run.title,
+        run_kind=run.source_kind,
+        moving=[i for i in ordered if i not in in_run],
+        already=[i for i in ordered if i in in_run],
+        rows_after=list(model.rows),
+    )
+    if not plan.moving:
+        return plan
+    plan.rows_after = move_to(model, plan.moving,
+                              model.position_of(run.rows[-1].id) + 1)
+    movers = set(plan.moving)
+    before = openers_of(model.rows)
+    expected = {i: w for i, w in before.items() if i not in movers}
+    overrides: dict = {}
+    chosen = section_list.load()
+    included = [r for r in model.rows if r.clip.include]
+    place = {r.id: n + 1 for n, r in enumerate(model.rows)}
+
+    for index, row in enumerate(included):
+        if row.id not in movers or row.id not in before:
+            continue
+        words = before[row.id]
+        successor = None
+        for later in included[index + 1:]:
+            if later.id in before:
+                break                   # the next heading starts: nobody stays
+            if later.id not in movers:
+                successor = later
+                break
+        if successor is None:
+            plan.refused = (f"these are all the clippings under {words}, so the "
+                            f"heading would go with them")
+            plan.refused_words = words
+            return plan
+        carried = _stored_words(successor.clip, chosen)
+        if carried and carried != words:
+            plan.refused = (f"{words} could not be passed on to No. "
+                            f"{place[successor.id]}, which has a heading of its own")
+            plan.refused_words = words
+            return plan
+        expected[successor.id] = words
+        plan.handoffs.append((row.id, successor.id, words))
+        clip = row.clip
+        if (clip.section_key or clip.section_title) and not carried:
+            overrides[successor.id] = (clip.section_key, clip.section_title)
+            for name in ("section_key", "section_title"):
+                plan.fields.append((successor.id, name,
+                                    getattr(successor.clip, name),
+                                    getattr(clip, name)))
+        if clip.section_key or clip.section_title:
+            overrides[row.id] = ("", "")
+            for name in ("section_key", "section_title"):
+                plan.fields.append((row.id, name, getattr(clip, name), ""))
+
+    # A moved clipping that carries heading words without printing them - left
+    # out, or a second carrier of words already printed higher up - drops them
+    # too. Kept, they would print in the new file the moment it was ticked back
+    # in, and take the heading off the clippings that never moved.
+    for rid in plan.moving:
+        clip = model.row_for(rid).clip
+        if rid in overrides or not (clip.section_key or clip.section_title):
+            continue
+        overrides[rid] = ("", "")
+        for name in ("section_key", "section_title"):
+            plan.fields.append((rid, name, getattr(clip, name), ""))
+
+    after = openers_of(plan.rows_after, overrides)
+    if after != expected:
+        now = {r.id: n + 1 for n, r in enumerate(plan.rows_after)}
+        for rid, words in after.items():
+            if expected.get(rid) != words:
+                plan.refused_words = words
+                if words in expected.values():
+                    plan.refused = f"{words} would move to No. {now[rid]}"
+                else:
+                    plan.refused = f"{words} would start printing over No. {now[rid]}"
+                return plan
+        gone = next(w for rid, w in expected.items() if after.get(rid) != w)
+        plan.refused_words = gone
+        plan.refused = f"{gone} would no longer print"
+        return plan
+    # Only for the ones that print at all: a clipping left out of the report
+    # prints under nothing, wherever it goes.
+    printing = [i for i in plan.moving if model.row_for(i).clip.include]
+    if printing:
+        plan.now_under = heading_over(plan.rows_after, after, printing[0])
+        plan.was_under = sorted({heading_over(model.rows, before, i)
+                                 for i in printing} - {""})
+    return plan
+
+
+def _fold_sets(model: "ClipModel", new_rows: list, movers: set, folded_now: set,
+               fallback: dict) -> tuple:
+    """(collapsed_groups, collapsed_row_ids) for the rows in their new order.
+
+    Moved clippings take the state of the bracket they arrive in - an open file
+    shows them at its end, a folded one simply counts them - and everything
+    else keeps its own. The run sets are worked out again from the rows, never
+    carried over: idents are numbered by order of appearance, so a move can
+    renumber them, and an ident left behind would fold a different bracket.
+    """
+    folded = set(folded_now) - movers
+    for run in model.file_runs(new_rows):
+        staying = [r.id for r in run.rows if r.id not in movers]
+        arriving = [r.id for r in run.rows if r.id in movers]
+        if not arriving:
+            continue
+        if staying:
+            if any(i in folded_now for i in staying):
+                folded |= set(arriving)
+        else:
+            folded |= {i for i in arriving if fallback.get(i)}
+    # Clippings not in the list just now - deleted, or sent to the board, and
+    # waiting further back in the history - keep their fold for when they
+    # return. Their ids are their own, so they cannot fold anything else.
+    present = {r.id for r in new_rows}
+    folded |= {i for i in folded_now if i not in present}
+    groups = {run.ident for run in model.file_runs(new_rows)
+              if any(r.id in folded for r in run.rows)}
+    return groups, folded
+
+
+class MoveIntoFile(_Base):
+    """Clippings filed under another file's bracket, at its end, in one step.
+
+    Undo puts back all of it: the order, the bracket each row was under, any
+    heading handed on, which brackets were folded, and the ticks.
+    """
+
+    def __init__(self, model: "ClipModel", plan: MovePlan, text: str):
+        super().__init__(model, text)
+        self.before = list(model.rows)
+        self.after = list(plan.rows_after)
+        self.identity_before = _identity(self.before)
+        self.moving = list(plan.moving)
+        movers = set(self.moving)
+        # The movers take the bracket's key and its name and badge - kept apart
+        # from their own source, which does not change.
+        self.identity_after = {
+            rid: ((plan.run_key, kind, name, plan.run_title, plan.run_kind)
+                  if rid in movers else (key, kind, name, title, badge))
+            for rid, (key, kind, name, title, badge)
+            in self.identity_before.items()}
+        self.fields = list(plan.fields)
+        self.ticks = set(plan.moving) | set(plan.already)
+        self.selection_before = set(model.selected)
+        # Each moved clipping's own fold state, for undo when the bracket it
+        # goes back to has nothing else left in it.
+        self.folded_before = {i: i in model.collapsed_row_ids for i in self.moving}
+
+    def _write(self, forwards: bool) -> None:
+        steps = self.fields if forwards else list(reversed(self.fields))
+        for clip_id, name, old, new in steps:
+            row = self.model.row_for(clip_id)
+            if row is not None:
+                setattr(row.clip, name, new if forwards else old)
+
+    def _apply(self, rows: list, identity: dict, fallback: dict,
+               forwards: bool) -> None:
+        model = self.model
+        # Each row's own fold, as it was set - not the list as drawn. Drawn, a
+        # bracket that two parts of one file had joined into counts every row
+        # in it as folded, and undoing the join folded the part left open.
+        folded_now = set(model.collapsed_row_ids)
+        self._write(forwards)
+        _restore(rows, identity)
+        model.collapsed_groups, model.collapsed_row_ids = _fold_sets(
+            model, rows, set(self.moving), folded_now, fallback)
+        if forwards:
+            model.selected -= self.ticks
+        else:
+            model.selected = set(self.selection_before)
+        model.replace_all(list(rows))
+        model.selectionChanged.emit()
+
+    def redo(self) -> None:
+        self._apply(self.after, self.identity_after, {}, True)
+
+    def undo(self) -> None:
+        self._apply(self.before, self.identity_before, self.folded_before, False)
 
 
 def move_relative(model: "ClipModel", clip_ids: Iterable[int], where: str) -> list:
@@ -445,30 +722,57 @@ class MoveToInterface(_Base):
 
     The Row object itself moves, so its id, thumbnail and clip all survive and
     anything already holding that id keeps resolving to the same clipping.
+
+    It is recorded on the source's history but changes the target as well, and
+    the target keeps a history of its own made of whole-list snapshots. So two
+    rules. The rows are moved one by one, never put back from a snapshot of
+    either list: a snapshot of the target taken at the send brought back a
+    card deleted on the board since. And every time rows cross, either way,
+    ``forget`` is called to clear the target's history: its snapshots stop
+    being true the moment they do, and undone later they put a sent clipping
+    in both screens at once, as one shared object.
     """
 
-    def __init__(self, source, target, clip_ids: list[int], text: str):
+    def __init__(self, source, target, clip_ids: list[int], text: str,
+                 forget=None):
         super().__init__(source, text)
         self.source = source
         self.target = target
         self.ids = [i for i in clip_ids if source.row_for(i) is not None]
         self.moving = [source.row_for(i) for i in self.ids]
-        self.before_source = list(source.rows)
-        self.before_target = list(target.rows)
+        # Where each one stood, to stand there again on undo.
+        self.places = [source.position_of(i) for i in self.ids]
         self.selection = set(source.selected)
+        self.forget = forget
+
+    def _crossed(self) -> None:
+        if self.forget is not None:
+            self.forget()
 
     def redo(self) -> None:
+        moving = {id(r) for r in self.moving}
         self.source.selected -= set(self.ids)
         self.source.replace_all(
-            [r for r in self.source.rows if r.id not in set(self.ids)]
+            [r for r in self.source.rows if id(r) not in moving]
         )
-        self.target.replace_all(list(self.target.rows) + self.moving)
+        there = {id(r) for r in self.target.rows}
+        self.target.replace_all(
+            list(self.target.rows) + [r for r in self.moving if id(r) not in there]
+        )
+        self._crossed()
 
     def undo(self) -> None:
-        self.target.replace_all(list(self.before_target))
-        self.source.replace_all(list(self.before_source))
+        moving = {id(r) for r in self.moving}
+        self.target.replace_all(
+            [r for r in self.target.rows if id(r) not in moving]
+        )
+        rows = [r for r in self.source.rows if id(r) not in moving]
+        for place, row in sorted(zip(self.places, self.moving), key=lambda p: p[0]):
+            rows.insert(min(max(place, 0), len(rows)), row)
+        self.source.replace_all(rows)
         self.source.selected = set(self.selection)
         self.source.selectionChanged.emit()
+        self._crossed()
 
 
 class Merge(_Base):
@@ -493,6 +797,9 @@ class Merge(_Base):
             self.merged_row = self.model.make_rows(
                 [clip], first.source_kind, first.source_name, first.group_key
             )[0]
+            # The bracket it was filed under, if a Move to put it there.
+            self.merged_row.home_title = first.home_title
+            self.merged_row.home_kind = first.home_kind
             # stitch() already carried the fields across; do not re-parse them
             self.merged_row.clip.label = clip.label
 
@@ -530,6 +837,7 @@ class Split(_Base):
             )
             for piece, source in zip(self.pieces, clips):
                 piece.clip.label = source.label
+                piece.home_title, piece.home_kind = row.home_title, row.home_kind
         at = self.model.position_of(self.clip_id)
         keep = [r for r in self.model.rows if r.id != self.clip_id]
         for piece in self.pieces:

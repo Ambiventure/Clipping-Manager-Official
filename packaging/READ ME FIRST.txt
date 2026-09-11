@@ -16,8 +16,9 @@ TO RUN IT
 
 
 A MORNING, START TO FINISH
-    1. COVER PAGE - choose your standard cover artwork once. It is remembered on
-       this computer. Set the date; the clipping count fills itself in.
+    1. COVER PAGE - choose your standard cover artwork once for each newspad. It
+       is remembered on this computer. Set the date; the clipping count fills
+       itself in.
 
     2. ADD TODAY'S CLIPPINGS
        - "From Word" / "From PDF" for the division documents. Either format
@@ -26,6 +27,10 @@ A MORNING, START TO FINISH
        - "Add photos" for loose images already saved on the machine.
        - Drag images straight from WhatsApp Web onto the dashed panel.
        - Or copy an image anywhere and press Ctrl+V.
+       - Or press "Collect from WhatsApp" at the top and stay in WhatsApp Web:
+         right-click a photo and choose Copy image, then select its caption
+         and press Ctrl+C. Each photo becomes a clipping, named from its
+         caption. Press the button again to stop.
 
        Most clippings arrive already named: the newspaper, edition and page are
        read out of the document. Delhi and Lucknow print their newspaper name
@@ -38,7 +43,8 @@ A MORNING, START TO FINISH
        - Type in the headline box; Enter saves it and moves to the next one, so
          a whole division can be named without touching the mouse.
        - Drag the handle to reorder. An orange line shows where it will land.
-       - Tick several to move, rotate, merge or delete them together.
+       - Tick several to move, merge, leave out or delete them together, or
+         use "Move to:" to put them in another file's group.
        - Ctrl+Z undoes anything, including a misdrag across the whole list.
 
     4. EXPORT - "Generate PDF" or "Word (.docx)". One clipping per page, in the
@@ -57,8 +63,9 @@ IF SOMETHING LOOKS WRONG
 WHERE YOUR SETTINGS LIVE
     %APPDATA%\ClippingsManager
 
-    That is the cover artwork you chose, your export preferences, and the
-    newspaper list as it grows. Updating the program never touches them.
+    That is each newspad's cover pages and headline style, your export
+    preferences, and the newspaper list as it grows. Updating the program never
+    touches them.
 
 
 HINDI NEWSPAPER NAMES

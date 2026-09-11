@@ -26,9 +26,17 @@ same thing. There is a second interface that files clippings into Positive,
 Neutral, Negative and Digital columns and builds a sentiment dossier instead.
 
 **Keeps four newspads apart.** The Newspad button at the top holds four separate
-reports, each with its own clippings, dates and dossier lines, so several can be
-worked on in the same sitting. The designs, the newspaper list and everything
-the duplicate check has learned are shared by all four.
+reports, each with its own clippings, dates, dossier lines, cover pages and
+headline style, so several reports with different titles can be worked on in the
+same sitting. The newspaper list, section headings, the words kept out and
+everything the duplicate check has learned are shared by all four.
+
+**Collects straight from WhatsApp Web.** Switch on "Collect from WhatsApp" and
+stay in the chat: copy a photo and it becomes a clipping, copy its caption and
+the newspaper, city and page are filled in. Anything that is not clearly a
+caption is refused out loud rather than guessed at. It reads the clipboard only
+while it is switched on, leaves copies marked private alone, and keeps nothing
+it was not asked to.
 
 ## Two things worth knowing
 

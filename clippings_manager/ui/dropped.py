@@ -170,6 +170,38 @@ def _from_html(mime: QMimeData) -> list[tuple[bytes, str]]:
     return found
 
 
+def read_picture(mime: QMimeData, formats=None):
+    """(bytes, name) for a copied picture, or None. A picture and nothing else.
+
+    For Collect, which sees every copy while it is switched on. Unlike read(),
+    it never looks at files (a copy in Explorer is not a clipping), text, or
+    HTML - so a copied caption whose HTML carries an emoji <img> cannot become
+    a one-pixel clipping.
+    """
+    fmts = formats if formats is not None else set(mime.formats())
+    for fmt in IMAGE_FORMATS:
+        if fmt == FILE_CONTENTS or fmt not in fmts:
+            continue
+        try:
+            payload = bytes(mime.data(fmt))
+        except Exception:  # noqa: BLE001
+            continue
+        if len(payload) < 64:
+            continue
+        image = QImage.fromData(payload)
+        if not image.isNull():
+            data = payload if sniff(payload) else _png_bytes(image)
+            return data, "copied image" + (sniff(data) or ".png")
+    if "application/x-qt-image" in fmts:
+        try:
+            image = _as_image(mime.imageData())
+        except Exception:  # noqa: BLE001
+            image = QImage()
+        if not image.isNull():
+            return _png_bytes(image), "copied image.png"
+    return None
+
+
 def read(mime: QMimeData) -> Dropped:
     """Pull whatever usable images or files a drop or paste is carrying."""
     result = Dropped(formats=list(mime.formats()))

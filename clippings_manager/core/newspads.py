@@ -1,11 +1,13 @@
 """Four newspads: where each one lives, and which one is open.
 
-WHAT A NEWSPAD IS. One morning's report in progress: the clippings on both
-screens, the press report's date, and the dossier cover's date, count, division
-and prepared-by lines. Everything else - the cover design, the heading style,
-the section headings, the newspaper list, the words kept out, the export folder
-and every duplicate decision the program has learned - belongs to the install,
-and all four newspads share it.
+WHAT A NEWSPAD IS. One report in progress, and the look of that report: the
+clippings on both screens, the press report's date, the dossier cover's date,
+count, division and prepared-by lines - and its two cover pages and the headline
+style and paper of both interfaces. Two reports with different titles need two
+different covers; that is what four newspads are for. Everything else - the
+section headings, the newspaper list, the words kept out, the export folder and
+every duplicate decision the program has learned - belongs to the install, and
+all four newspads share it.
 
 WHY ONE WINDOW WITH ONE NEWSPAD LOADED, and not four windows. Three designs were
 measured against this code, and the one that keeps a single copy of every
@@ -27,6 +29,15 @@ WHERE THEY LIVE. Newspad 1 is today's ``session`` folder, untouched - so the
 morning on this machine the day this ships comes through as Newspad 1 with
 nothing moved. Newspads 2-4 get ``session-2`` to ``session-4``, created the
 first time each is opened and never by merely looking.
+
+EACH NEWSPAD'S LOOK is four small files, one per panel - never one file for
+all four, which is the measured hazard above. Newspad 1's are cover.json,
+sentiment_cover.json, heading_standard.json and heading_sentiment.json in the
+settings folder, where every older build reads them. Newspads 2-4 keep the same
+four names in ``design-2`` to ``design-4``: beside their session folders, never
+inside them, so Start fresh, the tidy-up and setting unreadable work aside
+cannot reach them. A newspad with no look of its own is given a copy of the one
+on screen the first time it is opened, and only a copy that could be trusted.
 
 NOTHING HERE MAKES A FOLDER. ``session_dir()`` and ``SessionStore()`` both
 create folders as a side effect, which is why this module reads paths and files
@@ -54,23 +65,33 @@ POINTER = "instances.json"
 #: Said in the menu, on the empty-newspad note and in the "what is shared" box,
 #: so the answer to "is this shared?" is the same wherever somebody asks it.
 WHAT_IS_SHARED = (
-    "Each newspad has its own clippings in both interfaces, its own press "
-    "report date, and its own dossier cover date, count, division and "
-    "prepared-by lines, board division and report options, and which screen "
-    "it was on.\n\n"
-    "Shared by all four - change it in one and it changes in all: the press "
-    "cover design, the dossier cover design, headline style and paper, section "
-    "headings, the newspaper list, words kept out of the report, the export "
-    "folder and formats, Check automatically, zoom, and everything the "
+    "Each newspad is its own report. It has its own clippings in both "
+    "interfaces, its own press report date, its own dossier date, count, "
+    "division and prepared-by lines, its board division and report options, "
+    "and which screen it was on.\n\n"
+    "Each newspad also has its own look: the press report's cover page, the "
+    "dossier's cover page, and the headline style and paper of both reports. "
+    "A newspad opened for the first time starts with a copy of the look of "
+    "the newspad you were in; after that, a change made in one newspad stays "
+    "in that newspad.\n\n"
+    "Shared by all four - change it in one and it changes in all: the section "
+    "headings (their size and colour; their font follows each newspad's "
+    "headline style), the newspaper list, words kept out of the report, the "
+    "export folder and formats, Check automatically, zoom, and everything the "
     "duplicate check has learned.\n\n"
     "Switching newspads clears undo, filters and selection, the same as "
     "closing the program does.")
 
 #: One line, for the button's tooltip.
 SHARED_IN_ONE_LINE = (
-    "Four separate newspads. Clippings, dates and the dossier's lines are each "
-    "newspad's own; cover and heading design, sections, the newspaper list, the "
-    "word list and duplicate learning are shared.")
+    "Four separate reports. Clippings, dates, the dossier's lines, both cover "
+    "pages and the headline style and paper are each newspad's own; sections, "
+    "the newspaper list, the word list and duplicate learning are shared.")
+
+#: The four files that make a newspad's look, one per panel. The same names in
+#: every newspad: Newspad 1's in the settings folder, the others' in design-N.
+DESIGN_FILES = ("cover.json", "sentiment_cover.json", "heading_standard.json",
+                "heading_sentiment.json")
 
 
 def root() -> Path:
@@ -96,6 +117,50 @@ def folder(number: int) -> Path:
     if number == 1:
         return root() / "session"
     return root() / f"session-{number}"
+
+
+def design_folder(number: int) -> Path:
+    """Where this newspad's look lives. Nothing is created.
+
+    Raises for a number that is not a newspad, rather than clamping it: a
+    caller's mistake quietly turned into Newspad 1 would write one report's
+    look into another's files, which is exactly what this exists to prevent.
+    """
+    if not isinstance(number, int) or not 1 <= number <= COUNT:
+        raise ValueError(f"there is no newspad {number!r}")
+    return root() if number == 1 else root() / f"design-{number}"
+
+
+def design_file(number: int, name: str) -> Path:
+    """One of this newspad's four design files. Nothing is created."""
+    if name not in DESIGN_FILES:
+        raise ValueError(f"{name!r} is not a design file")
+    return design_folder(number) / name
+
+
+def design_key(number: int, name: str) -> str:
+    """How a saved setup names this file: the name for Newspad 1, as every
+    older setup did, and design-N/name for the others."""
+    return name if design_folder(number) == root() else f"design-{number}/{name}"
+
+
+def write_design(target: Path, text: str) -> None:
+    """Write a design file whole or not at all.
+
+    Written beside and moved into place, after being flushed to the disk, the
+    way the pointer and the session manifest are. A settings folder can roam
+    over a network and a machine can lose power; a design file left half
+    written reads as nothing, and nothing would then be copied into another
+    newspad as if it were a design.
+    """
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(target.name + ".part")
+    with open(temp, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp, target)
 
 
 def _clamp(number) -> int:

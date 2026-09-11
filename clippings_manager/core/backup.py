@@ -35,31 +35,47 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from . import newspads
 
 #: Bumped when what travels changes in a way a reader must know about.
 SCHEMA = 1
 
 KIND = "clippings-manager/settings"
 
+def _designs() -> tuple:
+    """Each newspad's look: its two covers and both headline styles. Newspad
+    1's under the names every older setup used, the others' as design-N/..."""
+    return tuple(
+        (newspads.design_key(number, name),
+         f"Newspad {number}'s cover pages and headline style")
+        for number in range(1, newspads.COUNT + 1)
+        for name in newspads.DESIGN_FILES)
+
+
 #: Every file that carries something a person set or taught, and what it is
 #: called when the screen says what it is about to do. The session folder is
-#: deliberately absent - see the module docstring.
+#: deliberately absent - see the module docstring. Each newspad's look travels;
+#: its clippings never do.
 CARRIED = (
     ("categories.json", "which papers are which"),
     ("sections.json", "your section headings, and how they print"),
     ("wordlist.json", "the words you keep out of the report"),
     ("duplicate_training.jsonl", "what you have taught it about repeats"),
     ("duplicate_verdicts.jsonl", "duplicate decisions from the review screen"),
-    ("cover.json", "cover page settings"),
-    ("heading_standard.json", "press report heading layout"),
-    ("heading_sentiment.json", "dossier heading layout"),
-    ("sentiment_cover.json", "dossier cover settings"),
+) + _designs() + (
     ("export.json", "export preferences"),
     ("display.json", "the size the window is drawn at"),
 )
+
+
+def _once(items) -> list:
+    """Four files share one description each; say each thing once, in order."""
+    return list(dict.fromkeys(items))
 
 #: Fields scrubbed out of any row on the way into a backup, wherever they
 #: appear. `file` is a full path in the older verdicts store - on the office PC
@@ -267,11 +283,18 @@ def _clean(value):
         return out
     if isinstance(value, list):
         return [_clean(item) for item in value]
-    if isinstance(value, str) and (":\\" in value or value.startswith("\\\\")):
-        # A stray absolute path in a settings file - the export folder, say.
-        # The name is useful, the path is somebody's machine.
-        return os.path.basename(value)
+    if isinstance(value, str) and (":\\" in value or value.startswith("\\\\")
+                                   or _FORWARD_PATH.match(value)):
+        # A stray absolute path in a settings file - the export folder, say,
+        # or a cover's artwork. The name is useful, the path is somebody's
+        # machine. Qt's file dialogs hand back forward slashes, D:/Users/...,
+        # which is how the cover artwork paths are written - so both shapes.
+        return os.path.basename(value.replace("/", "\\"))
     return value
+
+
+#: D:/folder/... or //server/share/... - an absolute path as Qt writes one.
+_FORWARD_PATH = re.compile(r"^(?:[A-Za-z]:/|//[^/])")
 
 
 def _read(name: str) -> Optional[object]:
@@ -352,7 +375,7 @@ def save_to(path) -> dict:
                     encoding="utf-8")
     os.replace(temp, path)
     return {"files": len(settings),
-            "what": [said for name, said in CARRIED if name in settings]}
+            "what": _once(said for name, said in CARRIED if name in settings)}
 
 
 def inspect(path) -> dict:
@@ -383,7 +406,7 @@ def inspect(path) -> dict:
             over.append(said[name])
     return {"ok": True, "app": found.get("app", ""),
             "saved": found.get("saved", ""), "schema": found.get("schema", 0),
-            "coming": coming, "over": over, "_settings": settings}
+            "coming": _once(coming), "over": _once(over), "_settings": settings}
 
 
 def restore_from(path) -> dict:
@@ -403,11 +426,18 @@ def restore_from(path) -> dict:
         return looked
     settings = looked.pop("_settings", {})
     known = dict(CARRIED)
-    put, failed = [], []
+    put, failed, names = [], [], []
     for name, value in settings.items():
         if name not in known:
             continue
-        (put if _write(name, value) else failed).append(known[name])
-    looked["restored"] = put
-    looked["failed"] = failed
+        if _write(name, value):
+            put.append(known[name])
+            names.append(name)
+        else:
+            failed.append(known[name])
+    looked["restored"] = _once(put)
+    looked["failed"] = _once(failed)
+    # Which files, by name, so the window reloads only the panels whose file
+    # was actually put back - never writes over one that was.
+    looked["names"] = names
     return looked

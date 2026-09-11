@@ -12,6 +12,7 @@ as QPixmaps. The full resolution image is never scaled for display.
 
 from __future__ import annotations
 
+import copy
 import itertools
 
 import io
@@ -72,6 +73,41 @@ def make_thumbnail(clip: Clip, size: QSize = THUMB_SIZE) -> Optional[QPixmap]:
     return pixmap_from_png(thumbnail_png(clip, size))
 
 
+def openers_of(rows: list, overrides: Optional[dict] = None) -> dict:
+    """Which rows will open a section heading in the report: {row id: words}.
+
+    Decided by the exporter's own rule, over the clippings that are ticked in -
+    the one path the card's red chip, both exporters and a proposed move all
+    share, so none of them can disagree about where a heading prints.
+    ``overrides`` ({row id: (section_key, section_title)}) are applied to
+    copies, never to the clippings themselves, so a change can be tried out
+    before anything is done.
+    """
+    from ..export.layout import section_banners
+
+    included = [r for r in rows if r.clip.include]
+    clips = []
+    for row in included:
+        clip = row.clip
+        if overrides and row.id in overrides:
+            clip = copy.copy(clip)
+            clip.section_key, clip.section_title = overrides[row.id]
+        clips.append(clip)
+    found = section_banners(clips)
+    return {included[index].id: text for index, text in found.items()}
+
+
+def heading_over(rows: list, openers: dict, row_id: int) -> str:
+    """The heading a row prints under: the last one opened at or above it."""
+    current = ""
+    for row in rows:
+        if row.id in openers:
+            current = openers[row.id]
+        if row.id == row_id:
+            return current
+    return ""
+
+
 @dataclass
 class Row:
     """A clip plus the view-only state that hangs off it."""
@@ -82,6 +118,13 @@ class Row:
     source_kind: str = "image"     # word | pdf | clipboard | image
     source_name: str = ""          # the file it came from
     group_key: str = ""            # rows sharing this sit under one bracket
+    # The name and badge of the bracket a "Move to" filed this row under, for
+    # when it ends up leading that bracket. Empty for a row still in its own
+    # file. source_name and source_kind above keep saying where the picture
+    # really came from - the card tag and the duplicate review read them - so
+    # the bracket's own name has to live somewhere else.
+    home_title: str = ""
+    home_kind: str = ""
     # The PNG the thumbnail was built from, kept so restoring a session does not
     # have to re-render every clipping from its full-size image.
     thumb_png: Optional[bytes] = None
@@ -306,20 +349,14 @@ class ClipModel(QAbstractListModel):
         came out of a session saved before the field existed, even though the
         report would still have headed its section.
         """
-        from ..export.layout import section_banners
-
-        included = [r for r in self.rows if r.clip.include]
-        found = section_banners([r.clip for r in included])
-        self.section_openers = {
-            included[index].id: text for index, text in found.items()
-        }
+        self.section_openers = openers_of(self.rows)
 
     def opener_for(self, row_id: int) -> str:
         """The section heading this row will print, or nothing."""
         return getattr(self, "section_openers", {}).get(row_id, "")
 
     # ------------------------------------------------------------- grouping
-    def _file_groups(self) -> list:
+    def _file_groups(self, rows: Optional[list] = None) -> list:
         """The brackets: each maximal run of consecutive rows from one file.
 
         Worked out over the WHOLE list, before any filter, and that is
@@ -331,7 +368,7 @@ class ClipModel(QAbstractListModel):
         """
         groups: list = []
         seen_keys: dict[str, int] = {}
-        for row in self.rows:
+        for row in (self.rows if rows is None else rows):
             if groups and groups[-1].key == row.group_key:
                 groups[-1].rows.append(row)
             else:
@@ -340,8 +377,8 @@ class ClipModel(QAbstractListModel):
                 groups.append(
                     Group(
                         key=row.group_key,
-                        title=row.source_name or "Added by hand",
-                        source_kind=row.source_kind,
+                        title=row.home_title or row.source_name or "Added by hand",
+                        source_kind=row.home_kind or row.source_kind,
                         rows=[row],
                         occurrence=occurrence,
                     )
@@ -349,6 +386,17 @@ class ClipModel(QAbstractListModel):
         for group in groups:
             group.total = group.count
         return groups
+
+    def file_runs(self, rows: Optional[list] = None) -> list:
+        """Every file's bracket, in list order, over the whole list - never a
+        filtered view. What "Move to" offers. ``rows`` works them out for an
+        order that has not happened yet."""
+        return self._file_groups(rows)
+
+    def run_folded(self, run) -> bool:
+        """Whether this bracket is folded - rebuild's own rule, in one place."""
+        return run.ident in self.collapsed_groups or any(
+            r.id in self.collapsed_row_ids for r in run.rows)
 
     def _arranged_groups(self, rows: list) -> list:
         """The brackets while an arrangement is on: one per run of the sort key.
@@ -404,9 +452,7 @@ class ClipModel(QAbstractListModel):
             if folded is None:
                 # Collapse follows the rows, not the key: a re-parenting drop can
                 # split or merge runs, and the state should stay with the clippings.
-                group.collapsed = group.ident in self.collapsed_groups or any(
-                    r.id in self.collapsed_row_ids for r in group.rows
-                )
+                group.collapsed = self.run_folded(group)
             else:
                 group.collapsed = group.ident in folded
             entries.append(Entry(ENTRY_GROUP, group=group))

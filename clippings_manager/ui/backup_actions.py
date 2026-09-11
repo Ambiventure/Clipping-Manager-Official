@@ -23,6 +23,24 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from ..core import backup
 
 
+def _window(parent):
+    """The main window, found from whichever screen asked - it owns the four
+    design panels, whose pending edits a setup must include and whose files a
+    restore must not be written over by."""
+    node = parent
+    while node is not None:
+        if hasattr(node, "designs_after_restore"):
+            return node
+        node = node.parentWidget() if hasattr(node, "parentWidget") else None
+    return None
+
+
+def _write_pending(parent) -> None:
+    window = _window(parent)
+    if window is not None:
+        window.designs_before_restore()
+
+
 def _keeping_folder() -> Path:
     from .export_dialog import keeping_folder
 
@@ -31,6 +49,7 @@ def _keeping_folder() -> Path:
 
 def save_setup(parent) -> bool:
     """Write everything this copy has been set up with to one file."""
+    _write_pending(parent)
     here = backup.what_is_here()
     if not here:
         QMessageBox.information(
@@ -90,13 +109,24 @@ def load_setup(parent) -> bool:
     if asked.exec() != QMessageBox.Yes:
         return False
 
-    got = backup.restore_from(where)
+    # What is pending goes to disk first; what the restore writes is then
+    # shown, never written over by an edit the panels were still holding.
+    _write_pending(parent)
+    window = _window(parent)
+    got = {}
+    try:
+        got = backup.restore_from(where)
+    finally:
+        if window is not None:
+            window.designs_after_restore(got.get("names") or [])
     note = "Put back:\n  · " + "\n  · ".join(got.get("restored", []))
     if got.get("failed"):
         note += "\n\nCould not write:\n  · " + "\n  · ".join(got["failed"])
-    note += ("\n\nThe newspaper list and anything taught to the trainer are in "
-             "use straight away. If the window size was in the file, it takes "
-             "effect next time the program starts.")
+    note += ("\n\nThe newspaper list, anything taught to the trainer, and the "
+             "open newspad's cover pages and headline style are in use straight "
+             "away; the other newspads' are used when you switch to them. If the "
+             "window size was in the file, it takes effect next time the "
+             "program starts.")
     QMessageBox.information(parent, "Done", note)
     return True
 
@@ -156,6 +186,7 @@ def choose_kept_folder(parent) -> bool:
             return False
 
     backup.keep_copies_in(where)
+    _write_pending(parent)
     written = backup.keep_a_copy()
     QMessageBox.information(
         parent, "A copy will be kept here",
