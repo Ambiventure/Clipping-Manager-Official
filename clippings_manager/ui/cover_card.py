@@ -1623,6 +1623,29 @@ class CoverCard(QFrame):
     def report_date(self) -> date:
         return self.date_edit.date().toPython()
 
+    def set_report_date(self, value) -> None:
+        """Put a newspad's own press date back, without saving the design.
+
+        Both pickers, because they are one date shown twice and setting only
+        one leaves the other behind - measured, 02.09 against 08.09. Under
+        _loading, because the mirror normally syncs inside _touch, which would
+        also start the cover.json save - and cover.json holds no date.
+
+        Never later than today: no report may be dated tomorrow.
+        """
+        today = date.today()
+        if value is None or value > today:
+            value = today
+        wanted = QDate(value.year, value.month, value.day)
+        self._loading = True
+        try:
+            self.date_edit.setDate(wanted)
+            self.date_mirror.setDate(wanted)
+        finally:
+            self._loading = False
+        self._refresh_state()
+        self._debounce.start()
+
     def heading(self) -> str:
         """Only for the fallback path: Option 2 bakes its own heading."""
         return self.option2.title.strip() if self.template == 2 else ""

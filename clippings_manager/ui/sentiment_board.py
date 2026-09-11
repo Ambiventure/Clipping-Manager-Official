@@ -1752,6 +1752,52 @@ class SentimentBoard(QWidget):
                  f"QPushButton:hover {{ background: {theme.SURFACE}; }}")
             )
 
+    #: The report choices as the board is first built. See set_export_choices.
+    CHOICE_DEFAULTS = {"banner": False, "headings": True, "titles": True,
+                       "custom_heading": "", "custom_title": ""}
+
+    def export_choices(self) -> dict:
+        """This newspad's report choices: three ticks and two overrides."""
+        out = {key: self.option_boxes[key].isChecked()
+               for key in ("banner", "headings", "titles")
+               if key in self.option_boxes}
+        out["custom_heading"] = self.custom_heading.text()
+        out["custom_title"] = self.custom_title.text()
+        return out
+
+    def set_export_choices(self, values) -> None:
+        """Put a newspad's report choices back; None means as first built.
+
+        Signals blocked, so putting a newspad's own choices back is not
+        mistaken for somebody changing them.
+        """
+        wanted = {**self.CHOICE_DEFAULTS, **(values or {})}
+        for key in ("banner", "headings", "titles"):
+            box = self.option_boxes.get(key)
+            if box is None:
+                continue
+            was = box.blockSignals(True)
+            box.setChecked(bool(wanted[key]))
+            box.blockSignals(was)
+        for edit, key in ((self.custom_heading, "custom_heading"),
+                          (self.custom_title, "custom_title")):
+            was = edit.blockSignals(True)
+            edit.setText(str(wanted[key] or ""))
+            edit.blockSignals(was)
+
+    def commit_editors(self) -> None:
+        """Finish any headline being typed on a card, in every column."""
+        for view in self.columns.values():
+            try:
+                view.commit_editor()
+            except Exception:  # noqa: BLE001 - a column mid-teardown
+                continue
+
+    def reset_view(self) -> None:
+        """Back to all four columns side by side."""
+        if self.focused is not None:
+            self.toggle_focus(self.focused)
+
     def toggle_focus(self, value: str) -> None:
         """Show one column on its own, or bring all four back.
 

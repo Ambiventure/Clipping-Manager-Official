@@ -11,7 +11,7 @@ from __future__ import annotations
 import itertools
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import (QEvent, QPoint, QRectF, QSize, Qt, QTimer,
@@ -79,6 +79,7 @@ from .model import (
 from .modeswitch import ModeSwitch, ZoomButtons
 from .preview import PreviewDialog
 from .sentiment_board import SentimentBoard
+from .sentiment_cover_card import legacy_morning
 from .wordlist_bar import WordListBar
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
@@ -127,6 +128,15 @@ DUPLICATE_SETTLE_MS = 400
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # FIRST, before any card exists. The dossier cover's morning values -
+        # its date, count, division and prepared-by lines - used to live in the
+        # shared sentiment_cover.json, and now live in each newspad's session.
+        # Newspad 1 inherits them once, from the file, the first time this build
+        # opens it. This has to be read before the card is built, because the
+        # card saves its design within moments of existing and that save no
+        # longer carries these five.
+        self._legacy_dossier = legacy_morning()
+        self.newspad = 1
         # The build is in the title because the first question after "it works
         # on my laptop but not on that one" is which build each of them is
         # running, and until this there was nothing anywhere that could answer
@@ -277,12 +287,62 @@ class MainWindow(QMainWindow):
                 "next_clip_id": self._peek_clip_id(),
                 "next_group_serial": self._peek_group_serial(),
                 "pools": {"standard": standard, "sentiment": sentiment},
+                # Everything else that belongs to THIS newspad rather than to
+                # the install. One additive key: VERSION stays 1, because
+                # bumping it made an older build's close wipe the session.
+                "newspad": self._newspad_values(),
             })
             self.store.collect(
                 {r["blob"] for r in standard + sentiment if r["blob"]}
             )
         except Exception:  # noqa: BLE001 - a failed save must not stop the work
             pass
+
+    def _newspad_values(self) -> dict:
+        """This newspad's own values, for its session."""
+        return {
+            "press_date": self.cover.report_date().isoformat(),
+            "dossier": self.board.cover.morning(),
+            "board": self.board.export_choices(),
+            "duplicate_check": getattr(self, "_check_pending", ""),
+        }
+
+    def _apply_newspad_values(self, payload, arriving: bool = False) -> None:
+        """Put a newspad's own values back - or a fresh newspad's, with None.
+
+        Run with _restoring set, so putting a date back is not mistaken for
+        somebody changing it and does not start a save of its own.
+        """
+        payload = payload or {}
+        values = payload.get("newspad") or {}
+        was = self._restoring
+        self._restoring = True
+        try:
+            # The press date comes back only if it was saved TODAY. That keeps
+            # today's behaviour, where a report opens on today's date: work
+            # left from an earlier day is yesterday's newspad, and dating a
+            # fresh morning's report yesterday would be wrong.
+            press = None
+            try:
+                saved = datetime.fromisoformat(str(payload.get("saved_at", "")))
+                if saved.date() == datetime.now().date():
+                    press = date.fromisoformat(str(values.get("press_date")))
+            except (TypeError, ValueError):
+                press = None
+            self.cover.set_report_date(press)
+
+            dossier = values.get("dossier")
+            if not dossier and self.newspad == 1:
+                # The one-time hand-over from the old shared file.
+                dossier = self._legacy_dossier
+            self.board.cover.set_morning(dossier)
+
+            if arriving:
+                self.board.set_export_choices(values.get("board"))
+                self.set_mode(payload.get("mode") or "standard")
+            self._resume_check = str(values.get("duplicate_check") or "")
+        finally:
+            self._restoring = was
 
     def _peek_clip_id(self) -> int:
         """The next id the shared counter would hand out, without spending one.
@@ -342,16 +402,24 @@ class MainWindow(QMainWindow):
         return box.clickedButton() is keep
 
 
-    def restore_session(self, ask: bool = True) -> int:
-        """Put back whatever was open when the application last closed."""
+    def restore_session(self, ask: bool = True, arriving: bool = False) -> int:
+        """Put back whatever was open when the application last closed.
+
+        Every way out of here puts the newspad's own values back - its dates and
+        its dossier lines - including the ways that restore no clippings, so a
+        fresh newspad starts on its own fresh values rather than keeping
+        whatever the last one had.
+        """
         payload = self.store.load()
         if not payload:
+            self._apply_newspad_values(None, arriving)
             return 0
         # Worked out before anything is restored, because the answer is about the
         # manifest on disk rather than about what ends up in the list.
         stale = self.store.saved_by_another_build()
         if ask and not self._wanted(payload):
             self.store.clear()
+            self._apply_newspad_values(None, arriving)
             return 0
 
         # A full morning is ~50MB of pictures and takes a couple of seconds to
@@ -418,6 +486,13 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
             self._restoring = False
+        # After the division, because selecting the board's division is what
+        # moves the dossier's generated division line - and a newspad's own
+        # saved line has to be the one that ends up on the card.
+        try:
+            self._apply_newspad_values(payload, arriving)
+        except Exception:  # noqa: BLE001 - a bad value must not stop a restore
+            pass
 
         if restored:
             self._update_counts()
@@ -1340,6 +1415,22 @@ class MainWindow(QMainWindow):
         self.model.selectionChanged.connect(self._update_selection_ui)
         self.board_model.countsChanged.connect(self._update_counts)
         self.board_model.selectionChanged.connect(self._update_selection_ui)
+
+        # This newspad's own values. Saved with its session rather than in a
+        # shared settings file, so each has to tell the session it moved.
+        # touch_session only starts a timer, so none of these can loop.
+        self.cover.date_edit.dateChanged.connect(
+            lambda *_args: self.touch_session())
+        self.board.cover.changed.connect(self.touch_session)
+        self.board.cover.morningChanged.connect(self.touch_session)
+        for key in ("banner", "headings", "titles"):
+            box = self.board.option_boxes.get(key)
+            if box is not None:
+                box.toggled.connect(lambda _on: self.touch_session())
+        self.board.custom_heading.textChanged.connect(
+            lambda _t: self.touch_session())
+        self.board.custom_title.textChanged.connect(
+            lambda _t: self.touch_session())
 
         # Anything that changes a clipping goes through one of these.
         self.model.countsChanged.connect(self.touch_session)

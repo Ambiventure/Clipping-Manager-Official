@@ -96,6 +96,33 @@ def _file() -> Path:
     return settings_dir() / "sentiment_cover.json"
 
 
+#: The five values that belong to ONE MORNING rather than to the install. They
+#: live in each newspad's own session now; sentiment_cover.json keeps only the
+#: dossier's design. See legacy_morning for the one-time hand-over.
+MORNING = ("iso_date", "date_text", "clip_count_text", "division_text",
+           "prepared_by_text")
+_MORNING_TEXT = MORNING[1:]
+
+
+def legacy_morning():
+    """The five morning values as an older build left them in the file.
+
+    Read once, at startup, before the dossier card exists - because the moment
+    it exists, any design save rewrites the file without them. Used only to hand
+    Newspad 1 the date and division lines it had yesterday, the first time the
+    new build opens it. None when the file is missing or never held them.
+    """
+    try:
+        data = json.loads(_file().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - nothing saved, or not ours
+        return None
+    if not isinstance(data, dict):
+        return None
+    found = {key: data[key] for key in MORNING
+             if key in data and data[key] is not None}
+    return found or None
+
+
 def small_label(text: str, colour: str = "#4B5563", size: int = 11,
                 weight: int = 700, *, wrap: bool | None = None) -> QLabel:
     """A small caption. Anything sentence-length wraps rather than pin the card.
@@ -309,6 +336,10 @@ class SentimentCoverCard(QFrame):
     # Raised when the customiser is opened or shut, so whatever is holding this
     # card can make room for it. Carries True when it has just been opened.
     foldChanged = Signal(bool)
+    # One of the five morning values changed. Kept apart from `changed` on
+    # purpose: set_division runs on every recount, and emitting `changed` from
+    # there loops back through the window's refresh into set_division again.
+    morningChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1155,6 +1186,7 @@ class SentimentCoverCard(QFrame):
     def _count_total(self) -> None:
         self.count_text.setText(f"Total Clippings: {self._count}")
         self._read()
+        self.morningChanged.emit()
 
     def _count_breakdown(self) -> None:
         parts = self._breakdown or {}
@@ -1164,6 +1196,7 @@ class SentimentCoverCard(QFrame):
             f" • {parts.get('Digital', 0)} Dig"
         )
         self._read()
+        self.morningChanged.emit()
 
     def _set_today(self) -> None:
         self.date_edit.setDate(QDate.currentDate())
@@ -1224,6 +1257,7 @@ class SentimentCoverCard(QFrame):
         if not current or current.startswith("Date: "):
             self.date_text.setText(f"Date: {stamp}")
         self._read()
+        self.morningChanged.emit()
 
     def _sync_division(self) -> None:
         if self.division is None:
@@ -1339,7 +1373,9 @@ class SentimentCoverCard(QFrame):
             self._loading = True
             self._sync_division_quietly()
             self._loading = False
-            self._save_timer.start()
+            # The division line belongs to the newspad now, not to the design
+            # file, so it is the newspad's session that has to hear about it.
+            self.morningChanged.emit()
             self._debounce.start()
         self.sync_btn.setText(f"Sync {division.code}")
         self._refresh_state()
@@ -1481,12 +1517,59 @@ class SentimentCoverCard(QFrame):
 
     # -------------------------------------------------------------- storage
     def _state(self) -> dict:
+        """The DESIGN only. The five morning values go with the newspad."""
         data = {}
         for field in sentiment_cover.SentimentCoverConfig.__dataclass_fields__:
+            if field in MORNING:
+                continue
             value = getattr(self.config, field)
             data[field] = list(value) if isinstance(value, tuple) else value
-        data["iso_date"] = self.iso_date.isoformat()
         return data
+
+    # ------------------------------------------------ this newspad's morning
+    def morning(self) -> dict:
+        """The five values that belong to this newspad, for its session."""
+        return {
+            "iso_date": self.iso_date.isoformat(),
+            "date_text": self.config.date_text,
+            "clip_count_text": self.config.clip_count_text,
+            "division_text": self.config.division_text,
+            "prepared_by_text": self.config.prepared_by_text,
+        }
+
+    def set_morning(self, values) -> None:
+        """Put a newspad's morning back, or start a fresh one with None.
+
+        Nothing here starts the design save: none of these five are design.
+        """
+        defaults = sentiment_cover.SentimentCoverConfig()
+        self._loading = True
+        try:
+            if values:
+                try:
+                    when = date.fromisoformat(str(values.get("iso_date", "")))
+                except ValueError:
+                    when = date.today()
+                self.iso_date = min(when, date.today())
+                for field in _MORNING_TEXT:
+                    setattr(self.config, field,
+                            str(values.get(field) or getattr(defaults, field)))
+            else:
+                self.iso_date = date.today()
+                self.config.date_text = ""
+                for field in ("clip_count_text", "division_text",
+                              "prepared_by_text"):
+                    setattr(self.config, field, getattr(defaults, field))
+                if self.division is not None:
+                    self._sync_division_quietly()
+            if not self.config.date_text.strip():
+                self.config.date_text = (
+                    f"Date: {self.iso_date.strftime('%d.%m.%Y')}")
+            self._write_widgets()
+        finally:
+            self._loading = False
+        self._refresh_state()
+        self._debounce.start()
 
     def save(self) -> None:
         try:
@@ -1511,20 +1594,22 @@ class SentimentCoverCard(QFrame):
         self._loading = True
         fresh = sentiment_cover.SentimentCoverConfig()
         for field in sentiment_cover.SentimentCoverConfig.__dataclass_fields__:
+            # The five morning values are never read from this file. They
+            # belong to a newspad and come from its session, so restoring a
+            # setup file, or reading the design again, can never overwrite the
+            # morning somebody is working on.
+            if field in MORNING:
+                continue
             if field in data and data[field] is not None:
                 value = data[field]
                 if field in ("date_pos", "clip_count_pos") and value:
                     value = (int(value[0]), int(value[1]))
                 setattr(fresh, field, value)
+        # Carry the morning that is on the card across the reload.
+        for field in _MORNING_TEXT:
+            setattr(fresh, field, getattr(self.config, field))
         self.config = fresh
-        try:
-            self.iso_date = date.fromisoformat(data["iso_date"])
-            if self.iso_date > date.today():
-                # Saved on a machine whose clock was ahead, or before midnight
-                # on a day that has since passed. Either way it is not a date
-                # this dossier can carry.
-                self.iso_date = date.today()
-        except Exception:  # noqa: BLE001 - a dossier is dated today by default
+        if self.iso_date > date.today():
             self.iso_date = date.today()
         if not self.config.date_text.strip():
             self.config.date_text = f"Date: {self.iso_date.strftime('%d.%m.%Y')}"
