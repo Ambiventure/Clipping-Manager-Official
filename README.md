@@ -35,7 +35,9 @@ everything the duplicate check has learned are shared by all four.
 message with a numbered list of a dozen in it - and each story is captured as a
 clipping: the headline, the picture and the first inches of the story, without
 the menus, adverts and cookie bars. Posts on X and Facebook are captured as the
-post. Any capture can be trimmed by dragging its edges in.
+post. Any capture can be trimmed by dragging its edges in. A post that needs
+your sign-in can be taken from your own Chrome: the program opens the link
+there and takes the picture from the screen when you say the post is showing.
 
 **Collects straight from WhatsApp Web.** Switch on "Collect from WhatsApp" and
 stay in the chat: copy a photo and it becomes a clipping, copy its caption and
@@ -43,6 +45,12 @@ the newspaper, city and page are filled in. Anything that is not clearly a
 caption is refused out loud rather than guessed at. It reads the clipboard only
 while it is switched on, leaves copies marked private alone, and keeps nothing
 it was not asked to.
+
+**Hindi to English.** A card with Hindi or Punjabi in its headline, newspaper
+or city shows an "English" button; "Hindi to English" above the list does
+every such card at once and lists what it changed, card by card. A newspaper
+and city typed into the headline box move into their fields in English; a
+paper the list does not know is spelt out by rule and flagged for a check.
 
 ## Two things worth knowing
 
@@ -61,7 +69,9 @@ Two things reach out, and only when you ask them to:
     photograph it. It is the same as opening the page yourself. The program
     keeps its own browser settings folder, so your everyday Chrome, its
     sign-ins and its history are untouched; a sign-in you make for capturing
-    lives in that folder and nowhere else.
+    lives in that folder and nowhere else. "Take from my Chrome" asks your
+    own Chrome to open the link, the way a click on it would, and takes the
+    picture from the screen when you press Take it.
 
 **Your settings are not in the program folder.** The newspaper list, the cover
 settings, and everything the duplicate trainer has been taught live in

@@ -42,10 +42,11 @@ FIND_BLOCK = r"""
   if ((wall || social) && !own) {
     return JSON.stringify({
       blocked: social
-        ? 'that post could not be read. Either it needs you to be signed in - use '
-          + '"Sign in for captures" once - or the post has been taken down.'
-        : 'that page wants you to be signed in. Use "Sign in for captures" once, '
-          + 'then try again.',
+        ? 'that post could not be read. Either it needs you to be signed in - press '
+          + '"Take from my Chrome", or "Sign in for captures" once - or the post '
+          + 'has been taken down.'
+        : 'that page wants you to be signed in. Press "Take from my Chrome", or '
+          + '"Sign in for captures" once and try again.',
       site: location.hostname.replace(/^www\./, ''),
     });
   }

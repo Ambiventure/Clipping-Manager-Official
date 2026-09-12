@@ -57,8 +57,8 @@ from ..core.assemble import (ExtractionError, detect_division, is_advisory,
                              load_config, looks_like_url)
 from ..core.extract_docx import extract_docx
 from ..core.extract_pdf import extract_pdf
-from ..core import (duplicates, links, newspads, ocr, sentiment, training,
-                    wordlist)
+from ..core import (copied, duplicates, links, newspads, ocr, sentiment,
+                    training, wordlist)
 from ..core.models import Clip, Section
 from ..core.profiles import NameIndex
 from .. import version
@@ -1275,6 +1275,21 @@ class MainWindow(QMainWindow):
         self.collapse_all_btn.clicked.connect(lambda: self._fold_all(True))
         self.expand_all_btn.clicked.connect(lambda: self._fold_all(False))
 
+        # Every card's Hindi into English at once, with a list of what was
+        # done to which. Shown only while some card has Hindi in a field the
+        # report prints: a button that does nothing is worse than no button.
+        self.english_btn = QPushButton("Hindi to English")
+        self.english_btn.setCursor(Qt.PointingHandCursor)
+        self.english_btn.setToolTip(
+            "Read every card's Hindi or Punjabi the way a copied caption is "
+            "read, and write the newspaper and city into the fields in "
+            "English. A Hindi headline that is not a caption is left alone. "
+            "Ctrl+Z puts it all back.")
+        self.english_btn.setStyleSheet(self.collapse_all_btn.styleSheet())
+        self.english_btn.clicked.connect(self._put_all_in_english)
+        self.english_btn.hide()
+        bubbles.addWidget(self.english_btn)
+
         # The third bubble, in the same style as its neighbours. It is not
         # shown at all when nothing is flagged: a button that does nothing is
         # worse than no button, and on most mornings there are no repeats.
@@ -2156,8 +2171,9 @@ class MainWindow(QMainWindow):
         dialog.raise_()
         dialog.activateWindow()
 
-    def clip_from_link(self, shot, found) -> None:
+    def clip_from_link(self, shot, found):
         """One captured page, added as a clipping where the person is working.
+        Returns the clipping's id, or None when the picture could not be read.
 
         The picture already carries the headline, so nothing is typed over it:
         the caption is the publication's name, and the link prints underneath
@@ -2168,7 +2184,7 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - one link, never the morning
             self._flash(f"That page's picture could not be read ({found.site}).",
                         "bad")
-            return
+            return None
         clip.source_file = "link"
         clip.source_ref = shot.url
         clip.url = shot.url
@@ -2187,6 +2203,7 @@ class MainWindow(QMainWindow):
         if rows:
             self._flash(f"Captured {shot.site} — No. "
                         f"{pool.position_of(rows[0].id) + 1}.", "good")
+        return rows[0].id if rows else None
 
     def _clip_from_bytes(self, data: bytes, name: str) -> Clip:
         from PIL import Image
@@ -2319,6 +2336,8 @@ class MainWindow(QMainWindow):
                 return
             below = model.rows[position + 1].id
             self.undo_stack.push(commands.Merge(model, [clip_id, below]))
+        elif name == "english":
+            self._put_in_english([clip_id])
         elif name == "add_title":
             row = model.entry_row_for_clip(clip_id)
             if row >= 0:
@@ -2468,6 +2487,60 @@ class MainWindow(QMainWindow):
         self._flash("Clear the filter before moving clippings — while one is on, "
                     "what you see is not the order they are really in.", "bad")
         return True
+
+    def _put_in_english(self, ids: list, summarise: bool = False) -> list:
+        """Each card's Hindi into English, one undo step per card - or one
+        for the lot when several are done together. Returns the lines said."""
+        model = self.model
+        plans = []
+        for clip_id in ids:
+            if model.row_for(clip_id) is None:
+                continue
+            plan = copied.english_for(model.by_id(clip_id), self.name_index)
+            plans.append((clip_id, plan))
+        doing = [(clip_id, plan) for clip_id, plan in plans if plan.changes]
+        # One line per card that had Hindi on it - done or left alone, and
+        # why - in list order. A card with no Hindi is not a line.
+        lines = [f"No. {model.position_of(clip_id) + 1}: {plan.said}."
+                 for clip_id, plan in plans if not plan.nothing]
+        if not doing:
+            self._flash("Nothing on that card is in Hindi." if len(ids) == 1
+                        else "No card has Hindi in a field the report prints.",
+                        "info")
+            return lines
+        if len(doing) > 1:
+            self.undo_stack.beginMacro(f"{len(doing)} cards put in English")
+        try:
+            for clip_id, plan in doing:
+                self.undo_stack.push(commands.PutInEnglish(
+                    model, clip_id,
+                    {field: new for field, (_old, new) in plan.changes.items()}))
+        finally:
+            if len(doing) > 1:
+                self.undo_stack.endMacro()
+        self._refresh_filter_choices()
+        self.list.viewport().update()
+        flagged = sum(1 for _i, plan in doing if plan.flagged)
+        said = (f"Put {len(doing)} card{'s' if len(doing) != 1 else ''} in English"
+                + (f" \u2014 {flagged} spelt out by rule, flagged for a check"
+                   if flagged else "") + ". Ctrl+Z puts the Hindi back.")
+        self._flash(said, "good")
+        if summarise:
+            from .english import show_summary
+            show_summary(self, lines, said)
+        return lines
+
+    def _put_all_in_english(self) -> None:
+        ids = [row.id for row in self.model.rows
+               if row.clip is not None and copied.needs_english(row.clip)]
+        self._put_in_english(ids, summarise=True)
+
+    def _sync_english_button(self) -> None:
+        button = getattr(self, "english_btn", None)
+        if button is not None:
+            button.setVisible(self.mode == "standard" and any(
+                row.clip is not None and copied.needs_english(row.clip)
+                for row in self.model.rows))
 
     def _batch_move(self, where: str) -> None:
         ids = self._selected_ids()
@@ -3206,6 +3279,7 @@ class MainWindow(QMainWindow):
 
     def _update_counts(self) -> None:
         self._sync_fold_buttons()
+        self._sync_english_button()
         total = self.model.clip_count
         included = self.model.included_count
         self.count_pill.setText(f"{total} clip" + ("s" if total != 1 else ""))

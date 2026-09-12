@@ -33,7 +33,11 @@ A MORNING, START TO FINISH
        - "+ From links" for digital coverage: paste one link, or a whole
          WhatsApp message with a numbered list of them, tick the ones you
          want, and each story is captured as a clipping. Needs Chrome on the
-         PC. For a post on X or Facebook, press "Sign in for captures" once.
+         PC. For a post on X or Facebook that needs a sign-in, press "Take
+         from my Chrome": the link opens in your own Chrome, signed in as you
+         are, and the picture is taken from the screen when you press Take
+         it. Or press "Sign in for captures" once to have such posts captured
+         in the background from then on.
        - Or press "Collect from WhatsApp" at the top and stay in WhatsApp Web:
          right-click a photo and choose Copy image, then select its caption
          and press Ctrl+C. Each photo becomes a clipping, named from its
@@ -42,6 +46,13 @@ A MORNING, START TO FINISH
        Most clippings arrive already named: the newspaper, edition and page are
        read out of the document. Delhi and Lucknow print their newspaper name
        into the picture itself, so those still need naming by hand.
+
+       A card with Hindi or Punjabi in its title, newspaper or city shows an
+       "English" button at the end of its row; "Hindi to English" above the
+       list does every such card at once and lists what it changed. A
+       newspaper and city typed into the title box move into their own fields
+       in English. A paper the list does not know is spelt out and flagged
+       amber for a check. Ctrl+Z puts the Hindi back.
 
     3. REVIEW - the list is the running order, and what you see is what gets
        exported.

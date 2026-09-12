@@ -16,6 +16,34 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.25
+
+Added
+
+  * **Hindi to English, on the card and over the list.** A card with Hindi or
+    Punjabi in its headline, newspaper or city shows an "English" button at
+    the end of its row; "Hindi to English" above the list does every such
+    card at once. A newspaper and city typed into the headline box - "राजस्थान
+    पत्रिका दिल्ली" - move into the newspaper and city fields in English, the
+    way a copied caption would, and a page number goes to the page field.
+    Hindi already in the fields is respelt in place. A newspaper the list
+    does not know is spelt out by rule and flagged amber for a check, exactly
+    as Collect does. A Hindi headline that is a headline is left alone.
+  * The list-wide button shows a summary afterwards: each card by number,
+    what it said in Hindi, what it says now, and which ones were spelt out by
+    rule. One Ctrl+Z puts the whole lot back; one per card for the card button.
+  * **Take from my Chrome**, in the links window. Chrome will not lend the
+    sign-in you already have to any other program - the profile it has open
+    is locked, and a cookie copied out of it is thrown away elsewhere - so a
+    post that needs your sign-in is now taken from your own Chrome: the
+    program opens the link there, a small panel waits for you to scroll the
+    post into view and press Take it, and the clipping opens ready to trim.
+    The links window says which captures needed a sign-in and points to it.
+
+Fixed
+
+  * The sign-in wall's message names both ways round it.
+
 ## 2.0.24
 
 Fixed

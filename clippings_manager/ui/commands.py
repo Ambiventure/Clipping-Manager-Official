@@ -198,6 +198,23 @@ class FillFromCopy(_Base):
         self._put(self.before)
 
 
+class PutInEnglish(FillFromCopy):
+    """A card's Hindi put into English, in one step: the caption out of the
+    headline box and into the fields, or the fields themselves respelt.
+
+    The headline IS among the fields here, unlike a copied caption: this is
+    the one action that deliberately empties it, because what it held was a
+    caption and not a headline. Undo puts the Hindi back exactly.
+    """
+
+    FIELDS = ("label", "no_title", "caption_raw", "newspaper", "edition",
+              "page", "name_source", "name_confidence")
+
+    def __init__(self, model: "ClipModel", clip_id: int, values: dict,
+                 text: str = "Put in English"):
+        super().__init__(model, clip_id, values, text)
+
+
 class SetFieldOnMany(_Base):
     """Set one field across a selection, in a single undo step."""
 

@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QStyledItemDelegate
 
+from ..core import copied
 from . import icons, rowlayout, theme
 from .model import ENTRY_CLIP, ENTRY_GROUP, Entry
 
@@ -85,6 +86,7 @@ class EntryDelegate(QStyledItemDelegate):
             top, in_group=True,
             is_last=entry.last_in_group or not entry.can_merge,
             show_title=title, show_url=address,
+            english=copied.needs_english(entry.row.clip),
         )
 
     # -------------------------------------------------------------- painting
@@ -592,12 +594,17 @@ class EntryDelegate(QStyledItemDelegate):
             icons.rotate(painter, box, theme.QNAVY if hovered else theme.QMUTED)
             return
 
-        # pill buttons: Split and Merge
+        # pill buttons: Split, Merge and English
         font = painter.font()
         font.setPixelSize(11)
         font.setBold(True)
         painter.setFont(font)
-        if name == "merge":
+        if name == "english":
+            fg = QColor("white") if hovered else theme.QNAVY
+            bg = theme.QNAVY if hovered else QColor(theme.NAVY_WASH)
+            line = theme.QNAVY
+            label, drawer = "English", icons.type_letter
+        elif name == "merge":
             fg = QColor("white") if hovered else theme.QORANGE
             bg = theme.QORANGE if hovered else QColor(theme.ORANGE_WASH)
             line = QColor(theme.ORANGE)
@@ -611,7 +618,7 @@ class EntryDelegate(QStyledItemDelegate):
         painter.setBrush(bg)
         painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
         box = QRectF(rect.left() + 7, rect.center().y() - 7, 14, 14)
-        drawer(painter, box, fg if name == "merge" else theme.QORANGE)
+        drawer(painter, box, fg if name in ("merge", "english") else theme.QORANGE)
         painter.setPen(fg)
         painter.drawText(
             QRect(hit.rect.left() + 24, hit.rect.top(), hit.rect.width() - 28,

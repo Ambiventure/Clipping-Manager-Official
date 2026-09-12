@@ -12,6 +12,7 @@ whole list and closed at the end, so twelve links cost one startup, not twelve.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -21,15 +22,20 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                                QVBoxLayout)
 
 from ..core import links, webshot
-from . import theme
+from . import fromchrome, theme
 
 PASTE_HINT = ("Paste a link, or the whole WhatsApp message with the morning's "
               "list in it. Every link in it is found, in the order it was sent.")
 NOTHING_YET = "No links yet — paste a message above."
 SIGN_IN_TIP = ("X and Facebook only show a post to somebody signed in. This "
                "opens a browser window of the program's own, where you sign in "
-               "once. Your everyday Chrome is not touched, and the program "
-               "never sees your password.")
+               "once; after that those posts are captured in the background. "
+               "Your everyday Chrome is not touched, and the program never "
+               "sees your password. Chrome will not lend the program the "
+               "sign-in you already have - for that, use Take from my Chrome.")
+NEEDS_SIGN_IN = ("{count} could not be read without a sign-in: press Take from "
+                 "my Chrome to take {them} from your own Chrome, or Sign in for "
+                 "captures once.")
 
 
 @dataclass
@@ -143,6 +149,16 @@ class LinksDialog(QDialog):
         self.sign_in.setCursor(Qt.PointingHandCursor)
         self.sign_in.clicked.connect(self._sign_in)
         row.addWidget(self.sign_in)
+        # The other way to a post behind a sign-in: the person's own Chrome,
+        # already signed in, pictured from the screen when they say.
+        self.from_chrome = QPushButton("Take from my Chrome…")
+        self.from_chrome.setToolTip(fromchrome.TAKE_TIP)
+        self.from_chrome.setCursor(Qt.PointingHandCursor)
+        self.from_chrome.setEnabled(False)
+        self.from_chrome.clicked.connect(self._from_chrome)
+        self.from_chrome.setVisible(sys.platform == "win32")
+        row.addWidget(self.from_chrome)
+        self.taker = None
         row.addStretch(1)
         self.capture = QPushButton("Capture")
         self.capture.setObjectName("NavyFilled")
@@ -179,6 +195,7 @@ class LinksDialog(QDialog):
             + (" — numbered as they were sent" if links.numbered(self.found) else ""))
         self.capture.setText(f"Capture {many}" if many else "Capture")
         self.capture.setEnabled(bool(many))
+        self.from_chrome.setEnabled(bool(many))
 
     @staticmethod
     def _words(row: links.Found) -> str:
@@ -204,6 +221,7 @@ class LinksDialog(QDialog):
         self.bar.setValue(0)
         self.bar.show()
         self.capture.setEnabled(False)
+        self.from_chrome.setEnabled(False)
         self.box.setReadOnly(True)
         self.count.setText(f"Capturing {len(wanted)}… the window stays usable.")
 
@@ -235,6 +253,8 @@ class LinksDialog(QDialog):
             row.setText("✕  " + self._words(caught.found) + f"   ({caught.why})")
             row.setForeground(theme.QDANGER)
             row.setToolTip(caught.why)
+            if "sign" in caught.why.casefold():
+                row.setData(Qt.UserRole + 1, "sign-in")
 
     def _row_of(self, url: str):
         for index in range(self.list.count()):
@@ -255,11 +275,16 @@ class LinksDialog(QDialog):
         self.box.setReadOnly(False)
         self._say_signed_in()
         self.capture.setEnabled(bool(self.found))
+        self.from_chrome.setEnabled(bool(self.found))
         left = sum(1 for index in range(self.list.count())
                    if self.list.item(index).checkState() == Qt.Checked)
+        walled = sum(1 for index in range(self.list.count())
+                     if self.list.item(index).data(Qt.UserRole + 1) == "sign-in")
         self.count.setText(
             f"{self.made} clipping{'s' if self.made != 1 else ''} added"
-            + (f" — {left} still ticked" if left else "") + ".")
+            + (f" — {left} still ticked" if left else "") + "."
+            + ("  " + NEEDS_SIGN_IN.format(count=walled, them="them" if walled != 1 else "it")
+               if walled and sys.platform == "win32" else ""))
 
     # --------------------------------------------------------------- other
     def _say_signed_in(self) -> None:
@@ -285,7 +310,39 @@ class LinksDialog(QDialog):
                            "and capture again.")
         QTimer.singleShot(30000, self._say_signed_in)
 
+    def _from_chrome(self) -> None:
+        """The ticked links, one after another, from the person's own Chrome."""
+        wanted = self._ticked()
+        if not wanted or self.thread is not None or self.taker is not None:
+            return
+        self.taker = fromchrome.TakeItDialog(self.window, wanted, parent=self)
+        self.taker.taken.connect(self._taken)
+        self.taker.done.connect(self._taker_done)
+        self.count.setText(f"Taking {len(wanted)} from your Chrome — the small "
+                           "panel says what to do.")
+        self.taker.start()
+
+    def _taken(self, url: str, _clip_id: int) -> None:
+        self.made += 1
+        row = self._row_of(url)
+        if row is not None:
+            row.setCheckState(Qt.Unchecked)
+            row.setData(Qt.UserRole + 1, "")
+            row.setForeground(theme.QINK)
+            found = next((f for f in self.found if f.url == url), None)
+            if found is not None:
+                row.setText("✓  " + self._words(found) + "   (from your Chrome)")
+
+    def _taker_done(self, count: int) -> None:
+        taker, self.taker = self.taker, None
+        if taker is not None:
+            taker.deleteLater()
+        self.count.setText(f"{count} clipping{'s' if count != 1 else ''} taken "
+                           "from your Chrome.")
+
     def closeEvent(self, event):  # noqa: N802 - Qt's name
+        if self.taker is not None:
+            self.taker.close()
         if self.catcher is not None:
             self.catcher.stop()
         if self.thread is not None:

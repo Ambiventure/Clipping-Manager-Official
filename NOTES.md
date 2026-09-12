@@ -1609,3 +1609,69 @@ Embedding costs about 800KB per document, once, whatever the page count.
 One test had to be told: it wrote `"family": "comic"` into a settings file as
 deliberate rubbish, and "comic" is now Comic Sans MS - a perfectly good answer. The
 rubbish is rubbish again.
+
+
+## Hindi to English, and a post from the person's own Chrome (2.0.25)
+
+Two rows in the office's list had their newspaper and city typed into the
+headline box, in Hindi - "अर्थ प्रकाश पंजाब", "राजस्थान पत्रिका दिल्ली" - and
+printed in Hindi over an English report. The ask was a button on the card and
+one over the list, with a summary of what was changed on which card.
+
+**The deciding is the reader's.** `copied.english_for(clip, index)` reads a
+Hindi headline with `copied.read`, the same reader Collect uses on a copied
+caption, so a card and a copy come out the same: a listed paper is spelt as
+the list spells it, a city likewise, a page number goes to the page field.
+What the reader refuses is tried once more as a short name: up to three
+Hindi words, none of them chat, are a newspaper the list has never heard of -
+before a place from PLACES, or alone - spelt out by `romanise` and flagged at
+0.7 like Collect's spelt-out papers. Anything longer is a headline and is left
+exactly alone, and the summary says so and why ("9 words do not read as a
+newspaper and a city"). The accepted cost is the same as Collect's: three
+ordinary Hindi words in the headline box are taken for a paper, flagged
+amber, one Ctrl+Z from where they were. Hindi already in the newspaper or city
+field is respelt in place and the headline kept.
+
+**One undo step, and it is allowed to empty the headline.** `PutInEnglish`
+extends `FillFromCopy` with `label` and `no_title` among its fields - the one
+command that does, on purpose: what the box held was a caption, not a
+headline, and the Hindi is kept in `caption_raw` where a copied caption would
+be. The list-wide button wraps every card in one macro. The pill is a
+`rowlayout.clip_row(english=True)` hit, drawn like Split; the delegate asks
+`copied.needs_english` per card, which reads three fields and costs nothing.
+
+**The person's Chrome sign-in cannot be borrowed, and this was measured.**
+The other ask was for captures to use the sign-in the open Chrome already
+has. Three facts closed every road to it, all measured on the office machine
+(scratchpad probe_cookie_copy.py, probe_borrow.py, 2.0.25):
+
+  * Chrome 136 and later refuse remote debugging on the profile folder in use,
+    and no second Chrome may open a profile that is open.
+  * The open profile's cookie file is locked exclusively while Chrome runs -
+    copying it is `PermissionError`. That is deliberate on Chrome's part.
+  * Every profile on the machine holds only app-bound ("v20") cookies. A cookie
+    row copied out of a closed profile, with its Local State, into the
+    program's browser folder is thrown away by Chrome on start: the headless
+    browser read 0 of them.
+
+So `core/chromewin.py` and `ui/fromchrome.py` do the honest thing: the program
+asks the person's own Chrome to open the link (`chrome.exe URL` goes to the
+running instance, in the profile it has open), a small always-on-top panel
+waits for them to scroll the post into view and press Take it, the panel steps
+out of the way for 260 ms, and the Chrome window is pictured off the screen -
+`DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` for the frame as drawn,
+`QScreen.grabWindow(0, ...)` in device-independent pixels. The clipping opens
+in the preview with the trim already started, because the picture is the whole
+browser window. Nothing on the site is done by the program: the person scrolls,
+the person says when - which is also why it is clear of every site's terms.
+
+Two traps in the finder: the Claude desktop app, WhatsApp Desktop and VS Code
+all have Chrome's window class (`Chrome_WidgetWin_1`), so a Chrome window is
+one whose title ends in " - Google Chrome" (or Edge's, or Chromium's); and
+`GetWindowRect` includes the invisible resize border, seven pixels a side,
+which would be in the picture. The program-owned sign-in browser stays for
+sites that let a signed-in browser read posts in the background.
+
+`chromewin` imports `subprocess`, not a network module, and the carry-forward
+rule (only `updates.py` and `webshot.py` may import one) still holds: asking
+Chrome to open a link is what a click on one in WhatsApp asks of it.

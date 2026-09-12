@@ -1298,3 +1298,159 @@ def caption_values(reading: Reading) -> dict:
         "name_confidence": reading.confidence,
         "no_title": False,
     }
+
+
+# ------------------------------------------------------------ into English
+#
+# A caption pasted or typed into a card by hand stays as it was typed - Hindi
+# in the headline box, printing in Hindi over an English report. "Put in
+# English" is the button for that: the card's Hindi is read the way a copied
+# caption is read, and what it names is written into the fields in English.
+# Nothing is guessed that the reader would not guess: a listed paper is spelt
+# as the list spells it, one it does not know is spelt out by rule and
+# flagged, and a Hindi HEADLINE - a sentence, not a paper and a city - is left
+# exactly alone, because a headline in Hindi is what the paper printed.
+
+
+@dataclass(frozen=True)
+class English:
+    """What putting one clipping's Hindi into English would do."""
+
+    changes: dict               # field -> (old, new); empty when left alone
+    said: str                   # one line for the summary
+    flagged: bool = False       # a name spelt out by rule: worth a look
+    nothing: bool = False       # no Hindi on the card at all - not a line
+
+
+def has_indic(text: str) -> bool:
+    """Whether any of this is written in Hindi or Punjabi letters."""
+    return any("\u0900" <= ch <= "\u097f" or "\u0a00" <= ch <= "\u0a7f"
+               for ch in (text or ""))
+
+
+def needs_english(clip) -> bool:
+    """Whether the card has Hindi or Punjabi in a field the report prints."""
+    return any(has_indic(getattr(clip, name, ""))
+               for name in ("label", "newspaper", "edition"))
+
+
+def _paper_in_english(typed: str, names: _Names) -> tuple[str, bool]:
+    """(name in English, spelt out by rule?) for a Hindi newspaper field."""
+    words = _words(typed)
+    listed = _find(_fold(" ".join(words)), names.papers, paper=True)
+    if listed:
+        return listed, False
+    return " ".join(romanise(w) for w in words), True
+
+
+def _city_in_english(typed: str, names: _Names) -> tuple[str, bool]:
+    words = _words(typed)
+    listed = _listed_city(words, names)
+    if listed:
+        return listed, False
+    folded = _fold(" ".join(words))
+    place = _PLACE_BY_SPELLING.get(folded) or _PLACE_BY_SPELLING.get(_flat(folded))
+    if place and place[0].isascii():
+        return place[0], False
+    return " ".join(romanise(w) for w in words), True
+
+
+#: A headline box holding this many Hindi words or fewer, none of them chat,
+#: is taken for a newspaper's name typed where the caption goes - "अर्थ प्रकाश
+#: पंजाब" - and not for a headline. A real headline is longer than this.
+SHORT_NAME_WORDS = 3
+
+
+def _short_name(words: list[str], names: _Names) -> tuple[str, str]:
+    """(paper, city) for a short all-Hindi label the reader did not take -
+    a paper the list has never heard of, before a place or alone.
+
+    Returns ("", "") for anything longer than SHORT_NAME_WORDS, mixed with
+    English, or holding a chat word.
+    """
+    if not words or len(words) > SHORT_NAME_WORDS:
+        return "", ""
+    if not all(has_indic(w) for w in words):
+        return "", ""
+    if any(w.casefold() in CHAT_WORDS for w in words):
+        return "", ""
+    for k in (2, 1):
+        if len(words) > k:
+            tail = _fold(" ".join(words[-k:]))
+            place = _PLACE_BY_SPELLING.get(tail) or _PLACE_BY_SPELLING.get(_flat(tail))
+            if place:
+                city = _listed_city(words[-k:], names) or place[0]
+                return " ".join(romanise(w) for w in words[:-k]), city
+    return " ".join(romanise(w) for w in words), ""
+
+
+def english_for(clip, index: NameIndex) -> English:
+    """What "Put in English" would do to this clipping. Changes nothing."""
+    label = (clip.label or "").strip()
+    paper = (clip.newspaper or "").strip()
+    city = (clip.edition or "").strip()
+    if not (has_indic(label) or has_indic(paper) or has_indic(city)):
+        return English({}, "nothing in Hindi", nothing=True)
+
+    names = _names(index)
+    changes: dict = {}
+    notes: list = []
+    flagged = False
+
+    if has_indic(label):
+        found = read(label, index)
+        if found.has_caption:
+            # The headline box held a caption: it moves into the fields, in
+            # English, and the box is emptied so the caption prints.
+            changes["label"] = (clip.label, "")
+            changes["no_title"] = (clip.no_title, False)
+            changes["caption_raw"] = (clip.caption_raw, label)
+            changes["newspaper"] = (clip.newspaper, found.newspaper)
+            paper = found.newspaper
+            # A caption with no city in it leaves the card's own city alone -
+            # respelt below if it is in Hindi, kept if it is not.
+            if found.edition:
+                changes["edition"] = (clip.edition, found.edition)
+                city = found.edition
+            if found.page:
+                changes["page"] = (getattr(clip, "page", ""), found.page)
+            flagged = flagged or not found.paper_known or not found.edition_known
+            notes.append(f"headline \u201c{label}\u201d \u2192 {found.display}")
+        else:
+            short_paper, short_city = _short_name(_words(label), names)
+            if short_paper:
+                # A paper the list does not know, typed where the caption
+                # goes: moved into the fields, spelt out by rule, flagged.
+                changes["label"] = (clip.label, "")
+                changes["no_title"] = (clip.no_title, False)
+                changes["caption_raw"] = (clip.caption_raw, label)
+                changes["newspaper"] = (clip.newspaper, short_paper)
+                paper = short_paper
+                if short_city:
+                    changes["edition"] = (clip.edition, short_city)
+                    city = short_city
+                flagged = True
+                notes.append(f"headline \u201c{label}\u201d \u2192 "
+                             + ", ".join(p for p in (short_paper, short_city) if p))
+            else:
+                notes.append(f"headline \u201c{label}\u201d left as it is - "
+                             f"{len(_words(label))} words do not read as a "
+                             f"newspaper and a city")
+
+    if has_indic(paper):
+        spelt, by_rule = _paper_in_english(paper, names)
+        changes["newspaper"] = (clip.newspaper, spelt)
+        flagged = flagged or by_rule
+        notes.append(f"\u201c{paper}\u201d \u2192 {spelt}")
+    if has_indic(city):
+        spelt, by_rule = _city_in_english(city, names)
+        changes["edition"] = (clip.edition, spelt)
+        flagged = flagged or by_rule
+        notes.append(f"\u201c{city}\u201d \u2192 {spelt}")
+
+    if any(field in changes for field in ("newspaper", "edition")):
+        changes["name_source"] = (clip.name_source, "copied")
+        changes["name_confidence"] = (clip.name_confidence,
+                                      UNLISTED_PAPER_CONFIDENCE if flagged else 1.0)
+    said = "; ".join(notes) + (" (spelt out by rule - check it)" if flagged else "")
+    return English(changes, said, flagged=flagged)

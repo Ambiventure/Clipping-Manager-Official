@@ -92,7 +92,8 @@ ADD_URL_H = 17
 
 
 def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
-             show_title: bool = True, show_url: bool = False) -> RowGeometry:
+             show_title: bool = True, show_url: bool = False,
+             english: bool = False) -> RowGeometry:
     """Lay out one clipping row inside the rectangle Qt hands the delegate.
 
     A clipping shows the boxes it has something to put in: a headline, an
@@ -155,6 +156,11 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
     right = pad.left() - 6
 
     add("rotate", ICON_BTN, "Rotate 90° clockwise")
+    # Only on a card with Hindi or Punjabi in a field the report prints. A
+    # caption typed into the headline box stays as typed, and this is the
+    # button that reads it and writes it into the fields in English.
+    if english:
+        add("english", 78, "Put this card's Hindi into English")
 
     if not is_last:
         add("merge", 84, "Merge this clipping with the one below it")
