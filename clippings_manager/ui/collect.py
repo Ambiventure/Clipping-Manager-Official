@@ -28,6 +28,8 @@ What a copy IS lives in ui/clipwatch.py (the clipboard) and core/copied.py
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import hashlib
 import re
 import traceback
@@ -126,6 +128,17 @@ PASTE_NOT_NEEDED = ("Collect has already taken what you copied, so Ctrl+V is not
 DROP_SUFFIX = "or copy its caption in WhatsApp."
 
 
+NEITHER = ("That copy held neither a picture nor any text, so there was "
+           "nothing to add.")
+HISTORY = "What was copied\u2026"
+HISTORY_FOOT = ("Only what kind of copy each was and what became of it - never "
+                "the words, which may be anything the clipboard carried.")
+
+
+def _picture_shape(item) -> str:
+    return f"picture, {len(item.data) // 1024} KB"
+
+
 def _shape(text: str) -> str:
     """"3 words, Hindi": what a copy looked like, with none of it repeated."""
     words = (text or "").split()
@@ -201,6 +214,7 @@ class Collector(QObject):
 
     DRAIN_MS = 250
     QUEUE_MAX = 50
+    HISTORY_MAX = 40
     #: Long side, in pixels. A copy of WhatsApp's blurred chat preview is tiny;
     #: a photo opened full-screen and copied is not.
     REFUSE_LONG_SIDE = 200
@@ -229,6 +243,11 @@ class Collector(QObject):
         self._adding = False
         self.alert_hook = None           # a test stands in for the taskbar here
         self.bar = None
+        # What each copy was and what became of it, newest last - never the
+        # words themselves. For the morning when "it missed the caption" has
+        # to be answered from something other than memory.
+        self.history: list = []
+        self._history_box = None
         for stack in (window.undo_stack, window.board_undo):
             stack.indexChanged.connect(
                 lambda _index, moved=stack: self._stack_moved(moved))
@@ -325,16 +344,46 @@ class Collector(QObject):
     def _on_note(self, code: str) -> None:
         if code in ("private", "private-history"):
             self._say(PRIVATE)
+            self._remember_copy("a private copy", "left alone")
         elif code == "files":
             self._say(FILES)
+            self._remember_copy("files", "not collected")
         elif code == "too-long":
             self._say(NOT_USED.format(reason="it is too long to be a caption") + AGAIN,
                       problem=True)
             self._alert()
+            self._remember_copy("text", "not used: too long to be a caption")
         elif code == "unreadable":
             self.target = None
             self._say(COULD_NOT_READ, problem=True)
             self._alert()
+            self._remember_copy("a picture that never arrived", "could not be read")
+        elif code == "nothing":
+            self._say(NEITHER)
+            self._remember_copy("neither a picture nor text", "nothing to do")
+
+    def _remember_copy(self, what: str, became: str) -> None:
+        """One line of history: when, what kind of copy, what became of it."""
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self.history.append(f"{stamp}  {what} \u2192 {became}")
+        del self.history[:-self.HISTORY_MAX]
+        box = self._history_box
+        if box is not None:
+            try:
+                if box.isVisible():
+                    box.words.setPlainText("\n".join(self.history))
+            except RuntimeError:
+                self._history_box = None
+
+    def show_history(self) -> None:
+        """The last copies and what became of each, in a small window."""
+        from .english import show_summary
+
+        lines = list(self.history) or ["Nothing has been copied since Collect was switched on."]
+        self._history_box = show_summary(
+            self.window, lines,
+            "What was copied while Collect was on, and what became of it",
+            title="What was copied", foot=HISTORY_FOOT)
 
     def _idle(self) -> bool:
         """Whether a copy may be applied now. While an import or an export is
@@ -395,6 +444,7 @@ class Collector(QObject):
                     message += ALREADY_NEXT
                 self._thumb_row = row
                 self._say(message)
+                self._remember_copy(_picture_shape(item), f"already {self._which(pool, row)}")
                 return
         try:
             clip = w._clip_from_bytes(item.data, item.name)
@@ -402,12 +452,14 @@ class Collector(QObject):
             self.target = None
             self._say(NOT_A_PICTURE, problem=True)
             self._alert()
+            self._remember_copy(_picture_shape(item), "not a picture after all")
             return
         width, height = clip.native_width, clip.native_height
         if max(width, height) < self.REFUSE_LONG_SIDE:
             self.target = None
             self._say(TOO_SMALL.format(w=width, h=height), problem=True)
             self._alert()
+            self._remember_copy(f"picture {width}x{height} px", "too small to be a clipping")
             return
         clip.image_hash = digest
         if pool is w.board_model:
@@ -436,6 +488,10 @@ class Collector(QObject):
         if max(width, height) < self.WARN_LONG_SIDE:
             message += SMALL.format(w=width, h=height)
         self._say(message)
+        self._remember_copy(f"picture {width}x{height} px",
+                            f"added as {self._which(pool, row)}"
+                            if pool is not w.board_model else
+                            f"added to {row.clip.section.value}")
 
     def _take_text(self, item) -> None:
         w = self.window
@@ -446,6 +502,7 @@ class Collector(QObject):
             self.target = None
             self._say(PICTURE_ADDRESS, problem=True)
             self._alert()
+            self._remember_copy("a picture's address", "not used")
             return
         if reading.kind == "nothing":
             reason = reading.reason or "it did not look like a caption"
@@ -455,6 +512,7 @@ class Collector(QObject):
             self._say(NOT_USED.format(reason=f"{reason} ({_shape(item.text)})")
                       + ("" if reason in NOT_A_CAPTION_AT_ALL else AGAIN), problem=True)
             self._alert()
+            self._remember_copy(f"text, {_shape(item.text)}", f"not used: {reason}")
             return
         has_caption = reading.kind in ("caption", "caption+link")
         has_link = reading.kind in ("link", "caption+link")
@@ -503,6 +561,9 @@ class Collector(QObject):
         self.pending = None
         self._thumb_row = row
         self._say(self._named(reading, which, has_caption, "url" in values) + notes)
+        self._remember_copy(f"text, {_shape(item.text)}",
+                            f"{self._step_name(has_caption, 'url' in values).lower()} "
+                            f"onto {which}")
 
     def _step_name(self, caption: bool, link: bool) -> str:
         if caption and link:
@@ -554,6 +615,8 @@ class Collector(QObject):
         self.pending = Pending(reading, target, why, link_only, button)
         self._say(why, problem=True)
         self._alert()
+        self._remember_copy("text", "not used: " + why.split(". ")[0].rstrip(".")
+                            + " (kept for the button)")
 
     def use_pending(self) -> None:
         """The button: put the refused copy where the person says it goes."""
@@ -675,6 +738,13 @@ class Collector(QObject):
         self.undo.clicked.connect(self.undo_that)
         self.undo.setEnabled(False)
         row.addWidget(self.undo)
+        self.history_btn = QPushButton(HISTORY)
+        self.history_btn.setCursor(Qt.PointingHandCursor)
+        self.history_btn.setToolTip(
+            "Every copy since Collect was switched on - what kind it was and "
+            "what became of it. Never the words themselves.")
+        self.history_btn.clicked.connect(self.show_history)
+        row.addWidget(self.history_btn)
         bar.hide()
         self.bar = bar
         return bar

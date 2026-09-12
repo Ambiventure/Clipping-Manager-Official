@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QTextDocumentFragment
 
 from ..core.assemble import address_in
 from . import dropped
@@ -98,6 +98,16 @@ def classify(mime, fmts: set):
     has_text = any(f.startswith("text/plain") for f in fmts)
     text = mime.text() if has_text else ""
     has_picture = bool(fmts & PICTURE_FORMATS) or any(f.startswith("image/") for f in fmts)
+    if not has_text and not has_picture and "text/html" in fmts:
+        # Formatted text and no plain copy of it. A page's own copy handler
+        # can do that, and the words are the same words: read them off the
+        # markup, here, with nothing fetched - a fragment is parsed, never
+        # loaded.
+        try:
+            text = QTextDocumentFragment.fromHtml(mime.html()).toPlainText()
+        except Exception:  # noqa: BLE001 - markup that will not parse
+            text = ""
+        has_text = bool(text.strip())
     if has_picture and (not text.strip() or _only_an_address(text)):
         got = dropped.read_picture(mime, fmts)
         if got:
@@ -150,7 +160,10 @@ class ClipboardWatcher(QObject):
     """Notices copies while switched on, and hands each one over, once."""
 
     copied = Signal(object)     # a Copied
-    note = Signal(str)          # "private", "private-history", "files", "too-long", "unreadable"
+    #: "private", "private-history", "files", "too-long", "unreadable" - and
+    #: "nothing": a copy that held neither a picture nor any text, said so
+    #: that a copy which went nowhere is never a mystery.
+    note = Signal(str)
 
     SETTLE_MS = 150
     RETRY_MS = (150, 300, 600, 1200)
@@ -235,6 +248,8 @@ class ClipboardWatcher(QObject):
             self.copied.emit(result)
         elif isinstance(result, str):
             self.note.emit(result)
+        else:
+            self.note.emit("nothing")
 
     def _again(self, picture: bool) -> None:
         if self._tries < len(self.RETRY_MS):

@@ -988,3 +988,161 @@ def _draw_footer(
             painter, notes, footer_y, notes_size, False,
             NOTES_COLOUR, align, page_w, dpi_fix, 0.0, warnings,
         )
+
+
+# ------------------------------------------------------------ for Word
+#
+# The PDF gets the cover as one picture, as it always has: nobody edits a PDF,
+# and one picture guarantees the printed page is the page on screen. Word gets
+# the same cover as text boxes and one picture, so a date or a division name
+# can be corrected in Word without coming back here - the same arrangement
+# the press report's generated cover has (core/cover_render.blocks_option2,
+# export/word_cover.add_cover). The walk below mirrors _paint step for step;
+# it is deliberately a second copy of the flow rather than a refactoring of
+# it, because the picture is pinned pixel for pixel by its suite and this is
+# not allowed to move it.
+
+#: The page pixels the Word builder works in (A4 at 200 DPI), per point.
+PT_TO_PX = 200.0 / 72.0
+
+
+def _emblem_file(colour: str) -> str:
+    """The drawn emblem as a PNG on disk, for Word to embed. Written once per
+    colour into the temporary folder; a stale copy is simply overwritten."""
+    import tempfile
+    from pathlib import Path
+
+    target = Path(tempfile.gettempdir()) / f"clippings-cover-emblem-{colour.lstrip('#')}.png"
+    try:
+        railway_emblem(400, colour).save(str(target), "PNG")
+    except Exception:  # noqa: BLE001 - a cover without its emblem
+        return ""
+    return str(target) if target.is_file() else ""
+
+
+def blocks(config: SentimentCoverConfig, clip_count: int,
+           warnings: Optional[list] = None) -> list:
+    """The cover as Word can set it: every line as text, the emblem as a
+    picture, each in page pixels at 200 DPI on an A4 sheet.
+
+    Groups, one text box each in Word so a drag moves the whole thing:
+    "heading" (organisation, rule, division, title, subtitle), "date" and
+    "count" (the two pills, without their rounded backgrounds), "caption"
+    (the footer rule and its two lines). The border frame is not written -
+    it is a page border, and Word's own are a different thing.
+    """
+    from ..core.cover_render import Placed
+
+    _ensure_app()
+    page_w, page_h = layout.page_size("a4")
+    probe = QImage(4, 4, QImage.Format.Format_RGB32)
+    dpi_fix = _dpi_fix(probe)
+    theme = _colour(config.theme_colour).name()
+    align = "left" if (config.text_align or "center").lower() == "left" else "center"
+    left = MARGIN + TEXT_INSET
+    width = max(1.0, page_w - left * 2)
+    out: list = []
+
+    def px(points: float) -> float:
+        return points * PT_TO_PX
+
+    def lines_of(words: str, y: float, size: float, bold: bool, colour: str,
+                 group: str, advance: float, drawn: float) -> float:
+        """Emit one Placed per set line, as _block draws them, and return how
+        far the cursor moves - the same arithmetic as _block."""
+        font = _font(size, bold, dpi_fix)
+        metrics = QFontMetricsF(font, probe)
+        set_lines = _wrap(words, metrics, width)
+        top = y
+        for line in set_lines:
+            if line.strip():
+                out.append(Placed(
+                    kind="text", group=group,
+                    x=px(left), y=px(top), width=px(width), height=px(metrics.lineSpacing()),
+                    text=line, px=int(round(px(size))), weight=700 if bold else 400,
+                    colour=colour, align=align, box_x=px(left), box_w=px(width),
+                ))
+            top += metrics.lineSpacing()
+        grown = 0.0
+        if drawn > 0 and size > drawn:
+            grown = max(0.0, metrics.lineSpacing()
+                        - QFontMetricsF(_font(drawn, bold, dpi_fix), probe).lineSpacing())
+        return advance + grown + max(0, len(set_lines) - 1) * metrics.lineSpacing()
+
+    y = FLOW_TOP
+    if config.show_logo:
+        side = max(8.0, float(config.logo_height or 78.0))
+        path = (config.logo_path or "").strip()
+        if not path or not QImage(path).width():
+            path = _emblem_file(theme)
+        if path:
+            out.append(Placed(kind="logo", group="logo", x=px((page_w - side) / 2.0),
+                              y=px(y), width=px(side), height=px(side), path=path))
+        y += side + LOGO_GAP
+
+    organisation = (config.organisation_text or "").strip()
+    if organisation:
+        y += lines_of(organisation, y, size_of(config, "organisation_size"), True,
+                      theme, "heading", ORG_ADVANCE, ORG_SIZE)
+        out.append(Placed(kind="rule", group="heading",
+                          x=px((page_w - RULE_WIDTH) / 2.0), y=px(y),
+                          width=px(RULE_WIDTH), height=px(RULE_STROKE), colour=theme,
+                          box_x=px(left), box_w=px(width)))
+        y += RULE_ADVANCE
+    division = (config.division_text or "").strip()
+    if division:
+        y += lines_of(division, y, size_of(config, "division_size"), True,
+                      theme, "heading", DIVISION_ADVANCE, DIVISION_SIZE)
+    title = (config.report_title or "").strip()
+    if title:
+        y += lines_of(title, y, size_of(config, "title_size"), True,
+                      TITLE_COLOUR, "heading", TITLE_ADVANCE, TITLE_SIZE)
+    subtitle = (config.subtitle_text or "").strip()
+    if subtitle:
+        y += lines_of(subtitle, y, size_of(config, "subtitle_size"), False,
+                      SUBTITLE_COLOUR, "heading", SUBTITLE_ADVANCE, SUBTITLE_SIZE)
+
+    date_text = (config.date_text or "").strip()
+    if date_text:
+        box_w, box_h, _radius, type_size = _scaled_pill(
+            DATE_BOX, DATE_SIZE, getattr(config, "date_scale", 1.0))
+        placed = _pill_origin(config.date_pos, box_w, box_h, page_w, page_h, y)
+        out.append(Placed(kind="text", group="date", x=px(placed[0]), y=px(placed[1]),
+                          width=px(box_w), height=px(box_h), text=date_text,
+                          px=int(round(px(type_size))), weight=700, colour=theme,
+                          align="center", box_x=px(placed[0]), box_w=px(box_w)))
+        if config.date_pos is None:
+            y += DATE_ADVANCE * (box_h / DATE_BOX[1])
+    if config.show_clip_count:
+        count_text = (config.clip_count_text or "").strip()
+        if not count_text:
+            try:
+                count_text = f"Total Clippings: {max(0, int(clip_count))}"
+            except (TypeError, ValueError):
+                count_text = "Total Clippings: 0"
+        box_w, box_h, _radius, type_size = _scaled_pill(
+            COUNT_BOX, COUNT_SIZE, getattr(config, "clip_count_scale", 1.0))
+        placed = _pill_origin(config.clip_count_pos, box_w, box_h, page_w, page_h, y)
+        out.append(Placed(kind="text", group="count", x=px(placed[0]), y=px(placed[1]),
+                          width=px(box_w), height=px(box_h), text=count_text,
+                          px=int(round(px(type_size))), weight=700, colour=theme,
+                          align="center", box_x=px(placed[0]), box_w=px(box_w)))
+
+    prepared = (config.prepared_by_text or "").strip()
+    notes = (config.additional_notes or "").strip()
+    if prepared or notes:
+        footer_y = page_h - FOOTER_FROM_BOTTOM
+        rule_left = MARGIN + FOOTER_RULE_INSET
+        out.append(Placed(kind="rule", group="caption", x=px(rule_left),
+                          y=px(footer_y - FOOTER_RULE_GAP),
+                          width=px(page_w - rule_left * 2), height=px(0.8),
+                          colour=FOOTER_RULE_COLOUR, box_x=px(left), box_w=px(width)))
+        prepared_size = size_of(config, "footer_size")
+        if prepared:
+            lines_of(prepared, footer_y, prepared_size, True, PREPARED_COLOUR,
+                     "caption", 0.0, PREPARED_SIZE)
+            footer_y += NOTES_ADVANCE * prepared_size / PREPARED_SIZE
+        if notes:
+            lines_of(notes, footer_y, size_of(config, "notes_size"), False,
+                     NOTES_COLOUR, "caption", 0.0, NOTES_SIZE)
+    return out

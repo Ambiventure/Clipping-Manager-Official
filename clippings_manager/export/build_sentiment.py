@@ -900,8 +900,28 @@ def build_docx(
                 "the dossier starts at the first clipping."
             )
         else:
-            data = _cover_png(options.cover_config, len(clips), style.page,
-                              warnings)
+            # Text first: a Word file is edited afterwards, and a picture
+            # cannot be. The picture is the fallback, not the preference.
+            laid_out = False
+            try:
+                from ..core import sentiment_cover
+                from . import word_cover
+
+                laid_out = word_cover.add_cover(
+                    document,
+                    sentiment_cover.blocks(options.cover_config, len(clips), warnings),
+                    page_width, page_height, warnings)
+            except Exception as exc:  # noqa: BLE001 - fall back to the picture
+                laid_out = False
+                warnings.append(
+                    f"The cover could not be written as text "
+                    f"({type(exc).__name__}); the picture was used instead."
+                )
+            if laid_out:
+                pages += 1
+                started = True
+            data = b"" if laid_out else _cover_png(
+                options.cover_config, len(clips), style.page, warnings)
             if data:
                 try:
                     paragraph = document.add_paragraph()

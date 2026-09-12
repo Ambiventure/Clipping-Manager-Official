@@ -16,6 +16,36 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.29
+
+Added
+
+  * **The sentiment dossier's Word cover can be edited.** It used to go into
+    the Word file as one picture. It is text now - each line in a text box
+    Word can retype or drag, the emblem as a picture - the same arrangement
+    the press report's cover already had, so a date or a division name can
+    be corrected in Word without coming back here. The two pills keep their
+    words and lose their rounded backgrounds; the border frame is not
+    written. The PDF is unchanged: one picture, as printed.
+  * **"What was copied…" on the Collect bar.** Every copy since Collect was
+    switched on, what kind it was - a picture and its size, text and its
+    shape - and what became of it: added as No. 7, caption copied onto No.
+    7, not used and why, or nothing to do. Never the words themselves. A
+    copy that held neither a picture nor text is now said on the bar as
+    well, so a copy that goes nowhere is never a mystery.
+
+Fixed
+
+  * **Collect from WhatsApp now brings the page to the photo.** The list
+    stands at its full height inside the page, so asking the list to scroll
+    did nothing: a collected photo landed one row under the visible edge, and
+    nothing seemed to happen. It is the page that moves now, once the new
+    row has been laid out, and the photo sits at the foot of the view with
+    the ones before it in sight above.
+  * **A caption copied as formatted text only is read.** A copy that carried
+    the words as markup with no plain-text copy of them used to go nowhere,
+    silently. The words are read off the markup now.
+
 ## 2.0.28
 
 Fixed

@@ -259,7 +259,10 @@ def add_cover(document, blocks: Sequence, page_width_pt: float,
     # rather than one line out of it.
     box_left = 120.0                       # the text column the layout wraps to
     box_width = float(cover_render.TEXT_MAX_WIDTH)
-    for group in ("heading", "date", "caption"):
+    # Every group the layout named, in the order it named them - the press
+    # report's three, or the dossier's five.
+    groups = list(dict.fromkeys(b.group for b in blocks if b.kind != "logo"))
+    for group in groups:
         parts = [b for b in blocks if b.group == group and b.kind != "logo"]
         if not parts:
             continue

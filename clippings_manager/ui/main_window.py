@@ -1528,6 +1528,42 @@ class MainWindow(QMainWindow):
             return getattr(self.board, "page", None)
         return getattr(self, "body_scroll", None)
 
+    #: Clear of the bottom edge, so the newest row is seen whole.
+    REVEAL_GAP = 14
+
+    def _reveal_on_page(self, clip_id: int) -> None:
+        """Bring a clipping the person did not put there by hand into view.
+
+        The list stands at its full height inside the page, so it is the PAGE
+        that has to move (see _scroll_to_top); asking the list to scroll did
+        nothing, and a collected photo landed one row under the fold. And not
+        yet: the row was inserted a moment ago, and the page's range only
+        grows once the list has laid it out - a scroll made now reaches the
+        old bottom, one row short of the new one (measured: the row sat
+        exactly under the visible edge). So twice - once the layout has run,
+        and again once the range has caught up.
+        """
+        def go() -> None:
+            page = self._page_showing()
+            if page is None or self.mode != "standard":
+                return
+            at_row = self.model.entry_row_for_clip(clip_id)
+            if at_row < 0:
+                return
+            rect = self.list.visualRect(self.model.index(at_row, 0))
+            if not rect.isValid():
+                return
+            top = self.list.viewport().mapTo(page.widget(), rect.topLeft()).y()
+            bar = page.verticalScrollBar()
+            room = page.viewport().height()
+            # At the foot of the view, so the ones before it stay in sight
+            # above - that is where the next caption's eye goes.
+            wanted = top + rect.height() - room + self.REVEAL_GAP
+            bar.setValue(max(0, min(bar.maximum(), wanted)))
+
+        QTimer.singleShot(0, self._deferred(go))
+        QTimer.singleShot(160, self._deferred(go))
+
     def _scroll_to_top(self) -> None:
         """Whichever interface is showing scrolls, and it is the PAGE that does.
 
@@ -2080,11 +2116,7 @@ class MainWindow(QMainWindow):
                 # asked to see it land. Put at the foot of the view, so the
                 # ones before it stay in sight above.
                 if rows:
-                    at_row = self.model.entry_row_for_clip(rows[-1].id)
-                    if at_row >= 0:
-                        from PySide6.QtWidgets import QAbstractItemView
-                        self.list.scrollTo(self.model.index(at_row, 0),
-                                           QAbstractItemView.PositionAtBottom)
+                    self._reveal_on_page(rows[-1].id)
                 self.list._place_editor()
             return rows
         headline = ("Type the headline and press Enter, "

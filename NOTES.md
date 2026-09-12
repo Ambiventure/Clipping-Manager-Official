@@ -1754,3 +1754,41 @@ puts the label, anything else on that line, and the size box on one row),
 where the person types the line they are sizing. The notes line has its
 own size; the two footer lines offer up to 20pt because they sit a fixed way
 up from the bottom edge.
+
+
+## Collect: the page, not the list (2.0.29)
+
+2.0.24 made the list "follow each collected photo" with `list.scrollTo` -
+and the list cannot scroll: it stands at its full height inside the page
+(`body_scroll`), as test_dropscroll's own docstring had already said about
+the drop. Measured with probe_collect_scroll.py: after a quiet add the page
+sat at its OLD maximum and the new row started exactly at the visible edge,
+one row under the fold, from wherever the page had been. `_reveal_on_page`
+maps the row into the page's coordinates and sets the page's bar so the row
+sits at the foot of the view - twice, at 0 and 160 ms, because the page's
+range only grows once the list has laid the row out.
+
+The caption that "goes missing altogether": nothing in the reader or the
+collector loses a copy silently except one path - a copy carrying formatted
+text (`text/html`) with no plain copy of it, which `classify` returned as
+None and the watcher swallowed. That is read off the markup now
+(`QTextDocumentFragment`, parsed, nothing fetched), a None is said as
+"nothing", and the Collector keeps a history of every copy and its fate
+(`Collector.history`, "What was copied…" on the bar) - kind, size or shape,
+and what was done, never the words - so the next "it missed the caption"
+can be answered from the record rather than guessed at.
+
+## The dossier's Word cover is text (2.0.29)
+
+`sentiment_cover.blocks` walks the same flow as `_paint` - the emblem box,
+each line wrapped with the same metrics, the pills at `_pill_origin`, the
+footer a fixed way up - and hands back `cover_render.Placed` items in page
+pixels at 200 DPI, which `word_cover.add_cover` already knew how to set as
+anchored text boxes and one picture. Deliberately a second copy of the flow
+rather than a refactoring: the picture is pinned pixel for pixel by its
+suite, and this must not move it. `add_cover` now takes whatever groups the
+layout names (the dossier has five: heading, date, count, caption, logo)
+instead of three by name. The emblem is drawn to a PNG in the temporary
+folder for Word to embed; a custom logo file is used as it is. Not written:
+the pills' rounded backgrounds and the border frame - the words are what
+get edited, and a page border is a different thing in Word.
