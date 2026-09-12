@@ -198,6 +198,21 @@ class FillFromCopy(_Base):
         self._put(self.before)
 
 
+class CaptionAsTyped(FillFromCopy):
+    """A copied caption the reader could not take apart, printed as written.
+
+    The headline box is the one field that prints anything above the picture
+    exactly as typed, so that is where the words go - flagged, because nobody
+    has checked them, and one undo step like every other copy.
+    """
+
+    FIELDS = FillFromCopy.FIELDS + ("label",)
+
+    def __init__(self, model: "ClipModel", clip_id: int, values: dict,
+                 text: str = "Caption copied as typed"):
+        super().__init__(model, clip_id, values, text)
+
+
 class PutInEnglish(FillFromCopy):
     """A card's Hindi put into English, in one step: the caption out of the
     headline box and into the fields, or the fields themselves respelt.

@@ -1280,6 +1280,32 @@ def read(text: str, index: NameIndex) -> Reading:
     return _nothing(WHY_SEVERAL)
 
 
+def as_typed_words(text: str) -> str:
+    """The words of a copy the reader refused, fit to be printed as typed -
+    or "" when they are not.
+
+    One bubble only, with WhatsApp's furniture taken off. Never a single
+    token: a copied password is one token, and must never be printed on a
+    card. Never an address, never chat, never a copy that is mostly numbers.
+    How many words are too many to print unasked is the caller's rule.
+    """
+    bubbles, prefixed = _cleaned(text or "")
+    if len(bubbles) != 1 or prefixed > 1:
+        return ""
+    words = " ".join(" ".join(line.split()) for line in bubbles[0]).strip()
+    tokens = words.split()
+    if len(tokens) < 2:
+        return ""
+    if any("@" in t or "://" in t or address_in(t) for t in tokens):
+        return ""
+    lettered = [t for t in tokens if any(ch.isalpha() for ch in t)]
+    if len(lettered) < max(2, len(tokens) * 0.6):
+        return ""
+    if all(t.casefold().strip(".,!?") in CHAT_WORDS for t in lettered):
+        return ""
+    return words
+
+
 def caption_values(reading: Reading) -> dict:
     """The seven clipping fields a copied caption sets, ready for one undo step.
 

@@ -1528,8 +1528,9 @@ class MainWindow(QMainWindow):
             return getattr(self.board, "page", None)
         return getattr(self, "body_scroll", None)
 
-    #: Clear of the bottom edge, so the newest row is seen whole.
-    REVEAL_GAP = 14
+    #: Clear of the bottom edge, so the newest row is seen whole - and clear
+    #: of the batch bar that may be floating over the foot of the page.
+    REVEAL_GAP = 28
 
     def _reveal_on_page(self, clip_id: int) -> None:
         """Bring a clipping the person did not put there by hand into view.
@@ -1561,8 +1562,8 @@ class MainWindow(QMainWindow):
             wanted = top + rect.height() - room + self.REVEAL_GAP
             bar.setValue(max(0, min(bar.maximum(), wanted)))
 
-        QTimer.singleShot(0, self._deferred(go))
-        QTimer.singleShot(160, self._deferred(go))
+        for wait_ms in (0, 160, 450):
+            QTimer.singleShot(wait_ms, self._deferred(go))
 
     def _scroll_to_top(self) -> None:
         """Whichever interface is showing scrolls, and it is the PAGE that does.

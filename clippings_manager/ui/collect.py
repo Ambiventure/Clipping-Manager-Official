@@ -135,6 +135,40 @@ HISTORY_FOOT = ("Only what kind of copy each was and what became of it - never "
                 "the words, which may be anything the clipboard carried.")
 
 
+#: A copied caption the reader could not take apart is still a caption when
+#: it is short and made of words. Up to this many words it is printed as
+#: typed without asking; up to the second, the bar offers it on a button;
+#: beyond that it is a pasted paragraph, not a caption.
+AS_TYPED_WORDS = 16
+AS_TYPED_BUTTON_WORDS = 60
+#: What is printed as typed is amber on the card: nobody has checked it.
+AS_TYPED_CONFIDENCE = 0.5
+
+AS_TYPED = ("\u201c{shown}\u201d printed as typed on {which} \u2014 it did not read as a "
+            "newspaper and a city ({reason}), so it prints as written. Check "
+            "it, or type over it.")
+PRINT_AS_TYPED = "Print it as typed on {which}"
+
+
+def as_typed(text: str) -> tuple[str, str]:
+    """(how, the words) for a copy the reader refused: "auto" to print it as
+    typed at once, "button" to offer it, "" to leave it refused.
+
+    The words are the copy with WhatsApp's furniture taken off, one bubble
+    only. Not a single token - a copied password is one token and must never
+    be printed on a card - and not an address, not chat, not mostly numbers.
+    """
+    words = copied.as_typed_words(text)
+    if not words:
+        return "", ""
+    tokens = words.split()
+    if len(tokens) <= AS_TYPED_WORDS:
+        return "auto", words
+    if len(tokens) <= AS_TYPED_BUTTON_WORDS:
+        return "button", words
+    return "", ""
+
+
 def _picture_shape(item) -> str:
     return f"picture, {len(item.data) // 1024} KB"
 
@@ -199,6 +233,10 @@ class Pending:
     why: str
     link_only: bool = False
     button: Optional[str] = None     # its words, with {which} still to fill
+    # For a copy that could not be read but can be printed as written: the
+    # words, and the copy they came from.
+    typed: str = ""
+    raw: str = ""
 
 
 @dataclass
@@ -506,6 +544,34 @@ class Collector(QObject):
             return
         if reading.kind == "nothing":
             reason = reading.reason or "it did not look like a caption"
+            # A caption the reader could not take apart is still the caption
+            # the office copied. With a photo waiting for one, short and made
+            # of words, it is printed as typed - the report needs the words
+            # above the picture more than it needs them in separate fields -
+            # and flagged amber, because nobody has checked them.
+            how, words = ("", "") if reason in NOT_A_CAPTION_AT_ALL else as_typed(item.text)
+            found = self._valid(self.target) if how else None
+            if found is not None and not caption_open(found[1].clip):
+                found = None
+            if found is not None and found[1].clip.label.strip():
+                found = None
+            if found is not None and how == "auto":
+                pool, row = found
+                which = self._which(pool, row)
+                self._fill_as_typed(pool, row, words, item.text)
+                self._say(AS_TYPED.format(shown=_elide(words), which=which, reason=reason))
+                self._remember_copy(f"text, {_shape(item.text)}",
+                                    f"printed as typed on {which} ({reason})")
+                return
+            if found is not None and how == "button":
+                self.pending = Pending(reading, self.target,
+                                       NOT_USED.format(reason=f"{reason} ({_shape(item.text)})"),
+                                       False, PRINT_AS_TYPED, typed=words, raw=item.text)
+                self._say(self.pending.why, problem=True)
+                self._alert()
+                self._remember_copy(f"text, {_shape(item.text)}",
+                                    f"not used: {reason} (kept for the button)")
+                return
             # The shape of what arrived - how many words, which script - and
             # never the words: that is enough to tell what went wrong without
             # ever showing a copied password back on screen.
@@ -584,7 +650,19 @@ class Collector(QObject):
             message += NOTE_BARE_PAGE
         return message
 
-    def _fill(self, pool, row, values: dict, text: str) -> None:
+    def _fill_as_typed(self, pool, row, words: str, raw: str) -> None:
+        """The copied words printed above the picture as they are."""
+        self._captions += 1
+        self._thumb_row = row
+        self.pending = None
+        self._fill(pool, row, {
+            "label": words, "no_title": False,
+            "caption_raw": (raw or "").strip()[:300],
+            "name_source": "copied", "name_confidence": AS_TYPED_CONFIDENCE,
+        }, "Caption copied as typed", command=commands.CaptionAsTyped)
+
+    def _fill(self, pool, row, values: dict, text: str,
+              command=None) -> None:
         """One copy onto one clipping, as one undo step.
 
         An open headline box on that clipping is put away first - committed if
@@ -599,7 +677,7 @@ class Collector(QObject):
         if pool.row_for(row.id) is not row:
             return
         stack = w.stack_for(pool)
-        stack.push(commands.FillFromCopy(pool, row.id, values, text))
+        stack.push((command or commands.FillFromCopy)(pool, row.id, values, text))
         self._remember(stack)
         if pool is w.board_model:
             w._refresh_board()
@@ -630,6 +708,17 @@ class Collector(QObject):
             return
         pool, row = found
         reading = pending.reading
+        if pending.typed:
+            # The button for a copy printed as typed.
+            self.pending = None
+            if caption_open(row.clip) and not row.clip.label.strip():
+                which = self._which(pool, row)
+                self._fill_as_typed(pool, row, pending.typed, pending.raw)
+                self._say(AS_TYPED.format(shown=_elide(pending.typed), which=which,
+                                          reason=reading.reason or "it did not read"))
+                self._remember_copy("text", f"printed as typed on {which}, on the button")
+            self._render()
+            return
         caption = reading.kind in ("caption", "caption+link") and not pending.link_only
         values: dict = {}
         if caption:

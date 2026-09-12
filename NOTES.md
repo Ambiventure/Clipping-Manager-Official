@@ -1792,3 +1792,25 @@ instead of three by name. The emblem is drawn to a PNG in the temporary
 folder for Word to embed; a custom logo file is used as it is. Not written:
 the pills' rounded backgrounds and the border frame - the words are what
 get edited, and a page border is a different thing in Word.
+
+
+## The caption that "goes missing": printed as typed (2.0.30)
+
+Two in ten captions "missed" in use, with the photos landing every time.
+The clipboard path is the same for both, so the misses are refusals: the
+reader is strict on purpose - "newspaper, city, page" or nothing - and a
+refusal reads as a miss to somebody working in WhatsApp with the bar out of
+sight. The 2.0.24 measurement (117 office forms) still reads 116, so the
+two in ten are forms the office types that nobody has written down.
+
+The answer is not a looser reader. A caption the reader cannot take apart
+is still the caption the office copied, and what the report needs is the
+words above the picture: `collect.as_typed` puts them in the headline box
+exactly as written (`commands.CaptionAsTyped`, FillFromCopy plus `label`),
+at confidence 0.5 so the card is amber, with the bar saying why the words
+were not read. Refused still, deliberately: one token (a copied password is
+one token), an address, chat, mostly numbers, more than 60 words, two
+bubbles. Up to 16 words it happens at once; up to 60 it is offered on the
+button. "What was copied…" records it as "printed as typed on No. 7 (the
+reason)", which is also what to read when it happens again - the reason is
+the form the reader wants teaching.

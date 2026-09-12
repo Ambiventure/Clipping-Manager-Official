@@ -16,6 +16,26 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.30
+
+Fixed
+
+  * **A copied caption the program cannot take apart is printed as typed.**
+    Collect used to refuse a caption it could not read as "newspaper, city,
+    page" - "Not used" on the bar, and nothing on the photo. Now, when a
+    photo is waiting and the copy is short and made of words, the words go
+    into the photo's headline box exactly as written, so they print above
+    the picture; the card is flagged amber because nobody has checked them,
+    the bar says what happened and why the words were not read, and Ctrl+Z
+    or "Undo that" takes it back. A longer copy is offered on a button
+    ("Print it as typed on No. 7"). Still refused, as before: a single word
+    (a copied password is a single word and must never land on a card), an
+    address, chat, a copy that is mostly numbers, a pasted article, and two
+    messages copied at once.
+  * **Collect's scroll comes all the way.** The page is brought to the new
+    photo once more after the list has finished laying it out, and stops
+    clear of the bar that floats over the foot of the page.
+
 ## 2.0.29
 
 Added
