@@ -185,6 +185,41 @@ def _place_picture(run, clip: Clip, width, height) -> None:
     raise last if last else RuntimeError("image could not be placed")
 
 
+def _summary_paragraphs(document, summary, style, report_date, page_width: float) -> None:
+    """The coverage summary as ordinary paragraphs on a page of its own -
+    a label, a tab, the count against the right edge."""
+    from docx.enum.text import WD_TAB_ALIGNMENT
+
+    face = LATIN_FACES[style.family]
+    usable = page_width - layout.MARGIN_SIDE * 2
+
+    def paragraph(text: str, size: float, bold: bool = False, colour=None,
+                  before: float = 0.0, tabbed: bool = False):
+        made = document.add_paragraph()
+        made.paragraph_format.space_before = Pt(before)
+        made.paragraph_format.space_after = Pt(2)
+        if tabbed:
+            made.paragraph_format.tab_stops.add_tab_stop(
+                Pt(usable - 36.0), WD_TAB_ALIGNMENT.RIGHT)
+        run = made.add_run(text)
+        run.font.size = Pt(size)
+        run.bold = bold
+        if colour:
+            run.font.color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
+        _set_faces(run, face)
+        return made
+
+    title = paragraph("Coverage summary", 20.0, bold=True)
+    title.paragraph_format.page_break_before = True
+    plural = "s" if summary.total != 1 else ""
+    paragraph(f"Press media coverage {report_date.strftime('%d.%m.%Y')} \u2014 "
+              f"{summary.total} clipping{plural}", 12.5, colour="#4B5563")
+    for tally in summary.tallies:
+        paragraph(tally.title, 12.5, bold=True, colour=layout.SECTION_COLOUR, before=14.0)
+        for label, count in tally.rows:
+            paragraph(f"{label}\t{count}", 11.0, tabbed=True)
+
+
 def build(
     clips: Sequence[Clip],
     output: str | Path,
@@ -197,6 +232,7 @@ def build(
     draw_cover_text: bool = True,
     heading: Optional[layout.HeadingStyle] = None,
     cover_blocks: Optional[Sequence] = None,
+    summary=None,
 ) -> Result:
     """Write the newspad as .docx, in the order the user arranged.
 
@@ -388,6 +424,12 @@ def build(
         if opening:
             opening[0].paragraph_format.page_break_before = True
         written += 1
+
+    if summary is not None and summary.tallies:
+        try:
+            _summary_paragraphs(document, summary, style, report_date, page_width)
+        except Exception as exc:  # noqa: BLE001 - a summary never costs the report
+            warnings.append(f"The summary page could not be written ({type(exc).__name__}).")
 
     # The same stamp the PDF carries, in the properties Word already has.
     properties = document.core_properties

@@ -103,6 +103,29 @@ DEFAULTS = {
 DOSSIER_DEFAULTS = {**DEFAULTS, "size": 16, "align": "left", "bold": True}
 
 
+#: Pasted phone screenshots lose their status and navigation bars as a
+#: crop. On unless switched off: the bars are never the clipping.
+TIDY_KEY = "tidy_screenshots"
+
+
+def tidy_wanted() -> bool:
+    from .export_dialog import load_settings
+
+    try:
+        return bool(load_settings().get(TIDY_KEY, True))
+    except Exception:  # noqa: BLE001 - no settings yet
+        return True
+
+
+def set_tidy_wanted(on: bool) -> None:
+    from .export_dialog import load_settings, save_settings
+
+    try:
+        save_settings({**load_settings(), TIDY_KEY: bool(on)})
+    except Exception:  # noqa: BLE001 - a preference, never a crash
+        pass
+
+
 def defaults_for(key: str) -> dict:
     return dict(DOSSIER_DEFAULTS if key == "sentiment" else DEFAULTS)
 
@@ -242,6 +265,21 @@ class HeadingLayoutCard(QFrame, DesignFile):
 
         self.bold_box = QCheckBox("Bold")
         self.page_box = QCheckBox("Page numbers")
+        # Not a layout value: a preference, kept in the export settings file
+        # that every newspad shares, and only shown here. The layout values
+        # are HeadingStyle's own keywords and nothing else may sit among them.
+        self.tidy_box = QCheckBox("Trim phone bars")
+        self.tidy_box.setToolTip(
+            "A pasted phone screenshot loses its status bar, its navigation "
+            "bar and any blank margin, as a crop - the picture is untouched, "
+            "and Trim\u2026 then Whole picture puts them back.")
+        self.tidy_box.setCursor(Qt.PointingHandCursor)
+        self.tidy_box.setStyleSheet(
+            f"QCheckBox {{ color: {theme.INK}; font-size: 11px;"
+            f" font-weight: 700; background: transparent; }}")
+        self.tidy_box.setChecked(tidy_wanted())
+        self.tidy_box.toggled.connect(set_tidy_wanted)
+        controls.addWidget(self.tidy_box)
         for box in (self.bold_box, self.page_box):
             box.setCursor(Qt.PointingHandCursor)
             box.setStyleSheet(

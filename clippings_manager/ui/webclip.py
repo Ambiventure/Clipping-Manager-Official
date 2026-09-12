@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                                QVBoxLayout)
 
 from ..core import links, webshot
-from . import fromchrome, theme
+from . import embedded, fromchrome, theme
 
 PASTE_HINT = ("Paste a link, or the whole WhatsApp message with the morning's "
               "list in it. Every link in it is found, in the order it was sent.")
@@ -33,6 +33,12 @@ SIGN_IN_TIP = ("X and Facebook only show a post to somebody signed in. This "
                "Your everyday Chrome is not touched, and the program never "
                "sees your password. Chrome will not lend the program the "
                "sign-in you already have - for that, use Take from my Chrome.")
+INSIDE_TIP = ("The browser inside the program. Sign in there once - X, "
+              "Facebook - and every capture after that is signed in, with "
+              "nothing on the screen while twelve links are captured. Your "
+              "everyday Chrome is not touched. You can also look at a page "
+              "there and capture it by hand.")
+INSIDE = "Browser inside the app\u2026"
 NEEDS_SIGN_IN = ("{count} could not be read without a sign-in: press Take from "
                  "my Chrome to take {them} from your own Chrome, or Sign in for "
                  "captures once.")
@@ -144,7 +150,8 @@ class LinksDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
         self.sign_in = QPushButton("Sign in for captures…")
-        self.sign_in.setToolTip(SIGN_IN_TIP)
+        self.sign_in.setToolTip(INSIDE_TIP if embedded.usable() else SIGN_IN_TIP)
+        self.browser = None
         self._say_signed_in()
         self.sign_in.setCursor(Qt.PointingHandCursor)
         self.sign_in.clicked.connect(self._sign_in)
@@ -226,10 +233,17 @@ class LinksDialog(QDialog):
         self.count.setText(f"Capturing {len(wanted)}… the window stays usable.")
 
         self.thread = QThread(self)
-        self.catcher = Catcher(wanted)
+        if embedded.usable():
+            # The browser inside the program: the same capture, signed in
+            # as the person is there, with nothing on the screen.
+            host = embedded.Host.get()
+            self.catcher = embedded.Catcher(wanted, embedded.PORT, host.target_id)
+            self.catcher.caught.connect(self._one_caught)
+        else:
+            self.catcher = Catcher(wanted)
+            self.catcher.caught.connect(self._one_done)
         self.catcher.moveToThread(self.thread)
         self.thread.started.connect(self.catcher.run)
-        self.catcher.caught.connect(self._one_done)
         self.catcher.progress.connect(self._progress)
         self.catcher.finished.connect(self._all_done)
         self.thread.start()
@@ -255,6 +269,10 @@ class LinksDialog(QDialog):
             row.setToolTip(caught.why)
             if "sign" in caught.why.casefold():
                 row.setData(Qt.UserRole + 1, "sign-in")
+
+    @Slot(object, object, str)
+    def _one_caught(self, found, shot, why: str) -> None:
+        self._one_done(Caught(found=found, shot=shot, why=why))
 
     def _row_of(self, url: str):
         for index in range(self.list.count()):
@@ -294,13 +312,19 @@ class LinksDialog(QDialog):
         the keys to those accounts.
         """
         try:
-            known = webshot.signed_in_sites()
+            known = (embedded.known_sign_ins() if embedded.usable()
+                     else webshot.signed_in_sites())
         except Exception:  # noqa: BLE001 - only the words on a button
             known = []
-        self.sign_in.setText("Sign in for captures…" if not known else
-                             "Signed in: " + ", ".join(known))
+        inside = embedded.usable()
+        self.sign_in.setText(
+            (INSIDE if inside else "Sign in for captures…") if not known else
+            "Signed in: " + ", ".join(known) + (" \u2014 open" if inside else ""))
 
     def _sign_in(self) -> None:
+        if embedded.usable():
+            self._open_inside()
+            return
         try:
             webshot.sign_in()
         except webshot.ShotError as bad:
@@ -309,6 +333,31 @@ class LinksDialog(QDialog):
         self.count.setText("A browser window is open: sign in there, close it, "
                            "and capture again.")
         QTimer.singleShot(30000, self._say_signed_in)
+
+    def _open_inside(self, url: str = "") -> None:
+        """The browser inside the program, at the first ticked link or the
+        sign-in page. One window; opening it again brings it forward."""
+        if self.browser is None:
+            ticked = self._ticked()
+            where = url or (ticked[0].url if ticked else "https://x.com/login")
+            try:
+                self.browser = embedded.BrowserWindow(self.window, where, parent=self)
+            except Exception as bad:  # noqa: BLE001 - the browser did not start
+                self.count.setText(f"The browser inside the program could not open ({bad}).")
+                return
+            self.browser.finished.connect(self._inside_closed)
+            self.browser.captured.connect(lambda _id: self._say_signed_in())
+            self.count.setText("Sign in in the window that opened if a post needs it, "
+                               "then capture here - or capture a page there by hand.")
+        elif url:
+            self.browser.open(url)
+        self.browser.show()
+        self.browser.raise_()
+        self.browser.activateWindow()
+
+    def _inside_closed(self, *_args) -> None:
+        self.browser = None
+        self._say_signed_in()
 
     def _from_chrome(self) -> None:
         """The ticked links, one after another, from the person's own Chrome."""
@@ -341,6 +390,8 @@ class LinksDialog(QDialog):
                            "from your Chrome.")
 
     def closeEvent(self, event):  # noqa: N802 - Qt's name
+        if self.browser is not None:
+            self.browser.close()
         if self.taker is not None:
             self.taker.close()
         if self.catcher is not None:

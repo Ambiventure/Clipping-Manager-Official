@@ -61,6 +61,10 @@ from ..core import (copied, duplicates, links, newspads, ocr, sentiment,
                     training, wordlist)
 from ..core.models import Clip, Section
 from ..core.profiles import NameIndex
+
+#: Said after a paste that lost its phone bars, so the crop is no surprise.
+TIDIED_NOTE = (" The phone's bars were trimmed off - Trim… then Whole picture "
+               "puts them back.")
 from .. import version
 from ..core.session import SessionStore, decode_clip, encode_clip
 from . import (collect, commands, datefield, dropped, export_dialog, icons,
@@ -2093,6 +2097,7 @@ class MainWindow(QMainWindow):
             return []
         target = self.pool()
         self._stamp_pending(clips)
+        tidied = self._tidy_screenshots(clips)
         rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
         at = target.loose_insert_point()
         self.stack_for(target).push(
@@ -2146,7 +2151,7 @@ class MainWindow(QMainWindow):
         self._show_list()
         self._flash(
             f"Added {len(rows)} clipping{'s' if len(rows) != 1 else ''} at the top. "
-            f"{headline}",
+            f"{headline}" + (TIDIED_NOTE if tidied else ""),
             "good",
         )
         first = rows[0].id
@@ -2237,6 +2242,27 @@ class MainWindow(QMainWindow):
             self._flash(f"Captured {shot.site} — No. "
                         f"{pool.position_of(rows[0].id) + 1}.", "good")
         return rows[0].id if rows else None
+
+    def _tidy_screenshots(self, clips: list) -> int:
+        """Take the phone's bars and the blank margins off pasted pictures, as
+        a crop each carries - the picture itself is never altered, and the
+        preview's Whole picture puts it back. Only when the layout card says
+        so, and only on pictures that arrived by hand. Returns how many."""
+        from .layout_card import tidy_wanted
+
+        if not tidy_wanted():
+            return 0
+        from ..core import tidy
+
+        done = 0
+        for clip in clips:
+            if clip.source_file != "clipboard" or not clip.crop.is_identity:
+                continue
+            box = tidy.tidy_crop(clip.image_bytes)
+            if box is not None:
+                clip.crop = box
+                done += 1
+        return done
 
     def _clip_from_bytes(self, data: bytes, name: str) -> Clip:
         from PIL import Image
@@ -3493,8 +3519,13 @@ class MainWindow(QMainWindow):
         # The cover card renders whichever template is chosen to one finished
         # picture, so the PDF cover and the Word cover are the same pixels.
         built = self.cover.rendered_cover(len(clips))
+        from ..export import summary as coverage
+
+        board_clips = [row.clip for row in self.board_model.rows
+                       if row.clip is not None]
         dialog = ExportDialog(
             clips, self, prefer=prefer,
+            summary=coverage.Summary.of(clips, board_clips, self.config),
             report_date=self.cover.report_date(),
             cover_image=built or self.cover.cover_image(),
             heading="" if built else self.cover.heading(),

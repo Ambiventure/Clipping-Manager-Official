@@ -99,6 +99,14 @@ def main() -> int:
 
     zoom.apply_to_environment()
 
+    # The browser inside the program is prepared before the application
+    # exists: Qt reads its port and its flags once, and QtWebEngineWidgets
+    # has to be imported before a QApplication is made (it sets the OpenGL
+    # sharing the application needs). Nothing opens until it is used.
+    from clippings_manager.ui import embedded
+
+    embedded.prepare()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Clippings Manager")
     app.setOrganizationName("Northern Railway PR")

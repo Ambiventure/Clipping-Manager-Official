@@ -21,6 +21,15 @@ import traceback
 from datetime import date
 from pathlib import Path
 
+# The browser inside the program has to be imported before any Qt application
+# exists - the import sets the OpenGL context sharing the engine needs - or
+# the engine check below does not fail, it fails fast (0xC0000409) and takes
+# the whole self-test with it. Measured, in the venv and in the bundle alike.
+try:
+    import PySide6.QtWebEngineWidgets  # noqa: F401
+except Exception:  # noqa: BLE001 - a build without the browser
+    pass
+
 
 def _line(ok: bool, label: str, detail: str = "") -> str:
     mark = "  ok  " if ok else " FAIL "
@@ -242,6 +251,41 @@ def run(sample: str | None = None) -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         passed = False
         lines.append(_line(False, "Devanagari font", f"{type(exc).__name__}: {exc}"))
+
+    # --- the browser inside the program --------------------------------------
+    # The one piece most likely to be left out of a bundle: the engine, its
+    # helper process and its resources. A page is loaded from memory - nothing
+    # reaches out - and its title read back.
+    try:
+        from .ui import embedded
+
+        if not embedded.AVAILABLE:
+            raise RuntimeError("QtWebEngine is not in this build")
+        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        from PySide6.QtWidgets import QApplication
+
+        # The engine will not be made without an application to live in -
+        # it does not fail, it fails fast and takes the self-test with it.
+        # A QApplication serves every later check as well.
+        _app = QApplication.instance() or QApplication([])  # noqa: F841 - kept alive
+        page = QWebEnginePage()
+        loop = QEventLoop()
+        outcome = {}
+        page.loadFinished.connect(lambda okay: (outcome.setdefault("ok", okay), loop.quit()))
+        QTimer.singleShot(20000, loop.quit)
+        page.setHtml("<html><head><title>engine ok</title></head><body>ok</body></html>")
+        loop.exec()
+        ok = bool(outcome.get("ok")) and page.title() == "engine ok"
+        passed &= ok
+        lines.append(_line(ok, "browser inside the program",
+                           "the engine loaded a page" if ok else
+                           f"loaded={outcome.get('ok')} title={page.title()!r}"))
+        page.deleteLater()
+    except Exception as exc:  # noqa: BLE001
+        passed = False
+        lines.append(_line(False, "browser inside the program",
+                           f"{type(exc).__name__}: {exc}"))
 
     # --- a real export ----------------------------------------------------
     try:

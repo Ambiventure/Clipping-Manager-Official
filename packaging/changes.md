@@ -16,6 +16,41 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.31
+
+Added
+
+  * **A browser inside the program, for links.** Links are captured by the
+    program's own browser now: sign in there once - "Browser inside the
+    app…" in the links window opens it, X and Facebook keep their sign-in
+    in the program's own profile, never in your Chrome - and every capture
+    after that is signed in. Twelve links are captured with nothing on the
+    screen: the page that captures is parked off the edge of the desktop,
+    and only the story, or the post, comes out - no tabs, no bookmarks bar.
+    A page can also be captured by hand from that window ("Capture this
+    page"). "Take from my Chrome" stays for a post nothing else can reach.
+    The download is larger for it: the engine travels with the program.
+  * **A coverage summary page.** Tick "Add a coverage summary page at the
+    end" in the export window and the report ends with one page that counts
+    the day up: how many clippings, of what kind (print, electronic,
+    digital, social, advertisement), from which division, in which
+    newspapers - and, when the sentiment board has been used, how the day
+    split between positive, neutral and negative. In the PDF and the Word
+    file alike; off unless you tick it.
+  * **The file shown in its folder.** After an export, the PDF or Word file
+    is selected in its folder in Explorer, ready to be dragged onto a mail
+    or a chat. "Show it in its folder" in the export window, on by default,
+    beside "Open when finished". File names carry the date as they always
+    did.
+  * **Pasted phone screenshots are tidied.** A screenshot pasted or
+    collected from a phone loses its status bar (the time, the battery),
+    its navigation bar or gesture strip, and any blank margin - as a crop,
+    so the picture itself is untouched and Trim… then Whole picture puts
+    them back. It is careful: a band is a bar only when it is thin, nearly
+    one colour, holds a few small marks and stops at a plain edge; a
+    newspaper scan is left alone. "Trim phone bars" on the Heading &
+    Document Layout card switches it off.
+
 ## 2.0.30
 
 Fixed

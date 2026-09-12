@@ -1814,3 +1814,75 @@ bubbles. Up to 16 words it happens at once; up to 60 it is offered on the
 button. "What was copied…" records it as "printed as typed on No. 7 (the
 reason)", which is also what to read when it happens again - the reason is
 the form the reader wants teaching.
+
+
+## The browser inside the program (2.0.31)
+
+The ask: capture the story without Chrome's tabs and bookmarks bar, sign in
+once inside the program, and capture twelve links with nothing on the
+screen. Qt's own Chromium (QtWebEngine, already in the toolkit) does all
+three, and the block finder and the DevTools client of core/webshot drive
+it unchanged: `webshot.capture_over(wire, url)` is the one capture, over
+headless Chrome's wire or the embedded page's.
+
+Three facts measured on the way, each of which cost a probe:
+
+  * The DevTools server of the embedded engine answers from the thread
+    that owns the browser - Qt's main thread. A blocking request made from
+    the main thread waits on itself for ever. Every call over the wire is
+    made from a worker thread (`embedded.Catcher` on a QThread, as
+    webclip's Catcher always was).
+  * A page with no view gives no screenshot, ever: `Page.captureScreenshot`
+    needs a rendered surface. A view in a window shown off every edge of
+    the desktop (`PARK_AT`, a Tool window that never takes focus) gives one
+    in half a second. That is the whole "silent" mechanism.
+  * The debugging port has to be in the environment before Qt reads it,
+    and QtWebEngineWidgets must be imported before the QApplication exists
+    (`embedded.prepare()` in main.py, before the application is made); the
+    port itself only opens when the first page is made, and only on
+    127.0.0.1. `webshot.free_port` picks it, because webshot is the module
+    allowed to know what a port is.
+
+Sign-ins are recorded by host name off the profile's `cookieAdded` - never
+a value - into `webprofile/signed-in.json`, which is how the button can say
+"Signed in: x.com" without opening the engine. `embedded.usable()` is false
+on the offscreen platform, so every offscreen suite keeps the headless path
+and its stand-in browser; test_embedded runs on the real window platform
+with a loopback HTTP server for the fixture. The build spec had excluded
+QtWebEngine to keep the zip small; it is in now, with QtWebChannel and
+QtPositioning, which the engine links.
+
+## Three of the person's own asks (2.0.31)
+
+**The summary page** is `export/summary.Summary.of(clips, board_clips,
+config)`: four tallies (kind, division, newspaper, board), counted once so
+the PDF and the Word file cannot disagree, rendered by each builder in its
+own way (`_summary_pages` flows onto a second sheet when the newspaper list
+is long; the Word page uses a right tab stop for the counts). "Print" is
+every section that is not electronic, digital, social or an advertisement,
+because that is what the import files a print cutting under. Off by
+default in the export window and remembered.
+
+**Shown in its folder** is `explorer /select,<path>`, after "Open when
+finished" and independent of it.
+
+**Tidying** is `core/tidy.py`: the blank margins by a difference against
+the corner colour (`ImageChops`, no loops), then - for a portrait picture
+at least 480 wide - the status bar from the top and the navigation bar from
+the bottom by row signatures on a posterised 480-wide copy: a run of rows
+at least 84% one colour, between 1.2% and 7.5% of the height (10% at the
+bottom), carrying a few marks (0.1% to 22% of the band's pixels: the time,
+the icons, the pill) and ending at a plain edge. Conservative by design: a
+missed bar costs a moment with the trim tool, a wrong one a piece of the
+story. Applied in `_add_loose` to pictures that came by hand (`source_file
+== "clipboard"`) as a CropRect, never to the bytes; the layout card's
+"Trim phone bars" switches it off, and Collect's bar says when it happened.
+The switch is a preference in the export settings file that every newspad
+shares, only shown on the card - not one of the card's layout values, which
+are HeadingStyle's own keywords and nothing else (test_heading builds a
+HeadingStyle from them, and a stray key there took the suite down).
+
+**The build numbers itself.** `build.py` bumps the stamp on every packaged
+build and rewrites version.py, latest.json and version_info.txt; a rebuild
+of the same version needs `--release 2.0.30`, or it becomes 2.0.31 with no
+entry in changes.md. Recorded here because it cost a round.

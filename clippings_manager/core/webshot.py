@@ -273,15 +273,7 @@ class Browser:
     def _page(self) -> _Wire:
         if self.wire is not None:
             return self.wire
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/list",
-                                    timeout=20) as answer:
-            targets = json.loads(answer.read())
-        pages = [t for t in targets if t.get("type") == "page"]
-        if not pages:
-            raise ShotError("the browser opened no page")
-        self.wire = _Wire(pages[0]["webSocketDebuggerUrl"])
-        self.wire.call("Page.enable")
-        self.wire.call("Runtime.enable")
+        self.wire = attach(self.port)
         # Say who we are the way an ordinary Chrome does. With a window there
         # is no window, the browser calls itself HeadlessChrome, and X answers
         # "Access to x.com was denied" before the page is ever drawn. This is
@@ -298,11 +290,64 @@ class Browser:
 
     def capture(self, url: str, settle: float = SETTLE_SECONDS) -> Shot:
         """One page, as a cutting. Raises ShotError, never anything else."""
-        from .blockjs import FIND_BLOCK
-
         if not self.running:
             self.start()
-        page = self._page()
+        return capture_over(self._page(), url, settle)
+
+    def __enter__(self) -> "Browser":
+        self.start()
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.stop()
+
+
+def free_port() -> int:
+    """A loopback port nobody is using, for the browser inside the program
+    to answer on. Chosen here because this is the module allowed to know
+    what a port is."""
+    probe = socket.socket()
+    try:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+    finally:
+        probe.close()
+
+
+def debugging_address(port: int) -> str:
+    """What QtWebEngine is told to listen on: loopback only, this port."""
+    return f"127.0.0.1:{port}"
+
+
+def targets(port: int) -> list:
+    """The pages a DevTools port offers. Blocking: never from the thread that
+    owns the browser's own event loop (the embedded one answers from Qt's
+    main thread, so a call made there waits on itself)."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list",
+                                timeout=20) as answer:
+        return json.loads(answer.read())
+
+
+def attach(port: int, target_id: str = "") -> _Wire:
+    """A wire to one page on a DevTools port - the page with this target id,
+    or the first page there is."""
+    pages = [t for t in targets(port) if t.get("type") == "page"]
+    if target_id:
+        pages = [t for t in pages if t.get("id") == target_id] or pages
+    if not pages:
+        raise ShotError("the browser opened no page")
+    wire = _Wire(pages[0]["webSocketDebuggerUrl"])
+    wire.call("Page.enable")
+    wire.call("Runtime.enable")
+    return wire
+
+
+def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
+    """One page, as a cutting, over any DevTools wire - headless Chrome's or
+    the embedded browser's. Raises ShotError, never anything else."""
+    from .blockjs import FIND_BLOCK
+
+    if True:
         page.call("Emulation.setDeviceMetricsOverride", width=PAGE_WIDE,
                   height=PAGE_TALL, deviceScaleFactor=SHARPNESS, mobile=False)
         page.call("Page.navigate", url=url, seconds=PAGE_SECONDS)
@@ -346,13 +391,6 @@ class Browser:
                     site=found.get("site", ""), kind=found.get("kind", "story"),
                     width=int(clip["width"]), height=int(clip["height"]))
 
-    def __enter__(self) -> "Browser":
-        self.start()
-        return self
-
-    def __exit__(self, *_args) -> None:
-        self.stop()
-
 
 def sign_in(url: str = "https://x.com/login") -> subprocess.Popen:
     """Open a real browser window, on the program's own settings, so somebody
@@ -370,7 +408,7 @@ def sign_in(url: str = "https://x.com/login") -> subprocess.Popen:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def signed_in_sites() -> list[str]:
+def signed_in_sites(store: Optional[Path] = None) -> list[str]:
     """Which sites the program's own browser has a sign-in for.
 
     Read from the cookie file's names only - never the values, which are the
@@ -379,7 +417,7 @@ def signed_in_sites() -> list[str]:
     import sqlite3
 
     found: set[str] = set()
-    store = browser_folder() / "Default" / "Network" / "Cookies"
+    store = store or browser_folder() / "Default" / "Network" / "Cookies"
     if not store.is_file():
         return []
     copy = store.with_suffix(".reading")

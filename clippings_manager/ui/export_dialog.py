@@ -122,9 +122,13 @@ class ExportDialog(QDialog):
     def __init__(self, clips: list, parent=None, prefer: str = "pdf",
                  report_date=None, cover_image=None, heading: str = "",
                  cover_baked: bool = False, layout_style: dict | None = None,
-                 cover_blocks: list | None = None, name_suffix: str = ""):
+                 cover_blocks: list | None = None, name_suffix: str = "",
+                 summary=None):
         super().__init__(parent)
         self.clips = clips
+        # The day counted up (export/summary.Summary), for the optional last
+        # page. None when the caller has nothing to count.
+        self.summary = summary
         self.heading = heading
         # " - Newspad 2" for newspads 2 to 4, nothing for Newspad 1: two
         # newspads exported on one day must not suggest the same file name.
@@ -272,6 +276,17 @@ class ExportDialog(QDialog):
         self.cover_note.setVisible(self.cover_baked)
         layout.addWidget(self.cover_note)
 
+        # The optional last page. Off unless it was ticked last time: a
+        # summary is for the days somebody asks for one.
+        self.summary_box = QCheckBox("Add a coverage summary page at the end")
+        self.summary_box.setToolTip(
+            "One page after the clippings: how many, of what kind, from which "
+            "division, in which newspapers - and the sentiment board's split "
+            "when it has been used.")
+        self.summary_box.setChecked(bool(saved.get("summary_page", False)))
+        self.summary_box.setEnabled(summary is not None)
+        layout.addWidget(self.summary_box)
+
         rule = QFrame()
         rule.setFrameShape(QFrame.HLine)
         rule.setStyleSheet(f"color: {theme.HAIRLINE};")
@@ -293,6 +308,11 @@ class ExportDialog(QDialog):
         self.open_after = QCheckBox("Open when finished")
         self.open_after.setChecked(saved.get("open_after", True))
         buttons.addWidget(self.open_after)
+        # The file, selected in its folder, ready to be dragged onto a mail or
+        # a chat - the step after every export.
+        self.show_folder = QCheckBox("Show it in its folder")
+        self.show_folder.setChecked(saved.get("show_folder", True))
+        buttons.addWidget(self.show_folder)
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
         self.build_btn = QPushButton("Build")
@@ -436,6 +456,8 @@ class ExportDialog(QDialog):
                 "docx": self.want_docx.isChecked(),
                 "folder": str(folder),
                 "open_after": self.open_after.isChecked(),
+                "show_folder": self.show_folder.isChecked(),
+                "summary_page": self.summary_box.isChecked(),
                 "page": page,
                 "fit": fit,
             }
@@ -460,6 +482,7 @@ class ExportDialog(QDialog):
                     cover_title="" if self.cover_baked else self.heading,
                     draw_cover_text=not self.cover_baked,
                     heading=style,
+                    summary=self._summary_wanted(),
                 )
                 warnings.extend(result.warnings)
                 made.append(result.path)
@@ -475,6 +498,7 @@ class ExportDialog(QDialog):
                     draw_cover_text=not self.cover_baked,
                     heading=style,
                     cover_blocks=self.cover_blocks,
+                    summary=self._summary_wanted(),
                 )
                 warnings.extend(result.warnings)
                 made.append(result.path)
@@ -498,6 +522,8 @@ class ExportDialog(QDialog):
 
         if self.open_after.isChecked() and made:
             self._open(made[0])
+        if self.show_folder.isChecked() and made:
+            self._show_in_folder(made[0])
         if warnings:
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
@@ -506,6 +532,22 @@ class ExportDialog(QDialog):
             box.setDetailedText("\n\n".join(warnings))
             box.exec()
         self.accept()
+
+    def _summary_wanted(self):
+        return self.summary if self.summary_box.isChecked() else None
+
+    @staticmethod
+    def _show_in_folder(path: Path) -> None:
+        """The folder, with the file selected in it."""
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{path}"])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path.parent)])
+        except Exception:  # noqa: BLE001 - showing is a convenience, not the job
+            pass
 
     @staticmethod
     def _open(path: Path) -> None:

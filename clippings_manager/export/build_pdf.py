@@ -298,6 +298,55 @@ def _draw_line(
         return size * 1.25
 
 
+SUMMARY_TITLE_SIZE = 20.0
+SUMMARY_HEAD_SIZE = 12.5
+SUMMARY_ROW_SIZE = 11.0
+SUMMARY_LEADING = 17.0
+SUMMARY_INSET = 36.0
+
+
+def _summary_pages(new_page, typeface: "Typeface", style, summary, report_date,
+                   width: float, height: float) -> None:
+    """The coverage summary, one column, flowing onto another sheet if the
+    newspaper list is long."""
+    left = layout.MARGIN_SIDE + SUMMARY_INSET
+    right = width - layout.MARGIN_SIDE - SUMMARY_INSET
+    foot = height - layout.MARGIN_BOTTOM - layout.PAGE_NUMBER_BAND - 8.0
+    sheet = new_page()
+    y = layout.MARGIN_TOP + 40.0
+    _draw_line(sheet, typeface, "Coverage summary",
+               pymupdf.Rect(left, y, right, y + SUMMARY_TITLE_SIZE * 1.5),
+               SUMMARY_TITLE_SIZE, align="left", bold=True, family=style.family)
+    y += SUMMARY_TITLE_SIZE * 1.6
+    plural = "s" if summary.total != 1 else ""
+    _draw_line(sheet, typeface,
+               f"Press media coverage {report_date.strftime('%d.%m.%Y')} \u2014 "
+               f"{summary.total} clipping{plural}",
+               pymupdf.Rect(left, y, right, y + SUMMARY_HEAD_SIZE * 1.5),
+               SUMMARY_HEAD_SIZE, align="left", colour="#4B5563", family=style.family)
+    y += SUMMARY_HEAD_SIZE * 2.4
+
+    def line(text: str, size: float, bold: bool = False, colour: str = "#000000",
+             align: str = "left") -> None:
+        nonlocal sheet, y
+        if y + size * 1.5 > foot:
+            sheet = new_page()
+            y = layout.MARGIN_TOP + 40.0
+        _draw_line(sheet, typeface, text, pymupdf.Rect(left, y, right, y + size * 1.5),
+                   size, align=align, bold=bold, colour=colour, family=style.family)
+
+    for tally in summary.tallies:
+        line(tally.title, SUMMARY_HEAD_SIZE, bold=True, colour=layout.SECTION_COLOUR)
+        y += SUMMARY_LEADING * 1.15
+        for label, count in tally.rows:
+            top = y
+            line(label, SUMMARY_ROW_SIZE)
+            y = top
+            line(str(count), SUMMARY_ROW_SIZE, bold=True, align="right")
+            y += SUMMARY_LEADING
+        y += SUMMARY_LEADING * 0.8
+
+
 def _number_pages(document, typeface: "Typeface", style, width: float,
                   height: float) -> None:
     """Put a page number at the foot of every sheet except the cover.
@@ -361,8 +410,12 @@ def build(
     cover_title: str = "",
     draw_cover_text: bool = True,
     heading: Optional[layout.HeadingStyle] = None,
+    summary=None,
 ) -> Result:
     """Write the newspad. ``clips`` is already in the order the user arranged.
+
+    ``summary`` is the day counted up (export/summary.Summary); given, it is
+    one more page after the last clipping, before the numbering.
 
     Both cover templates are rasterised to one picture by
     :mod:`clippings_manager.core.cover_render`, which paints the count and the date
@@ -514,6 +567,13 @@ def build(
                 {"kind": pymupdf.LINK_URI, "from": box, "uri": clip.url}
             )
         written += 1
+
+    if summary is not None and summary.tallies:
+        try:
+            _summary_pages(new_page, typeface, style, summary, report_date,
+                           page_width, page_height)
+        except Exception as exc:  # noqa: BLE001 - a summary never costs the report
+            warnings.append(f"The summary page could not be written ({type(exc).__name__}).")
 
     if style.page_numbers:
         _number_pages(document, typeface, style, page_width, page_height)

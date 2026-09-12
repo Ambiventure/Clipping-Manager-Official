@@ -71,11 +71,14 @@ Two things reach out, and only when you ask them to:
     press it, and at no other time. If it finds a newer version it offers to
     open the download page in your browser - it never downloads or installs
     anything itself.
-  * **Capturing a link** opens that page, in the Chrome already on the PC, to
-    photograph it. It is the same as opening the page yourself. The program
-    keeps its own browser settings folder, so your everyday Chrome, its
-    sign-ins and its history are untouched; a sign-in you make for capturing
-    lives in that folder and nowhere else. "Take from my Chrome" asks your
+  * **Capturing a link** opens that page in the browser inside the program -
+    Qt's own Chromium, which travels with it - to photograph the story. It
+    is the same as opening the page yourself. Sign in there once for X and
+    Facebook; the sign-in lives in the program's own profile
+    (`%APPDATA%\ClippingsManager\webprofile`) and nowhere else, and your
+    everyday Chrome, its sign-ins and its history are untouched. On a PC
+    where the engine is missing, the Chrome already installed is used
+    instead, in a settings folder of the program's own. "Take from my Chrome" asks your
     own Chrome to open the link, the way a click on it would, and takes the
     picture from the screen when you press Take it.
 

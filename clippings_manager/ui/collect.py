@@ -128,6 +128,8 @@ PASTE_NOT_NEEDED = ("Collect has already taken what you copied, so Ctrl+V is not
 DROP_SUFFIX = "or copy its caption in WhatsApp."
 
 
+TIDIED = (" The phone's bars were trimmed off it \u2014 Trim\u2026 then Whole "
+          "picture puts them back.")
 NEITHER = ("That copy held neither a picture nor any text, so there was "
            "nothing to add.")
 HISTORY = "What was copied\u2026"
@@ -525,6 +527,8 @@ class Collector(QObject):
             message = ADDED.format(which=self._which(pool, row))
         if max(width, height) < self.WARN_LONG_SIDE:
             message += SMALL.format(w=width, h=height)
+        if not row.clip.crop.is_identity:
+            message += TIDIED
         self._say(message)
         self._remember_copy(f"picture {width}x{height} px",
                             f"added as {self._which(pool, row)}"
