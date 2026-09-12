@@ -1675,3 +1675,32 @@ sites that let a signed-in browser read posts in the background.
 `chromewin` imports `subprocess`, not a network module, and the carry-forward
 rule (only `updates.py` and `webshot.py` may import one) still holds: asking
 Chrome to open a link is what a click on one in WhatsApp asks of it.
+
+
+## Keeping the other one, and the repeat beside the preview (2.0.26)
+
+The review screen keeps the earlier arrival and offers the later one for
+deletion, which is right until the earlier one is the blurred scan. The swap
+button (`DuplicatesDialog.swap`) turns the pair round with `dataclasses.replace`
+on the Pair - the dialog's own list, never the window's - and remembers each
+pair's arrival-order keeper in `first`, so `turned(i)` is a fact about the pair
+and not a flag to keep in step. Three things follow from one press: the
+verdict moves with the sides (a mark meaning "delete the one on the right"
+still means that); every other pair that repeated the old keeper is pointed
+at the new one, so three scans of one cutting keep one keeper between them;
+and "Not a duplicate" on a turned pair spares BOTH clippings (`to_spare`) -
+the next check pairs them the way they arrived, and sparing only the person's
+copy would let it flag the same pair again. `review_duplicates` reads the
+dialog's pairs, not the list it handed in, so a verdict is recorded the way
+round it was judged.
+
+The preview's column (`PreviewDialog._show_twin`) is the same comparison
+without the modal: a badged clipping shows the one it repeats, the keeper
+shows its first repeat ("and N more"), each named by the file it came in from
+through the window's `_source_of`. It is rebuilt on every `show_row`, hidden
+on the board and on any clipping with no partner, and a duplicate check that
+finishes while the preview is open re-shows the row - except during a trim,
+where `show_row` would drop the box being drawn. Two traps: `clicked` carries
+its checked flag, so a signal's `emit` cannot be connected to it directly (a
+lambda sheds the argument); and the arrows glyph on the swap button lives in
+Segoe UI Symbol, not Segoe UI.

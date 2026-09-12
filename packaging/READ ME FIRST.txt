@@ -47,6 +47,12 @@ A MORNING, START TO FINISH
        read out of the document. Delhi and Lucknow print their newspaper name
        into the picture itself, so those still need naming by hand.
 
+       A clipping that repeats one already in the list carries a red badge.
+       "Preview and Delete Duplicates" shows the two side by side; the round
+       swap button between them keeps the other one instead, for when the
+       earlier scan is the blurred one. Opening a badged clipping shows the
+       one it repeats beside it, with the file each came from.
+
        A card with Hindi or Punjabi in its title, newspaper or city shows an
        "English" button at the end of its row; "Hindi to English" above the
        list does every such card at once and lists what it changed. A

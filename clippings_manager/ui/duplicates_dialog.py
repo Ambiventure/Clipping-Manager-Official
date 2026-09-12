@@ -13,6 +13,8 @@ match is wrong, the reason is usually visible in the two lines of text.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
@@ -109,6 +111,11 @@ class DuplicatesDialog(QDialog):
         self.resize(980, 760)
 
         self.pairs = list(pairs)
+        # The keeper of each pair as it arrived - the earlier of the two. The
+        # swap button turns a pair round, and a pair whose keeper is no longer
+        # this one is the person's choice, said so on screen and honoured on
+        # Done (see to_spare).
+        self.first = {i: p.primary for i, p in enumerate(self.pairs)}
         self.source_of = source_of
         self.at = 0
         # What the user decided, by the uid of the copy: True to delete it,
@@ -138,6 +145,32 @@ class DuplicatesDialog(QDialog):
         self.left = Side("Keeping this one")
         self.right = Side("Suspected repeat")
         pair_row.addWidget(self.left, 1)
+        # Between the two: turn them round. The earlier arrival is kept by
+        # default, but the earlier scan is sometimes the blurred one, and the
+        # clear copy is the one worth keeping. One press swaps which is which.
+        between = QVBoxLayout()
+        between.addStretch(1)
+        self.swap_btn = QPushButton("\u21c4")
+        self.swap_btn.setObjectName("SwapSides")
+        self.swap_btn.setFixedSize(44, 44)
+        self.swap_btn.setCursor(Qt.PointingHandCursor)
+        self.swap_btn.setToolTip(
+            "Keep the other one instead. Swaps the two over: the one on the "
+            "right becomes the one the report keeps, and the one on the left "
+            "the repeat. Press again to swap back.")
+        self.swap_btn.setStyleSheet(
+            f"QPushButton#SwapSides {{ border-radius: 22px;"
+            f" border: 1px solid {theme.HAIRLINE_STRONG};"
+            f" background: {theme.SURFACE}; color: {theme.NAVY};"
+            # The arrows glyph lives in Segoe UI Symbol, not in Segoe UI.
+            " font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
+            " font-size: 20px; font-weight: 700; padding: 0; }"
+            f"QPushButton#SwapSides:hover {{ background: {theme.NAVY_WASH};"
+            f" border-color: {theme.NAVY}; }}")
+        self.swap_btn.clicked.connect(self.swap)
+        between.addWidget(self.swap_btn)
+        between.addStretch(1)
+        pair_row.addLayout(between)
         pair_row.addWidget(self.right, 1)
 
         scroll = QScrollArea()
@@ -208,8 +241,12 @@ class DuplicatesDialog(QDialog):
         self.position.setText(
             f"Duplicate {self.at + 1} of {len(self.pairs)}")
         self.why.setText(
-            f"Matched on {pair.why}. The one on the left came in first, so it "
-            f"is the one the report keeps.")
+            f"Matched on {pair.why}. " + (
+                "You chose the one on the left to keep \u2014 the one on the "
+                "right is the repeat. Press \u21c4 to swap them back."
+                if self.turned(self.at) else
+                "The one on the left came in first, so it is the one the "
+                "report keeps. Press \u21c4 to keep the other one instead."))
         self.left.show_clip(pair.primary, self.source_of(pair.primary))
         self.right.show_clip(pair.copy, self.source_of(pair.copy))
         self.back.setEnabled(self.at > 0)
@@ -229,6 +266,37 @@ class DuplicatesDialog(QDialog):
 
     def step(self, by: int) -> None:
         self.at += by
+        self.show_pair()
+
+    # ---------------------------------------------------------------- swap
+    def turned(self, index: int) -> bool:
+        """Whether this pair's keeper is the person's choice rather than the
+        earlier arrival."""
+        pair = self.pairs[index]
+        return pair.primary is not self.first.get(index, pair.primary)
+
+    def swap(self) -> None:
+        """Turn the pair on screen round: keep the other one instead.
+
+        A verdict already given follows the sides - "delete the one on the
+        right" still means the one on the right. Any other pair that repeats
+        the old keeper is pointed at the new one, so three scans of one
+        cutting keep one keeper between them, whichever the person chose.
+        """
+        if not self.pairs:
+            return
+        pair = self.pairs[self.at]
+        was_keeper, now_keeper = pair.primary, pair.copy
+        self.pairs[self.at] = replace(pair, primary=now_keeper, copy=was_keeper)
+        verdict = self.verdicts.pop(was_keeper.uid, None)
+        given = self.verdicts.pop(now_keeper.uid, None)
+        if given is not None:
+            self.verdicts[was_keeper.uid] = given
+        if verdict is not None:
+            self.verdicts[now_keeper.uid] = verdict
+        for index, other in enumerate(self.pairs):
+            if index != self.at and other.primary is was_keeper:
+                self.pairs[index] = replace(other, primary=now_keeper)
         self.show_pair()
 
     def decide(self, is_duplicate: bool) -> None:
@@ -280,3 +348,19 @@ class DuplicatesDialog(QDialog):
 
     def to_keep(self) -> list:
         return [p.copy for p in self.pairs if self.verdicts.get(p.copy.uid) is False]
+
+    def to_spare(self) -> list:
+        """The clippings to mark "not a duplicate": the copy of every pair
+        judged so - and, where the pair was turned round, the keeper as well.
+        The next check pairs the two the way they arrived, and sparing only
+        the person's copy would let it flag the same pair again."""
+        out, seen = [], set()
+        for index, pair in enumerate(self.pairs):
+            if self.verdicts.get(pair.copy.uid) is not False:
+                continue
+            for clip in ((pair.copy, pair.primary) if self.turned(index)
+                         else (pair.copy,)):
+                if clip.uid not in seen:
+                    seen.add(clip.uid)
+                    out.append(clip)
+        return out

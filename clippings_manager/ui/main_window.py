@@ -2867,6 +2867,12 @@ class MainWindow(QMainWindow):
             self.preview.splitRequested.connect(self._preview_split)
             self.preview.cropChanged.connect(self._preview_crop)
             self.preview.navigate.connect(self._preview_navigate)
+            # A badged clipping shows the one it repeats beside it, named by
+            # the file each came from; either can be opened, or the pair
+            # taken to the review.
+            self.preview.source_of = self._source_of
+            self.preview.jumpRequested.connect(self.open_preview)
+            self.preview.reviewRequested.connect(self.review_duplicates)
         # Set before the row is shown: it decides whether the Section control
         # is the heading picker or the board's sentiment control, and showing
         # the row is what reads it.
@@ -4012,6 +4018,7 @@ class MainWindow(QMainWindow):
                 else f"Look at {hints} possible duplicate(s)")
         self.model.layoutChanged.emit()
         self._update_counts()
+        self._preview_follow_duplicates()
         # Asked for out loud, so answered out loud - whether or not anything
         # was found, because "nothing flagged" and "never looked" are the same
         # thing on screen otherwise. That is the whole point of the button.
@@ -4046,6 +4053,20 @@ class MainWindow(QMainWindow):
                     f"still in the report until you look at them.", "info")
             else:
                 self._flash("No duplicates found.", "good")
+
+    def _preview_follow_duplicates(self) -> None:
+        """A check that just finished may have badged or cleared the clipping
+        on the preview: show it again so the column beside it is right. Never
+        while a trim is being drawn - showing the row again would drop it."""
+        preview = getattr(self, "preview", None)
+        if preview is None or not preview.isVisible() or preview.row is None:
+            return
+        if preview.canvas.trimming or preview.for_board:
+            return
+        try:
+            self._refresh_preview(preview.row.id)
+        except Exception:  # noqa: BLE001 - a courtesy, never a crash
+            pass
 
     def _read_one(self, clip) -> None:
         """Read one clipping's headline, keeping the window alive while it does."""
@@ -5087,7 +5108,9 @@ class MainWindow(QMainWindow):
         removed = {clip.uid for clip in screen.to_delete()}
         how = verdicts.BULK if getattr(screen, "swept", lambda: False)() \
             else verdicts.ONE_BY_ONE
-        for pair in pairs:
+        # The dialog's own pairs, not the list handed in: a pair the person
+        # turned round is judged the way round they judged it.
+        for pair in getattr(screen, "pairs", pairs):
             copy_uid = getattr(pair.copy, "uid", None)
             if copy_uid in kept:
                 verdicts.record(pair.primary, pair.copy, False, how)
@@ -5095,8 +5118,9 @@ class MainWindow(QMainWindow):
                 verdicts.record(pair.primary, pair.copy, True, how)
 
         # "Not a duplicate" is remembered on the clipping, so the next check
-        # does not simply flag it again the moment anything else changes.
-        for clip in screen.to_keep():
+        # does not simply flag it again the moment anything else changes. For
+        # a pair the person turned round, on both of them - see to_spare.
+        for clip in getattr(screen, "to_spare", screen.to_keep)():
             clip.not_duplicate = True
             clip.duplicate_of = None
             clip.include = True

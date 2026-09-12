@@ -16,6 +16,26 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.26
+
+Added
+
+  * **Keep the other one, in the duplicates review.** A round swap button now
+    sits between the two pictures. The earlier arrival is still kept by
+    default, but when it is the blurred scan and the later one is clear, one
+    press turns the pair round: the clear one becomes the one the report
+    keeps and the blurred one the repeat to delete. A verdict already given
+    follows the sides, a third copy of the same cutting follows the new
+    keeper, and "Not a duplicate" on a turned-round pair sticks for both of
+    them. Press again to swap back.
+  * **The preview shows the clipping a badged one repeats.** Open a clipping
+    that carries the red duplicate badge and the one it repeats appears in a
+    column beside it, with which file each came from, so the two can be
+    compared without leaving the preview. Opening the kept one shows its
+    repeat the same way. The other one can be opened with a click, or the
+    pair taken straight to the review. The column is not there on a clipping
+    that is not flagged, nor on the sentiment board.
+
 ## 2.0.25
 
 Added

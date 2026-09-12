@@ -46,6 +46,12 @@ caption is refused out loud rather than guessed at. It reads the clipboard only
 while it is switched on, leaves copies marked private alone, and keeps nothing
 it was not asked to.
 
+**Duplicates are shown, never silently dropped.** A clipping that repeats one
+already in the list is badged; the review puts the two side by side with the
+words they were matched on, and a swap button keeps the other one when the
+earlier scan is the blurred one. Opening a badged clipping shows the one it
+repeats beside it, with the file each came from.
+
 **Hindi to English.** A card with Hindi or Punjabi in its headline, newspaper
 or city shows an "English" button; "Hindi to English" above the list does
 every such card at once and lists what it changed, card by card. A newspaper

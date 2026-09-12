@@ -72,6 +72,23 @@ QPushButton:hover { background: rgba(153,27,27,0.6); color: #FEE2E2; }
 """
 
 
+#: The column beside the picture that shows the clipping a badged one
+#: repeats, and how tall its picture may be.
+TWIN_WIDTH = 340
+TWIN_PICTURE_TALL = 420
+
+
+class _ClickLabel(QLabel):
+    """A picture that can be pressed."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt's name
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class PreviewDialog(QDialog):
     """One clipping, big, with actions."""
 
@@ -94,11 +111,20 @@ class PreviewDialog(QDialog):
     #: (clip id, CropRect) - a trim applied, or put back.
     cropChanged = Signal(int, object)
     navigate = Signal(int)
+    #: Show this clipping instead (a row id) - the one a badged clipping
+    #: repeats, or the one that repeats it.
+    jumpRequested = Signal(int)
+    #: Open the duplicates review, to decide about the pair on screen.
+    reviewRequested = Signal()
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
         self.model = model
         self.row = None
+        # Which file a clipping came in from, in the window's words; the
+        # window sets it. Without it the clipping's own file name is used.
+        self.source_of = None
+        self._twin_id = None
         # Which screen this window is serving. The board sets it; the press
         # report leaves it false. It decides what the Section control means,
         # so it is set BEFORE the row is shown, never after.
@@ -213,7 +239,161 @@ class PreviewDialog(QDialog):
         self.canvas.setStyleSheet(f"background: {theme.DARK_VIEWPORT}; padding: 18px;")
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.scroll.setWidget(self.canvas)
-        return self.scroll
+        # The picture, and beside it - only when the clipping is badged as a
+        # repeat - the one it repeats, so the two can be compared here without
+        # opening the review. Hidden otherwise: the picture has the room.
+        holder = QWidget()
+        side_by_side = QHBoxLayout(holder)
+        side_by_side.setContentsMargins(0, 0, 0, 0)
+        side_by_side.setSpacing(0)
+        side_by_side.addWidget(self.scroll, 1)
+        self.twin = self._build_twin()
+        self.twin.hide()
+        side_by_side.addWidget(self.twin)
+        return holder
+
+    def _build_twin(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("Twin")
+        panel.setFixedWidth(TWIN_WIDTH)
+        panel.setStyleSheet(
+            f"#Twin {{ background: {theme.DARK_PANEL};"
+            " border-left: 1px solid #26324A; }")
+        column = QVBoxLayout(panel)
+        column.setContentsMargins(14, 12, 14, 12)
+        column.setSpacing(8)
+
+        badge_row = QHBoxLayout()
+        self.twin_badge = QLabel("SUSPECTED DUPLICATE")
+        self.twin_badge.setStyleSheet(
+            f"background: {theme.DANGER}; color: white; border-radius: 4px;"
+            " padding: 2px 8px; font-size: 10px; font-weight: 800;"
+            " letter-spacing: 0.6px;")
+        badge_row.addWidget(self.twin_badge)
+        badge_row.addStretch(1)
+        column.addLayout(badge_row)
+
+        self.twin_words = QLabel()
+        self.twin_words.setWordWrap(True)
+        self.twin_words.setStyleSheet("color: #E2E8F0; font-size: 12px;")
+        column.addWidget(self.twin_words)
+
+        self.twin_picture = _ClickLabel()
+        self.twin_picture.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.twin_picture.setMinimumHeight(160)
+        self.twin_picture.setCursor(Qt.PointingHandCursor)
+        self.twin_picture.setToolTip("Open this one in the preview instead.")
+        self.twin_picture.setStyleSheet(
+            f"background: {theme.DARK_VIEWPORT}; border: 1px solid #26324A;"
+            " border-radius: 6px; padding: 6px;")
+        self.twin_picture.clicked.connect(self._jump_to_twin)
+        column.addWidget(self.twin_picture, 1)
+
+        self.twin_files = QLabel()
+        self.twin_files.setWordWrap(True)
+        self.twin_files.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        column.addWidget(self.twin_files)
+
+        # One under the other: the column is narrow and each label is a
+        # sentence, and a label cut short reads as a fault.
+        buttons = QVBoxLayout()
+        buttons.setSpacing(6)
+        self.twin_open = QPushButton("Open the other one")
+        self.twin_open.setStyleSheet(DARK_BUTTON)
+        self.twin_open.clicked.connect(self._jump_to_twin)
+        self.twin_review = QPushButton("Compare in the review\u2026")
+        self.twin_review.setStyleSheet(DARK_BUTTON)
+        self.twin_review.setToolTip(
+            "Open the duplicates review: both pictures side by side, with "
+            "the words they were matched on, and the decision.")
+        self.twin_review.clicked.connect(lambda: self.reviewRequested.emit())
+        buttons.addWidget(self.twin_open)
+        buttons.addWidget(self.twin_review)
+        column.addLayout(buttons)
+        return panel
+
+    # ---------------------------------------------------------------- twin
+    def _partner_of(self, row):
+        """(the row this one repeats or is repeated by, how, how many more)."""
+        clip = row.clip
+        rows = [r for r in self.model.rows if r.clip is not None and r is not row]
+        if clip.duplicate_of:
+            for other in rows:
+                if other.clip.uid == clip.duplicate_of:
+                    return other, "repeat of", 0
+            return None, "", 0
+        copies = [other for other in rows if other.clip.duplicate_of == clip.uid]
+        if copies:
+            return copies[0], "repeated by", len(copies) - 1
+        return None, "", 0
+
+    def _file_of(self, row) -> str:
+        if callable(self.source_of):
+            try:
+                said = self.source_of(row.clip)
+                if said:
+                    return str(said)
+            except Exception:  # noqa: BLE001 - the name is a courtesy
+                pass
+        return (row.source_name or row.clip.source_file
+                or row.clip.source_ref or "")
+
+    def _show_twin(self, row) -> None:
+        """The clipping this one repeats (or is repeated by), or nothing."""
+        self._twin_id = None
+        if self.for_board:
+            self.twin.hide()
+            return
+        try:
+            partner, how, more = self._partner_of(row)
+        except Exception:  # noqa: BLE001 - never let this cost the preview
+            partner = None
+        if partner is None:
+            self.twin.hide()
+            return
+        self._twin_id = partner.id
+        mine = self.model.position_of(row.id) + 1
+        theirs = self.model.position_of(partner.id) + 1
+        if how == "repeat of":
+            words = (f"No. {mine} is flagged as a repeat of No. {theirs}, shown "
+                     f"here. The report keeps No. {theirs} unless you decide "
+                     "otherwise in the review.")
+        else:
+            words = (f"No. {theirs}, shown here, is flagged as a repeat of this "
+                     "one" + (f" \u2014 and {more} more" if more else "")
+                     + ". This one is the one the report keeps.")
+        self.twin_words.setText(words)
+        self.twin_files.setText(
+            f"This one came from: {self._file_of(row) or 'unknown'}\n"
+            f"The other came from: {self._file_of(partner) or 'unknown'}")
+        picture = self._render_quiet(partner.clip)
+        if picture is None or picture.isNull():
+            self.twin_picture.setPixmap(QPixmap())
+            self.twin_picture.setText("(the picture could not be shown)")
+        else:
+            self.twin_picture.setText("")
+            self.twin_picture.setPixmap(picture.scaled(
+                TWIN_WIDTH - 44, TWIN_PICTURE_TALL, Qt.KeepAspectRatio,
+                Qt.SmoothTransformation))
+        self.twin.show()
+
+    def _render_quiet(self, clip):
+        """The clipping as it prints, or None - never a word on the canvas."""
+        try:
+            image = clip.render()
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            buffer = io.BytesIO()
+            image.save(buffer, "PNG")
+            pixmap = QPixmap()
+            pixmap.loadFromData(buffer.getvalue(), "PNG")
+            return pixmap
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _jump_to_twin(self) -> None:
+        if self._twin_id is not None:
+            self.jumpRequested.emit(self._twin_id)
 
     def _build_detail_panel(self) -> QWidget:
         panel = QWidget()
@@ -511,6 +691,7 @@ class PreviewDialog(QDialog):
         bits.append(f"{width}x{height} px")
         bits.append(row.source_name or clip.source_ref)
         self.provenance.setText("  ·  ".join(str(b) for b in bits if b))
+        self._show_twin(row)
         if total:
             self.position.setText(f"{position} / {total}")
             self.prev_btn.setEnabled(position > 1)
