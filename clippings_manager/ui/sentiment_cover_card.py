@@ -24,6 +24,7 @@ from typing import Optional
 from PySide6.QtCore import QDate, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QCheckBox,
     QFileDialog,
     QFrame,
@@ -935,6 +936,36 @@ class SentimentCoverCard(QFrame, DesignFile):
         inner.addLayout(logo_row)
         column.addWidget(panel)
 
+        # Type sizes, one per line of the sheet. "Standard" is the drawn
+        # size and what a cover saved before this existed prints at.
+        sizes_panel, sizes_inner = sub_panel()
+        sizes_head = QHBoxLayout()
+        sizes_head.setSpacing(7)
+        sizes_head.addWidget(small_label("Text sizes", theme.NAVY))
+        sizes_head.addWidget(small_label("in points, as they print", "#6B7280", 10, 600))
+        sizes_head.addStretch(1)
+        sizes_inner.addLayout(sizes_head)
+        self.size_boxes: dict[str, QComboBox] = {}
+        sizes_grid = QGridLayout()
+        sizes_grid.setHorizontalSpacing(10)
+        sizes_grid.setVerticalSpacing(6)
+        for at, (field, label, _constant) in enumerate(sentiment_cover.TEXT_SIZE_LINES):
+            box = QComboBox()
+            box.setCursor(Qt.PointingHandCursor)
+            drawn = sentiment_cover.drawn_size(field)
+            box.addItem(f"Standard ({drawn:g}pt)", 0.0)
+            for points in sentiment_cover.TEXT_SIZE_CHOICES:
+                box.addItem(f"{points}pt", float(points))
+            box.setToolTip(f"How large the {label.lower()} line prints.")
+            box.currentIndexChanged.connect(
+                lambda _i, f=field, b=box: self._size_picked(f, b))
+            self.size_boxes[field] = box
+            sizes_grid.addWidget(small_label(label, "#374151", 10, 700), at, 0)
+            sizes_grid.addWidget(box, at, 1)
+        sizes_grid.setColumnStretch(1, 1)
+        sizes_inner.addLayout(sizes_grid)
+        column.addWidget(sizes_panel)
+
         column.addWidget(small_label("Theme colour"))
         self.theme_buttons: dict[str, QPushButton] = {}
         themes = QHBoxLayout()
@@ -1299,6 +1330,23 @@ class SentimentCoverCard(QFrame, DesignFile):
         setattr(self.config, name, value)
         self._refresh_state()
         self._touch()
+
+    def _size_picked(self, field: str, box: QComboBox) -> None:
+        if self._loading:
+            return
+        self._set_field(field, float(box.currentData() or 0.0))
+
+    def _write_sizes(self) -> None:
+        for field, box in getattr(self, "size_boxes", {}).items():
+            wanted = float(getattr(self.config, field, 0.0) or 0.0)
+            at = box.findData(wanted)
+            if at < 0:
+                # A size typed into the file by hand: offered as itself.
+                box.addItem(f"{wanted:g}pt", wanted)
+                at = box.count() - 1
+            box.blockSignals(True)
+            box.setCurrentIndex(max(0, at))
+            box.blockSignals(False)
 
     def _apply_preset(self, name: str) -> None:
         values = sentiment_cover.PRESETS.get(name)
@@ -1668,3 +1716,4 @@ class SentimentCoverCard(QFrame, DesignFile):
         self.count_box.setChecked(bool(self.config.show_clip_count))
         self.count_text.setText(self.config.clip_count_text)
         self.logo_box.setChecked(bool(self.config.show_logo))
+        self._write_sizes()

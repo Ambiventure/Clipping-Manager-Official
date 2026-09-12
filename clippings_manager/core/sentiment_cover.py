@@ -155,6 +155,44 @@ class SentimentCoverConfig:
     theme_colour: str = "#122A52"
     border_style: str = "classic"
     text_align: str = "center"
+    # Type sizes in points; 0 means the drawn size (the constants below), so
+    # a cover saved before these existed prints exactly as it did.
+    organisation_size: float = 0.0
+    division_size: float = 0.0
+    title_size: float = 0.0
+    subtitle_size: float = 0.0
+    footer_size: float = 0.0
+
+
+#: The sizes on offer in the card, in points. The drawn size of each line is
+#: offered as "Standard" and is what 0 means.
+TEXT_SIZE_CHOICES = (8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 32, 36, 40, 48)
+
+#: Which config field sizes which line, and the size it is drawn at by default.
+TEXT_SIZE_LINES = (
+    ("organisation_size", "Railway zone / authority", "ORG_SIZE"),
+    ("division_size", "Division / office", "DIVISION_SIZE"),
+    ("title_size", "Dossier title", "TITLE_SIZE"),
+    ("subtitle_size", "Subtitle", "SUBTITLE_SIZE"),
+    ("footer_size", "Prepared by and notes", "PREPARED_SIZE"),
+)
+
+
+def drawn_size(field: str) -> float:
+    """The size a line is drawn at when its config field is 0."""
+    for name, _label, constant in TEXT_SIZE_LINES:
+        if name == field:
+            return float(globals()[constant])
+    return 0.0
+
+
+def size_of(config, field: str) -> float:
+    """The size to draw one line at: the chosen one, else the drawn one."""
+    try:
+        chosen = float(getattr(config, field, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        chosen = 0.0
+    return chosen if chosen > 0 else drawn_size(field)
 
 
 PRESETS: dict[str, dict] = {
@@ -566,8 +604,9 @@ def _paint(
     organisation = (config.organisation_text or "").strip()
     if organisation:
         y += _block(
-            painter, organisation, y, ORG_SIZE, True,
+            painter, organisation, y, size_of(config, "organisation_size"), True,
             theme.name(), align, page_w, dpi_fix, ORG_ADVANCE, warnings,
+            drawn=ORG_SIZE,
         )
         painter.setPen(QPen(theme, RULE_STROKE))
         rule_x = (page_w - RULE_WIDTH) / 2.0
@@ -577,22 +616,25 @@ def _paint(
     division = (config.division_text or "").strip()
     if division:
         y += _block(
-            painter, division, y, DIVISION_SIZE, True,
+            painter, division, y, size_of(config, "division_size"), True,
             theme.name(), align, page_w, dpi_fix, DIVISION_ADVANCE, warnings,
+            drawn=DIVISION_SIZE,
         )
 
     title = (config.report_title or "").strip()
     if title:
         y += _block(
-            painter, title, y, TITLE_SIZE, True,
+            painter, title, y, size_of(config, "title_size"), True,
             TITLE_COLOUR, align, page_w, dpi_fix, TITLE_ADVANCE, warnings,
+            drawn=TITLE_SIZE,
         )
 
     subtitle = (config.subtitle_text or "").strip()
     if subtitle:
         y += _block(
-            painter, subtitle, y, SUBTITLE_SIZE, False,
+            painter, subtitle, y, size_of(config, "subtitle_size"), False,
             SUBTITLE_COLOUR, align, page_w, dpi_fix, SUBTITLE_ADVANCE, warnings,
+            drawn=SUBTITLE_SIZE,
         )
 
     date_text = (config.date_text or "").strip()
@@ -792,12 +834,15 @@ def _block(
     dpi_fix: float,
     advance: float,
     warnings: list[str],
+    drawn: float = 0.0,
 ) -> float:
     """Draw one flowed block and return how far the cursor should move down.
 
     The advance is the fixed one from the layout, plus whatever a wrapped or
     multi-line block actually spilled over - otherwise a bilingual two-line title
-    would print straight through the subtitle underneath it.
+    would print straight through the subtitle underneath it. ``drawn`` is the
+    size the advance was measured for: a line set larger than that moves the
+    cursor on by the extra height as well.
     """
     try:
         font = _font(size, bold, dpi_fix)
@@ -809,7 +854,11 @@ def _block(
             painter, lines, font, metrics, left, width,
             top + _cap_offset(metrics), align, _colour(colour, "#000000"),
         )
-        return advance + max(0, len(lines) - 1) * metrics.lineSpacing()
+        grown = 0.0
+        if drawn > 0 and size > drawn:
+            grown = max(0.0, metrics.lineSpacing()
+                        - QFontMetricsF(_font(drawn, bold, dpi_fix)).lineSpacing())
+        return advance + grown + max(0, len(lines) - 1) * metrics.lineSpacing()
     except Exception as error:  # noqa: BLE001
         warnings.append(f'The line "{text[:40]}" could not be set ({error}).')
         return advance
@@ -921,14 +970,17 @@ def _draw_footer(
         QPointF(page_w - MARGIN - FOOTER_RULE_INSET, rule_y),
     )
 
+    # One size for the footer, and the notes keep their proportion to it.
+    prepared_size = size_of(config, "footer_size")
+    notes_size = prepared_size * NOTES_SIZE / PREPARED_SIZE
     if prepared:
         _block(
-            painter, prepared, footer_y, PREPARED_SIZE, True,
+            painter, prepared, footer_y, prepared_size, True,
             PREPARED_COLOUR, align, page_w, dpi_fix, 0.0, warnings,
         )
-        footer_y += NOTES_ADVANCE
+        footer_y += NOTES_ADVANCE * prepared_size / PREPARED_SIZE
     if notes:
         _block(
-            painter, notes, footer_y, NOTES_SIZE, False,
+            painter, notes, footer_y, notes_size, False,
             NOTES_COLOUR, align, page_w, dpi_fix, 0.0, warnings,
         )

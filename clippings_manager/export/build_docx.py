@@ -26,6 +26,7 @@ from ..core import imageops
 from ..core.models import Clip
 
 from . import layout, word_cover
+from .build_pdf import Typeface, measure_caption
 
 Progress = Optional[Callable[[int, int, str], None]]
 
@@ -289,6 +290,14 @@ def build(
 
     heading_style = section_list.load()
     heading_band = layout.section_band(heading_style.size)
+    # The caption is measured before the picture is sized, exactly as the PDF
+    # does it. Word was only ever given one line's worth of room, so a
+    # masthead that wrapped to two lines - "NEW INDIA HERALD DELHI EDITION
+    # PAGE NO.1" at 18pt does - left the picture a line too tall, and Word
+    # moved it to the next sheet: ten extra pages in a 257-clipping report,
+    # each a heading alone above an empty page. The faces are the ones Word
+    # sets, so the wrap comes out where Word's will.
+    typeface = Typeface()
     # The department's list of words that must not appear in a printed report.
     # Built once. An empty list is the normal case and costs nothing: `clean`
     # returns the line it was handed without touching it.
@@ -344,9 +353,11 @@ def build(
         # so on every page carrying one the picture was drawn a line too tall and
         # Word moved it to the next page.
         tail = DOCX_SLACK + (layout.LINK_BAND if clip.url else 0.0)
+        caption_height = measure_caption(typeface, caption, style) if caption else None
         placement = layout.place(
             *clip.rendered_size(), has_caption=bool(caption),
             page=style.page, fit_page=fit_page,
+            caption_height=caption_height,
             caption_leading=style.leading(),
             # The site that gets forgotten. If the PDF reserves a taller
             # band and this does not, Word draws the picture a line too tall on

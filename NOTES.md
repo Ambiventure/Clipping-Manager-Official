@@ -1704,3 +1704,35 @@ where `show_row` would drop the box being drawn. Two traps: `clicked` carries
 its checked flag, so a signal's `emit` cannot be connected to it directly (a
 lambda sheds the argument); and the arrows glyph on the swap button lives in
 Segoe UI Symbol, not Segoe UI.
+
+
+## Three faults from one morning's use (2.0.27)
+
+**Word spilled a clipping onto the next page, ten times in 257.** The PDF
+measured each caption on a scratch page before sizing the picture
+(`build_pdf._draw_line`); Word was given `caption_leading` - one line - and a
+masthead that wraps to two lines at 18pt left the picture a line too tall.
+Word cannot keep a caption with a picture that does not fit beside it, so the
+page break put the caption alone on one sheet and the picture on the next.
+`build_pdf.measure_caption` is now the one measure both exporters ask, with
+the same embedded faces (`Typeface`), so the wrap comes out where Word's will.
+`DOCX_SLACK` still covers Word's own rounding.
+
+**Re-importing the program's own report called its clippings junk.**
+Measured with a report built from a 1200x140 strip and a 380x110 screenshot:
+"extreme shape" and "very small", the rules meant for icons and rules in a
+division's document. Every report the program writes is stamped (the PDF's
+creator and producer, the Word file's comments - `assemble.MADE_HERE`), and
+`build_clips(own=True)` leaves those two rules out for a stamped file. The
+repeat rule and the letterhead rule still apply: the cover picture is still
+not a clipping. A stranger's file that happens to hold the same pictures is
+judged as before - the suite strips the stamp and checks.
+
+**The sentiment cover had no text sizes.** The lines were constants
+(`ORG_SIZE`, `TITLE_SIZE`...). Five config fields now hold a size in points,
+0 meaning the drawn size, so every cover saved before them prints as it did
+(pinned pixel for pixel). The fixed advances between lines were measured for
+the drawn sizes, so `_block` takes `drawn` and moves the cursor on by the
+extra line height when a line is set larger - otherwise the subtitle printed
+through the title. The card's boxes are QComboBoxes keyed by float data;
+`_write_sizes` offers a hand-typed size as itself rather than snapping it.

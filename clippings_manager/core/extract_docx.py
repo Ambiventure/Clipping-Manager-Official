@@ -21,9 +21,11 @@ Three things this gets right that a naive walk does not:
 from __future__ import annotations
 
 import argparse
+import html
 import io
 import json
 import os
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -40,6 +42,7 @@ from .assemble import (  # noqa: F401  (re-exported for callers and tools)
     match_section,
 )
 from .models import Clip, CropRect
+from .assemble import made_here
 
 # --------------------------------------------------------------------------- XML
 
@@ -173,6 +176,21 @@ class _Walker:
 # --------------------------------------------------------------------- package
 
 
+def _made_here(archive: zipfile.ZipFile) -> bool:
+    """Whether this Word file is one of the program's own reports.
+
+    The exporter writes its name into the document's comments, which Word
+    keeps in docProps/core.xml as dc:description. Read as text, not parsed:
+    a missing or odd core.xml is simply not ours.
+    """
+    try:
+        core = archive.read("docProps/core.xml").decode("utf-8", "replace")
+    except (KeyError, OSError, ValueError):
+        return False
+    found = re.search(r"<dc:description[^>]*>([^<]*)</dc:description>", core)
+    return bool(found) and made_here(html.unescape(found.group(1)))
+
+
 def _read_relationships(archive: zipfile.ZipFile) -> dict[str, dict]:
     """Map relationship id -> {target, external} for word/document.xml."""
     try:
@@ -283,7 +301,8 @@ def extract_docx(
             event.ext = os.path.splitext(event.ref)[1].lower() or ".png"
 
         code = division or detect_division(path.name, config) or ""
-        clips = build_clips(events, str(path), code, config, warnings)
+        clips = build_clips(events, str(path), code, config, warnings,
+                            own=_made_here(archive))
 
     return clips, warnings
 

@@ -46,6 +46,7 @@ from .assemble import (
     unreadable,
 )
 from .models import Clip
+from .assemble import made_here
 
 # Images smaller than this on the page are rules, bullets and spacer artwork.
 MIN_PLACED_POINTS = 24.0
@@ -370,7 +371,12 @@ def extract_pdf(
             warnings.extend(f"{path.name}: {w}" for w in page_warnings)
 
         code = division or detect_division(path.name, config) or ""
-        clips = build_clips(events, str(path), code, config, warnings)
+        try:
+            stamps = document.metadata or {}
+        except Exception:  # noqa: BLE001 - metadata is a courtesy
+            stamps = {}
+        own = made_here(stamps.get("creator"), stamps.get("producer"))
+        clips = build_clips(events, str(path), code, config, warnings, own=own)
 
     return clips, warnings
 

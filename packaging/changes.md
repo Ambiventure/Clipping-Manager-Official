@@ -16,6 +16,34 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.27
+
+Added
+
+  * **Text sizes on the sentiment dossier's cover.** The cover card's Logo &
+    Styling tab now has a size for each line of the sheet - railway zone,
+    division, title, subtitle, and the prepared-by and notes lines - in
+    points, as they print. "Standard" is the size it always drew at, so a
+    cover designed earlier prints exactly as before. A line set larger moves
+    the lines under it down, so nothing prints through anything.
+
+Fixed
+
+  * **The Word report no longer spills a clipping onto the next page.** A
+    caption that wraps to two lines - "NEW INDIA HERALD DELHI EDITION PAGE
+    NO.1" at 18pt does - was given one line's room in the Word file, so the
+    picture was a line too tall and Word moved it to the next sheet, leaving
+    the caption alone above an empty page: a 257-clipping report ran to 267
+    pages. Word is now told how tall the caption really is, measured with the
+    same faces, as the PDF always was.
+  * **A report the program made is trusted when it is imported again.** Its
+    pictures were being judged by the rules meant for a division's document,
+    so a wide website strip was flagged as an "extreme shape" and a small
+    phone screenshot as "very small" - "probably not a clipping" on things
+    that were clippings when they went out. The program's own PDF and Word
+    files are recognised by the stamp they carry, and those two rules are not
+    applied to them. A repeated picture is still flagged, and so is the cover.
+
 ## 2.0.26
 
 Added

@@ -339,14 +339,32 @@ def _ignore_patterns(config: dict) -> list[re.Pattern]:
 # ------------------------------------------------------------------- assembly
 
 
+#: What the program writes into every report it makes - the PDF's creator
+#: and producer, the Word file's comments. A file that carries it is one of
+#: ours coming back, and its pictures have all been clippings once already.
+MADE_HERE = "Clippings Manager"
+
+
+def made_here(*stamps) -> bool:
+    """Whether any of these metadata strings is the program's own stamp."""
+    return any(str(stamp or "").strip().startswith(MADE_HERE) for stamp in stamps)
+
+
 def build_clips(
     events: list[Event],
     source_file: str,
     division: str,
     config: dict,
     warnings: Optional[list[str]] = None,
+    own: bool = False,
 ) -> list[Clip]:
-    """Assemble Clips from an ordered event stream."""
+    """Assemble Clips from an ordered event stream.
+
+    ``own`` says the file was made by this program (see made_here): the
+    size-and-shape rules that catch icons and rules in a division's document
+    are not applied, because every picture in one of our reports was accepted
+    as a clipping by the person who exported it.
+    """
     warnings = warnings if warnings is not None else []
     profile = config.get("divisions", {}).get(division, {})
     position = profile.get("caption_position", "before")
@@ -509,12 +527,22 @@ def build_clips(
             f"hand - the rest were recovered."
         )
 
-    flag_junk(clips, config, position)
+    flag_junk(clips, config, position, own=own)
     return clips
 
 
-def flag_junk(clips: list[Clip], config: dict, position: str = "before") -> None:
-    """Mark likely non-clippings. Never deletes: the user decides in the review grid."""
+def flag_junk(clips: list[Clip], config: dict, position: str = "before",
+              own: bool = False) -> None:
+    """Mark likely non-clippings. Never deletes: the user decides in the review grid.
+
+    ``own``: the file is one of the program's own reports. The size and shape
+    rules are for a division's document, where a tiny picture is a logo and a
+    long thin one is a rule; in our own report a tiny picture is a phone
+    screenshot of a headline and a long thin one is a website strip, both put
+    there on purpose. Measured: re-importing a report flagged a 1200x140 strip
+    and a 380x110 screenshot as "not a clipping". The repeat rule and the
+    letterhead rule still apply - the cover picture is not a clipping.
+    """
     rules = config.get("junk_filter", {})
     min_dim = rules.get("min_dimension_px", 120)
     small_max = rules.get("small_max_dimension_px", 400)
@@ -525,7 +553,9 @@ def flag_junk(clips: list[Clip], config: dict, position: str = "before") -> None
         width, height = clip.rendered_size()
         # Small in one direction only is normal: digital-news screenshots are wide
         # strips. Only something small in both directions is an icon or a spacer.
-        if min(width, height) < min_dim and max(width, height) < small_max:
+        if own:
+            pass
+        elif min(width, height) < min_dim and max(width, height) < small_max:
             clip.probable_junk = True
             clip.junk_reason = f"very small ({width}x{height} px)"
         elif height and max(width / height, height / width) > max_aspect:

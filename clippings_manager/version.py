@@ -30,7 +30,7 @@ from pathlib import Path
 # afternoon, and how the number then jumped 1.5 -> 1.6 -> 1.7 for what were three
 # ordinary rounds of fixes. Raise the first two numbers by hand, here, only when
 # something genuinely large changes.
-__version__ = "2.0.26"
+__version__ = "2.0.27"
 
 _HERE = Path(__file__).resolve().parent
 _STAMP_FILE = _HERE / "_buildstamp.json"

@@ -319,6 +319,37 @@ def _number_pages(document, typeface: "Typeface", style, width: float,
             pass
 
 
+def measure_caption(typeface: Typeface, caption: str,
+                    style: layout.HeadingStyle) -> Optional[float]:
+    """How tall this caption comes out once set - on a scratch page, in the
+    typeface and at the size the report prints it, wrapped to the page's
+    width. None when it could not be measured, and the caller falls back to
+    one line. Both exporters ask this, so a masthead that wraps to two lines
+    in the PDF is given two lines in Word as well."""
+    caption = (caption or "").strip()
+    if not caption:
+        return None
+    page_width, page_height = layout.page_size(style.page)
+    probe = layout.place(1000, 1000, has_caption=True, page=style.page,
+                         caption_leading=style.leading())
+    if probe.caption_rect is None:
+        return None
+    left, top, right, bottom = probe.caption_rect
+    scratch = pymupdf.open()
+    try:
+        measuring = scratch.new_page(width=page_width, height=page_height)
+        return _draw_line(
+            measuring, typeface, caption,
+            pymupdf.Rect(left, layout.MARGIN_TOP, right,
+                         layout.MARGIN_TOP + (bottom - top)),
+            style.size, align=style.align, bold=style.bold, family=style.family,
+        )
+    except Exception:  # noqa: BLE001 - one line's worth of room is the fallback
+        return None
+    finally:
+        scratch.close()
+
+
 def build(
     clips: Sequence[Clip],
     output: str | Path,
@@ -428,27 +459,7 @@ def build(
         # measured before anything is drawn - onto a scratch page, not this one.
         # Drawing it first and placing afterwards is what left the heading at the
         # top of the sheet while the picture moved to the middle.
-        caption_height = None
-        if caption:
-            probe = layout.place(
-                *clip.rendered_size(), has_caption=True, page=style.page,
-                fit_page=fit_page, caption_leading=style.leading(),
-                footer=tail, header=band,
-            )
-            if probe.caption_rect is not None:
-                scratch = pymupdf.open()
-                measuring = scratch.new_page(width=page_width, height=page_height)
-                left, _top, right, bottom = probe.caption_rect
-                caption_height = _draw_line(
-                    measuring, typeface, caption,
-                    pymupdf.Rect(left, layout.MARGIN_TOP, right,
-                                 layout.MARGIN_TOP + (bottom - _top)),
-                    style.size,
-                    align=style.align,
-                    bold=style.bold,
-                    family=style.family,
-                )
-                scratch.close()
+        caption_height = measure_caption(typeface, caption, style) if caption else None
 
         placement = layout.place(
             *clip.rendered_size(), has_caption=bool(caption),
