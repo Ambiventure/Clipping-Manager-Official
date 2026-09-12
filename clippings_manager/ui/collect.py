@@ -72,6 +72,9 @@ NAMED = "“{display}” put on {which}."
 NAMED_LINK = "“{display}” and its link put on {which}."
 LINK_ADDED = "Link put under {which} ({site})."
 NOTE_EDITION = " {edition} is not on the newspaper list — check the spelling."
+NOTE_PAPER = (" “{paper}” was spelt out from the Hindi and is not on the newspaper "
+              "list — check it, or add the paper to the list to have it read "
+              "every time.")
 NOTE_BARE_PAGE = " The page came from the number at the end."
 NOTE_LINK_SKIPPED = " The link was not used — {which} already has one."
 SAME_AGAIN = "Already used — that was the same caption again."
@@ -121,6 +124,27 @@ FLASH_DROPPED = " {k} copies made just before were not added — copy them again
 PASTE_NOT_NEEDED = ("Collect has already taken what you copied, so Ctrl+V is not "
                     "needed. Switch Collect off to paste by hand.")
 DROP_SUFFIX = "or copy its caption in WhatsApp."
+
+
+def _shape(text: str) -> str:
+    """"3 words, Hindi": what a copy looked like, with none of it repeated."""
+    words = (text or "").split()
+    scripts = set()
+    for word in words:
+        for ch in word:
+            if "\u0900" <= ch <= "\u097f":
+                scripts.add("Hindi")
+            elif "\u0a00" <= ch <= "\u0a7f":
+                scripts.add("Punjabi")
+            elif ch.isascii() and ch.isalpha():
+                scripts.add("English")
+    lines = len([line for line in (text or "").splitlines() if line.strip()])
+    said = f"{len(words)} word{'s' if len(words) != 1 else ''}"
+    if lines > 1:
+        said += f" on {lines} lines"
+    if scripts:
+        said += ", " + ("mixed" if len(scripts) > 1 else next(iter(scripts)))
+    return said
 
 
 def _elide(text: str, most: int = 40) -> str:
@@ -425,7 +449,10 @@ class Collector(QObject):
             return
         if reading.kind == "nothing":
             reason = reading.reason or "it did not look like a caption"
-            self._say(NOT_USED.format(reason=reason)
+            # The shape of what arrived - how many words, which script - and
+            # never the words: that is enough to tell what went wrong without
+            # ever showing a copied password back on screen.
+            self._say(NOT_USED.format(reason=f"{reason} ({_shape(item.text)})")
                       + ("" if reason in NOT_A_CAPTION_AT_ALL else AGAIN), problem=True)
             self._alert()
             return
@@ -488,6 +515,8 @@ class Collector(QObject):
         self._captions += 1
         message = (NAMED_LINK if link else NAMED).format(
             display=_elide(reading.display), which=which)
+        if not getattr(reading, "paper_known", True):
+            message += NOTE_PAPER.format(paper=reading.newspaper)
         if reading.edition and not reading.edition_known:
             message += NOTE_EDITION.format(edition=reading.edition)
         if reading.page_from_bare_number:

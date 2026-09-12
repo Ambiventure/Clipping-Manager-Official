@@ -969,6 +969,20 @@ no wrong name, and the worst read is 5 ms. Reasons for a refusal are fixed
 sentences: a refused copy might be a password, and it is never shown back on
 screen.
 
+**Made robust from the office's own captions (2.0.24).** In use, captions
+went unread "sometimes". Measured against the forms they really copy, the
+misses were not random: a city typed with a conjunct nasal where the list has
+the dot (अम्बाला / अंबाला), shorthand the list does not carry (DB, DJ, IE), a
+supplement's word ("HT City"), and papers the list has never heard of (वीर
+अर्जुन). The fold now writes both nasals the same way on both sides of every
+comparison; the shorthand lives in copied.py rather than the shared list, where
+two letters would be a poor thing to go looking for inside a document's
+captions; and an unlisted Hindi or Punjabi masthead in front of a LISTED city
+is spelt out in English by rule (core/copied.romanise: the everyday spelling,
+with the silent "a" dropped where Hindi drops it) at confidence 0.7 - under the
+card's amber line on purpose, so the flag asks for the check. A refusal now
+carries the copy's shape ("3 words, Hindi") and never its words.
+
 **Quiet arrival.** A collected photo does not raise the window, take focus or
 open the headline box, because the person is in Chrome. A headline box that a
 drag had opened and left empty is put away before a copied caption fills that

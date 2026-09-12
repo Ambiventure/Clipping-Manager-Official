@@ -16,6 +16,27 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.24
+
+Fixed
+
+  * **Collect from WhatsApp now reads the captions the office really types.**
+    A city written with the joined nasal (जालन्धर, अम्बाला) is the same city
+    as with the dot (जालंधर, अंबाला); it used to be refused as "not a city".
+  * DB, DJ, IE, PK, AU and ET are read as the papers they stand for, like NBT
+    and HT already were.
+  * "HT City Delhi" and "Jagran City" are their papers - "City" is a
+    supplement, not a place.
+  * **A Hindi or Punjabi paper that is not on the newspaper list is spelt out
+    in English** and put on the photo, flagged amber for a check, instead of
+    being refused and leaving the clipping blank. The bar says so, and says
+    how to have it read every time: add the paper to the list.
+  * When a caption is not used, the bar now says what shape the copy had -
+    "3 words, Hindi", "12 words on 2 lines" - so what went wrong can be told.
+    It never shows the words themselves.
+  * **The list follows each collected photo**, so the newest one is always in
+    view when its caption is copied next.
+
 ## 2.0.23
 
 New

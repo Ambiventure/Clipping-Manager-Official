@@ -2060,12 +2060,16 @@ class MainWindow(QMainWindow):
                 self._refresh_board()
             else:
                 self._show_list()
-                # In view if the window is behind Chrome, without moving the
-                # page under somebody who is looking at it.
-                if rows and not self.isActiveWindow():
-                    at_row = self.model.entry_row_for_clip(rows[0].id)
+                # The list follows the newest arrival, wherever the person is
+                # looking: the caption they copy next goes on it, and they
+                # asked to see it land. Put at the foot of the view, so the
+                # ones before it stay in sight above.
+                if rows:
+                    at_row = self.model.entry_row_for_clip(rows[-1].id)
                     if at_row >= 0:
-                        self.list.scrollTo(self.model.index(at_row, 0))
+                        from PySide6.QtWidgets import QAbstractItemView
+                        self.list.scrollTo(self.model.index(at_row, 0),
+                                           QAbstractItemView.PositionAtBottom)
                 self.list._place_editor()
             return rows
         headline = ("Type the headline and press Enter, "

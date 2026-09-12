@@ -333,7 +333,7 @@ _FRONT_PAGE = re.compile(FRONT_PAGE)
 #: whole Devanagari block as well: "संस्करणों" is a different word.
 _NOT_A_NAME = re.compile(
     r"(?i)(?<![\wऀ-ॿ])(?:e[-\s]?paper|edition|संस्करण|web\s*story|story\s*link"
-    r"|website|web|online|digital|link|लिंक|ऑनलाइन|डिजिटल|वेब)(?![\wऀ-ॿ])")
+    r"|website|web|online|digital|link|लिंक|ऑनलाइन|डिजिटल|वेब|city|सिटी)(?![\wऀ-ॿ])")
 #: "N.B.T", "H.T", "T.O.I": initials with dots, which are the listed "NBT".
 _INITIALS = re.compile(r"^[^\W\d_](?:\.[^\W\d_])+$")
 _HOST = re.compile(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?([^/:?#\s]+)", re.I)
@@ -404,6 +404,7 @@ class Reading:
     url: str = ""
     edition_known: bool = True  # False when the city was kept as typed
     page_from_bare_number: bool = False
+    paper_known: bool = True    # False when the paper was spelt out from Hindi
     confidence: float = 0.0
     reason: str = ""            # plain English; never contains the copied text
 
@@ -536,6 +537,10 @@ def _unmark(line: str) -> str:
 # ------------------------------------------------------------ names, as spelt
 
 
+#: ङ ञ ण न म with a virama, in front of a consonant: the conjunct nasal.
+_NASAL_CONJUNCT = re.compile("[\u0919\u091e\u0923\u0928\u092e]\u094d(?=[\u0915-\u0939])")
+
+
 def _fold(text: str) -> str:
     """A name as it is compared here: case, punctuation and spacing ignored,
     every letter and vowel sign kept.
@@ -546,6 +551,12 @@ def _fold(text: str) -> str:
     """
     text = unicodedata.normalize("NFC", text or "").casefold()
     text = text.replace("\u093c", "").replace("\u0a3c", "").replace("\u0901", "\u0902")
+    # A nasal before another consonant is typed two ways - "अम्बाला" with the
+    # conjunct, "अंबाला" with the dot - and the office uses both for one city.
+    # Folded to the dot, on both sides of every comparison. Gurmukhi's tippi
+    # and bindi are the same two ways of writing the same sound.
+    text = _NASAL_CONJUNCT.sub("\u0902", text)
+    text = text.replace("\u0a70", "\u0a02")
     return " ".join(_FOLD_DROP.sub(" ", text).split())
 
 
@@ -578,8 +589,30 @@ def _names(index: NameIndex) -> _Names:
             rows.append((name, tuple(dict.fromkeys(s for s in spelt if s))))
         return tuple(rows)
 
-    return _Names(table(getattr(index, "_papers", None), index.newspaper_names),
+    papers = table(getattr(index, "_papers", None), index.newspaper_names)
+    return _Names(_with_shorthand(papers),
                   table(getattr(index, "_editions", None), index.edition_names))
+
+
+#: What the office types on WhatsApp for the big papers. Kept here rather than
+#: on the shared newspaper list: two letters are a fine thing to type under a
+#: photo and a poor thing to go looking for inside a document's captions.
+SHORTHAND = {
+    "db": "Dainik Bhaskar", "dj": "Dainik Jagran", "ie": "The Indian Express",
+    "pk": "Punjab Kesari", "au": "Amar Ujala", "et": "The Economic Times",
+    "dt": "Dainik Tribune", "rs": "Rashtriya Sahara", "toi": "The Times of India",
+    "nbt": "Navbharat Times", "ht": "Hindustan Times", "pj": "Punjabi Jagran",
+}
+
+
+def _with_shorthand(papers: tuple) -> tuple:
+    """The paper table with the shorthand added to the papers it stands for -
+    only those actually on the list, so a removed paper stays removed."""
+    listed = {name: spellings for name, spellings in papers}
+    for short, name in SHORTHAND.items():
+        if name in listed and short not in listed[name]:
+            listed[name] = listed[name] + (short,)
+    return tuple((name, listed[name]) for name, _s in papers)
 
 
 def _places() -> dict:
@@ -937,7 +970,15 @@ def _caption_test(candidate: str, names: _Names, index: NameIndex) -> Reading:
     else:
         found = _paper_at_end(words, names)
         if found is None:
-            return _nothing(WHY_NO_PAPER)
+            spelt = _unlisted_paper(words, names)
+            if spelt is None:
+                return _nothing(WHY_NO_PAPER)
+            (paper, edition), known = spelt, True
+            return Reading(
+                kind="caption", text=text, newspaper=paper, edition=edition,
+                page=page, edition_known=True, page_from_bare_number=bare,
+                paper_known=False, confidence=UNLISTED_PAPER_CONFIDENCE,
+            )
         (paper, edition), known = found, True
 
     return Reading(
@@ -950,6 +991,171 @@ def _caption_test(candidate: str, names: _Names, index: NameIndex) -> Reading:
         page_from_bare_number=bare,
         confidence=1.0 if known else 0.8,
     )
+
+
+#: Below the card's amber line (0.75), on purpose: a masthead spelt out from
+#: Hindi by rule is worth checking, and the flag is what asks for the check.
+UNLISTED_PAPER_CONFIDENCE = 0.7
+
+
+def _indic(word: str) -> bool:
+    """Whether every letter is Devanagari or Gurmukhi."""
+    return bool(word) and all(
+        "\u0900" <= ch <= "\u097f" or "\u0a00" <= ch <= "\u0a7f" for ch in word)
+
+
+def _unlisted_paper(words: list[str], names: _Names) -> tuple[str, str] | None:
+    """(paper spelt out in English, listed city) for a Hindi or Punjabi
+    caption whose paper is not on the list, or None.
+
+    "वीर अर्जुन दिल्ली" is a real Delhi daily the list does not know. Refusing it
+    left the clipping unnamed; naming it Veer Arjun by rule, in Delhi, and
+    flagging it amber gets the clipping most of the way and asks for a look.
+    Held to a narrow shape so chat cannot pass: every word in Hindi or Punjabi,
+    one to three words in front, none of them chat, and a LISTED city after
+    them. A town merely kept as typed does not count - that would be two
+    guesses on one line.
+    """
+    if len(words) < 2 or not all(_indic(w) for w in words):
+        return None
+    for k in range(1, min(3, len(words) - 1) + 1):
+        head, tail = words[:k], words[k:]
+        # Chat starts with a chat word - "सुप्रभात दिल्ली", "कृपया देखें दिल्ली".
+        # A masthead may hold one further in: Prabhat KHABAR is a paper.
+        if head[0].casefold() in CHAT_WORDS or all(w.casefold() in CHAT_WORDS
+                                                   for w in head):
+            return None
+        if any(len(w) < 2 for w in head):
+            continue
+        city = _listed_city(tail, names)
+        if city:
+            return " ".join(romanise(w) for w in head), city
+    return None
+
+
+# ------------------------------------------------------------ spelling out
+#
+# Hindi and Punjabi mastheads the list does not know, written in English by
+# rule - "Veer Arjun", "Jansatta". Not a transliteration standard, which nobody
+# in the office reads: the everyday spelling, with the silent "a" dropped where
+# Hindi drops it (जागरण is Jagran, not Jagarana). It is a guess by rule, and
+# every name it makes is flagged for a check.
+
+_DEVA_VOWELS = {
+    "अ": "a", "आ": "a", "इ": "i", "ई": "i", "उ": "u", "ऊ": "u", "ऋ": "ri",
+    "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au", "ऑ": "o", "ऍ": "e",
+}
+_DEVA_SIGNS = {
+    "ा": "a", "ि": "i", "ी": "i", "ु": "u", "ू": "u", "ृ": "ri", "े": "e",
+    "ै": "ai", "ो": "o", "ौ": "au", "ॉ": "o", "ॅ": "e",
+}
+_DEVA_CONS = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "n", "च": "ch", "छ": "chh",
+    "ज": "j", "झ": "jh", "ञ": "n", "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh",
+    "ण": "n", "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n", "प": "p",
+    "फ": "ph", "ब": "b", "भ": "bh", "म": "m", "य": "y", "र": "r", "ल": "l",
+    "ळ": "l", "व": "v", "श": "sh", "ष": "sh", "स": "s", "ह": "h",
+}
+_DEVA_NUKTA = {"क": "q", "ख": "kh", "ग": "g", "ज": "z", "ड": "r", "ढ": "rh",
+               "फ": "f", "य": "y"}
+_GURU_VOWELS = {
+    "ਅ": "a", "ਆ": "a", "ਇ": "i", "ਈ": "i", "ਉ": "u", "ਊ": "u", "ਏ": "e",
+    "ਐ": "ai", "ਓ": "o", "ਔ": "au",
+}
+_GURU_SIGNS = {"ਾ": "a", "ਿ": "i", "ੀ": "i", "ੁ": "u", "ੂ": "u", "ੇ": "e",
+               "ੈ": "ai", "ੋ": "o", "ੌ": "au"}
+_GURU_CONS = {
+    "ਕ": "k", "ਖ": "kh", "ਗ": "g", "ਘ": "gh", "ਙ": "n", "ਚ": "ch", "ਛ": "chh",
+    "ਜ": "j", "ਝ": "jh", "ਞ": "n", "ਟ": "t", "ਠ": "th", "ਡ": "d", "ਢ": "dh",
+    "ਣ": "n", "ਤ": "t", "ਥ": "th", "ਦ": "d", "ਧ": "dh", "ਨ": "n", "ਪ": "p",
+    "ਫ": "ph", "ਬ": "b", "ਭ": "bh", "ਮ": "m", "ਯ": "y", "ਰ": "r", "ਲ": "l",
+    "ਵ": "v", "ੜ": "r", "ਸ": "s", "ਹ": "h",
+}
+_GURU_NUKTA = {"ਸ": "sh", "ਜ": "z", "ਫ": "f", "ਖ": "kh", "ਗ": "g", "ਲ": "l"}
+
+
+def _syllables(word: str) -> list:
+    """A word cut into [consonant, vowel, inherent] pieces, either script."""
+    word = unicodedata.normalize("NFD", word)
+    out: list = []
+    i, double = 0, False
+    while i < len(word):
+        ch = word[i]
+        nukta = i + 1 < len(word) and word[i + 1] in ("\u093c", "\u0a3c")
+        if ch in _DEVA_CONS or ch in _GURU_CONS:
+            table, nuktas = ((_DEVA_CONS, _DEVA_NUKTA) if ch in _DEVA_CONS
+                             else (_GURU_CONS, _GURU_NUKTA))
+            latin = nuktas.get(ch, table[ch]) if nukta else table[ch]
+            if double:
+                latin, double = latin[0] + latin, False
+            i += 2 if nukta else 1
+            nxt = word[i] if i < len(word) else ""
+            if nxt in _DEVA_SIGNS or nxt in _GURU_SIGNS:
+                out.append([latin, (_DEVA_SIGNS.get(nxt) or _GURU_SIGNS[nxt]), False])
+                i += 1
+            elif nxt in ("\u094d", "\u0a4d"):
+                out.append([latin, "", False])       # a joined consonant
+                i += 1
+            else:
+                out.append([latin, "a", True])
+            continue
+        if ch in _DEVA_VOWELS or ch in _GURU_VOWELS:
+            out.append(["", _DEVA_VOWELS.get(ch) or _GURU_VOWELS[ch], False])
+        elif ch in ("\u0902", "\u0901", "\u0a02", "\u0a70") and out:
+            out[-1][1] += "n"                        # the nasal dot
+        elif ch == "\u0903" and out:
+            out[-1][1] += "h"
+        elif ch == "\u0a71":
+            double = True                            # Gurmukhi's addak
+        i += 1
+    return out
+
+
+#: English words that mastheads carry, written in Hindi or Punjabi letters.
+#: Spelt out by sound they come back as "Taims" and "Ekspres"; these are what
+#: the paper itself prints on its front page.
+LOANWORDS = {
+    "टाइम्स": "Times", "टाईम्स": "Times", "ਟਾਈਮਜ਼": "Times", "ਟਾਈਮਸ": "Times",
+    "एक्सप्रेस": "Express", "ਐਕਸਪ੍ਰੈਸ": "Express", "न्यूज़": "News", "न्यूज": "News",
+    "ਨਿਊਜ਼": "News", "ट्रिब्यून": "Tribune", "ਟ੍ਰਿਬਿਊਨ": "Tribune",
+    "हेराल्ड": "Herald", "मेल": "Mail", "पोस्ट": "Post", "टुडे": "Today",
+    "स्टेट्समैन": "Statesman", "पायनियर": "Pioneer", "मिरर": "Mirror",
+    "स्पोक्समैन": "Spokesman", "ਸਪੋਕਸਮੈਨ": "Spokesman", "स्टार": "Star",
+    "क्रॉनिकल": "Chronicle", "गार्जियन": "Guardian", "टेलीग्राफ": "Telegraph",
+    "नेशनल": "National", "इंडिया": "India", "ਇੰਡੀਆ": "India", "इंडियन": "Indian",
+    "हिंदुस्तान": "Hindustan", "हिन्दुस्तान": "Hindustan", "पंजाब": "Punjab",
+    "ਪੰਜਾਬ": "Punjab", "पंजाबी": "Punjabi", "ਪੰਜਾਬੀ": "Punjabi", "केसरी": "Kesari",
+    "ਕੇਸਰੀ": "Kesari", "जागरण": "Jagran", "ਜਾਗਰਣ": "Jagran", "वीर": "Veer",
+}
+
+
+def romanise(word: str) -> str:
+    """One Hindi or Punjabi word in everyday English spelling."""
+    known = LOANWORDS.get(unicodedata.normalize("NFC", word))
+    if known:
+        return known
+    parts = _syllables(word)
+    if not parts:
+        return word
+    if parts[-1][2]:
+        # No "a" on the end - except after an "i", where English keeps it:
+        # Rashtriya, Bharatiya. The nasal dot on that syllable stays either way.
+        before = next((q[1] for q in reversed(parts[:-1]) if q[1]), "")
+        if not (parts[-1][0] == "y" and before.startswith("i")):
+            parts[-1][1] = parts[-1][1][1:]
+    # The silent "a" in the middle: dropped after a sounded vowel when the next
+    # sounded consonant has a vowel of its own - जागरण to Jagran, जनसत्ता to
+    # Jansatta - from the right, so two in a row never both go.
+    for at in range(len(parts) - 2, 0, -1):
+        cons, vowel, inherent = parts[at]
+        if not inherent or not vowel:
+            continue
+        before = next((p[1] for p in reversed(parts[:at]) if p[1]), "")
+        after = next((p for p in parts[at + 1:] if p[0]), None)
+        if before and after is not None and after[1]:
+            parts[at][1] = vowel[1:]                 # keeps a nasal: ਜਲੰਧਰ
+    spelt = "".join(cons + vowel for cons, vowel, _inherent in parts)
+    return spelt[:1].upper() + spelt[1:]
 
 
 def _caption_in(lines: list[str], names: _Names, index: NameIndex) -> Reading:
