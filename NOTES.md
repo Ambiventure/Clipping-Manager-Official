@@ -1736,3 +1736,21 @@ the drawn sizes, so `_block` takes `drawn` and moves the cursor on by the
 extra line height when a line is set larger - otherwise the subtitle printed
 through the title. The card's boxes are QComboBoxes keyed by float data;
 `_write_sizes` offers a hand-typed size as itself rather than snapping it.
+
+
+## The black drop-down, again (2.0.28)
+
+The sentiment cover card's tab pages carried `background: transparent`
+unqualified, so it reached every descendant - a combo's popup included,
+which painted black with black type. The same trap the standard cover card
+walked into and documented ("Two Qt traps this card walked into"). Both
+fixes are in: the page rule is scoped by object name, and every size box
+carries `theme.COMBO_POPUP` on its own sheet, which no ancestor can undo.
+The lesson is now three times over: never an unqualified rule on anything
+that can hold a popup.
+
+The sizes moved beside their text on the Division & Text tab (`_field_head`
+puts the label, anything else on that line, and the size box on one row),
+where the person types the line they are sizing. The notes line has its
+own size; the two footer lines offer up to 20pt because they sit a fixed way
+up from the bottom edge.

@@ -161,12 +161,16 @@ class SentimentCoverConfig:
     division_size: float = 0.0
     title_size: float = 0.0
     subtitle_size: float = 0.0
-    footer_size: float = 0.0
+    footer_size: float = 0.0        # the prepared-by line
+    notes_size: float = 0.0
 
 
 #: The sizes on offer in the card, in points. The drawn size of each line is
 #: offered as "Standard" and is what 0 means.
 TEXT_SIZE_CHOICES = (8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 32, 36, 40, 48)
+#: The two footer lines sit a fixed way up from the bottom edge, with room for
+#: small type: offered up to 20, not 48.
+FOOTER_SIZE_CHOICES = (8, 9, 10, 11, 12, 14, 16, 18, 20)
 
 #: Which config field sizes which line, and the size it is drawn at by default.
 TEXT_SIZE_LINES = (
@@ -174,7 +178,8 @@ TEXT_SIZE_LINES = (
     ("division_size", "Division / office", "DIVISION_SIZE"),
     ("title_size", "Dossier title", "TITLE_SIZE"),
     ("subtitle_size", "Subtitle", "SUBTITLE_SIZE"),
-    ("footer_size", "Prepared by and notes", "PREPARED_SIZE"),
+    ("footer_size", "Prepared by", "PREPARED_SIZE"),
+    ("notes_size", "Additional notes", "NOTES_SIZE"),
 )
 
 
@@ -970,9 +975,8 @@ def _draw_footer(
         QPointF(page_w - MARGIN - FOOTER_RULE_INSET, rule_y),
     )
 
-    # One size for the footer, and the notes keep their proportion to it.
     prepared_size = size_of(config, "footer_size")
-    notes_size = prepared_size * NOTES_SIZE / PREPARED_SIZE
+    notes_size = size_of(config, "notes_size")
     if prepared:
         _block(
             painter, prepared, footer_y, prepared_size, True,

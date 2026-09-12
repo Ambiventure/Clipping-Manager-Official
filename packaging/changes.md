@@ -16,6 +16,19 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.28
+
+Fixed
+
+  * **The sentiment cover's size drop-downs painted black, with black type
+    on them.** They are white now, with dark type, wherever they open.
+  * **The size sits beside each line's text.** On the Division & Text tab,
+    every text field - railway zone, division, title, subtitle, prepared by,
+    additional notes - has its size box at the right of its own label; the
+    separate "Text sizes" panel on the styling tab is gone. The notes line
+    has a size of its own, apart from the prepared-by line, and the two
+    footer lines offer small type only, since they sit close to the edge.
+
 ## 2.0.27
 
 Added

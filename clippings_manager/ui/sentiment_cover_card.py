@@ -364,6 +364,7 @@ class SentimentCoverCard(QFrame, DesignFile):
         self._count = 0
         self._breakdown: dict = {}
         self._loading = False
+        self.size_boxes: dict[str, QComboBox] = {}
         self._init_design()
 
         # 6ms a render is cheap, but a drag would fire it a hundred times.
@@ -590,21 +591,63 @@ class SentimentCoverCard(QFrame, DesignFile):
 
     @staticmethod
     def _page(spacing: int = 11) -> tuple[QWidget, QVBoxLayout]:
+        global _panel_serial
+        _panel_serial += 1
         page = QWidget()
-        page.setStyleSheet("background: transparent;")
+        # Scoped to the page itself. Unqualified, this rule reached every
+        # descendant - a combo's popup included, which then painted black
+        # with black text on it.
+        page.setObjectName(f"CoverPage{_panel_serial}")
+        page.setStyleSheet(f"#CoverPage{_panel_serial} {{ background: transparent; }}")
         column = QVBoxLayout(page)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(spacing)
         return page, column
 
     # ------------------------------------------------------ tab 1: the text
+    def _size_box(self, field: str) -> QComboBox:
+        """The size for one line, beside its text. "Standard" is the drawn
+        size and what a cover saved before these existed prints at."""
+        box = QComboBox()
+        box.setCursor(Qt.PointingHandCursor)
+        # Its own sheet: the only placement no ancestor's rule can undo, so
+        # the popup is white with dark type whatever sits above it.
+        box.setStyleSheet(theme.COMBO_POPUP)
+        box.setFixedWidth(154)
+        drawn = sentiment_cover.drawn_size(field)
+        box.addItem(f"Standard ({drawn:g}pt)", 0.0)
+        choices = (sentiment_cover.FOOTER_SIZE_CHOICES
+                   if field in ("footer_size", "notes_size")
+                   else sentiment_cover.TEXT_SIZE_CHOICES)
+        for points in choices:
+            box.addItem(f"{points}pt", float(points))
+        box.setToolTip("How large this line prints, in points.")
+        box.currentIndexChanged.connect(
+            lambda _i, f=field, b=box: self._size_picked(f, b))
+        self.size_boxes[field] = box
+        return box
+
+    def _field_head(self, words: str, field: str, *extra) -> QHBoxLayout:
+        """A field's label with its size box at the right, and anything
+        else that belongs on that line before it."""
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        head.addWidget(small_label(words))
+        head.addStretch(1)
+        for widget in extra:
+            head.addWidget(widget)
+        head.addWidget(self._size_box(field))
+        return head
+
     def _build_text_tab(self) -> QWidget:
         page, column = self._page()
+        self.text_page = page
         grid = QGridLayout()
         grid.setHorizontalSpacing(13)
         grid.setVerticalSpacing(4)
 
-        grid.addWidget(small_label("1. Railway Zone / Authority Text"), 0, 0)
+        grid.addLayout(self._field_head("1. Railway Zone / Authority Text",
+                                        "organisation_size"), 0, 0)
         self.org_edit = QLineEdit()
         self.org_edit.setPlaceholderText("e.g. NORTHERN RAILWAY / उत्तर रेलवे")
         self.org_edit.textEdited.connect(lambda _t: self._read())
@@ -627,12 +670,13 @@ class SentimentCoverCard(QFrame, DesignFile):
         )
         self.sync_btn.clicked.connect(self._sync_division)
         division_head.addWidget(self.sync_btn)
+        division_head.addWidget(self._size_box("division_size"))
         grid.addLayout(division_head, 0, 1)
         self.division_edit = QLineEdit()
         self.division_edit.textEdited.connect(lambda _t: self._read())
         grid.addWidget(self.division_edit, 1, 1)
 
-        grid.addWidget(small_label("3. Dossier / Report Title"), 2, 0)
+        grid.addLayout(self._field_head("3. Dossier / Report Title", "title_size"), 2, 0)
         # A text box, not a line edit: the bilingual preset writes a two-line
         # title and the sheet honours the break.
         self.title_edit = QTextEdit()
@@ -641,7 +685,8 @@ class SentimentCoverCard(QFrame, DesignFile):
         self.title_edit.textChanged.connect(self._read)
         grid.addWidget(self.title_edit, 3, 0)
 
-        grid.addWidget(small_label("4. Subtitle / Period Description"), 2, 1)
+        grid.addLayout(self._field_head("4. Subtitle / Period Description",
+                                        "subtitle_size"), 2, 1)
         self.subtitle_edit = QTextEdit()
         self.subtitle_edit.setAcceptRichText(False)
         self.subtitle_edit.setFixedHeight(52)
@@ -696,11 +741,12 @@ class SentimentCoverCard(QFrame, DesignFile):
         footer = QGridLayout()
         footer.setHorizontalSpacing(13)
         footer.setVerticalSpacing(4)
-        footer.addWidget(small_label("6. Prepared By / Department"), 0, 0)
+        footer.addLayout(self._field_head("6. Prepared By / Department", "footer_size"), 0, 0)
         self.prepared_edit = QLineEdit()
         self.prepared_edit.textEdited.connect(lambda _t: self._read())
         footer.addWidget(self.prepared_edit, 1, 0)
-        footer.addWidget(small_label("7. Additional Notes / Circulation"), 0, 1)
+        footer.addLayout(self._field_head("7. Additional Notes / Circulation",
+                                          "notes_size"), 0, 1)
         self.notes_edit = QLineEdit()
         self.notes_edit.textEdited.connect(lambda _t: self._read())
         footer.addWidget(self.notes_edit, 1, 1)
@@ -935,36 +981,6 @@ class SentimentCoverCard(QFrame, DesignFile):
         logo_row.addStretch(1)
         inner.addLayout(logo_row)
         column.addWidget(panel)
-
-        # Type sizes, one per line of the sheet. "Standard" is the drawn
-        # size and what a cover saved before this existed prints at.
-        sizes_panel, sizes_inner = sub_panel()
-        sizes_head = QHBoxLayout()
-        sizes_head.setSpacing(7)
-        sizes_head.addWidget(small_label("Text sizes", theme.NAVY))
-        sizes_head.addWidget(small_label("in points, as they print", "#6B7280", 10, 600))
-        sizes_head.addStretch(1)
-        sizes_inner.addLayout(sizes_head)
-        self.size_boxes: dict[str, QComboBox] = {}
-        sizes_grid = QGridLayout()
-        sizes_grid.setHorizontalSpacing(10)
-        sizes_grid.setVerticalSpacing(6)
-        for at, (field, label, _constant) in enumerate(sentiment_cover.TEXT_SIZE_LINES):
-            box = QComboBox()
-            box.setCursor(Qt.PointingHandCursor)
-            drawn = sentiment_cover.drawn_size(field)
-            box.addItem(f"Standard ({drawn:g}pt)", 0.0)
-            for points in sentiment_cover.TEXT_SIZE_CHOICES:
-                box.addItem(f"{points}pt", float(points))
-            box.setToolTip(f"How large the {label.lower()} line prints.")
-            box.currentIndexChanged.connect(
-                lambda _i, f=field, b=box: self._size_picked(f, b))
-            self.size_boxes[field] = box
-            sizes_grid.addWidget(small_label(label, "#374151", 10, 700), at, 0)
-            sizes_grid.addWidget(box, at, 1)
-        sizes_grid.setColumnStretch(1, 1)
-        sizes_inner.addLayout(sizes_grid)
-        column.addWidget(sizes_panel)
 
         column.addWidget(small_label("Theme colour"))
         self.theme_buttons: dict[str, QPushButton] = {}
