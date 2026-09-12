@@ -5,9 +5,12 @@ Northern Railway PR - daily newspad
 TO RUN IT
     Double-click  "Clippings Manager.exe"  in this folder.
 
-    Nothing needs installing. There is no Python to set up and no internet
-    connection required - the program never goes online, and every document is
-    read on this machine.
+    Nothing needs installing. There is no Python to set up, and the morning's
+    work needs no internet: every document is read on this machine and nothing
+    is ever uploaded.
+
+    Two things do go online, and only when you ask: "Check for updates", and
+    capturing a link (below), which opens that page in Chrome to photograph it.
 
     Keep this whole folder together. The .exe on its own will not run; it needs
     the "_internal" folder beside it. To put it somewhere convenient, copy the
@@ -27,6 +30,10 @@ A MORNING, START TO FINISH
        - "Add photos" for loose images already saved on the machine.
        - Drag images straight from WhatsApp Web onto the dashed panel.
        - Or copy an image anywhere and press Ctrl+V.
+       - "+ From links" for digital coverage: paste one link, or a whole
+         WhatsApp message with a numbered list of them, tick the ones you
+         want, and each story is captured as a clipping. Needs Chrome on the
+         PC. For a post on X or Facebook, press "Sign in for captures" once.
        - Or press "Collect from WhatsApp" at the top and stay in WhatsApp Web:
          right-click a photo and choose Copy image, then select its caption
          and press Ctrl+C. Each photo becomes a clipping, named from its
@@ -39,7 +46,8 @@ A MORNING, START TO FINISH
     3. REVIEW - the list is the running order, and what you see is what gets
        exported.
        - Click a clipping to open it full size, where it can be renamed,
-         rotated, split, excluded or deleted.
+         rotated, trimmed, split, excluded or deleted. "Trim…" lets you drag
+         the edges in; Ctrl+Z puts them back.
        - Type in the headline box; Enter saves it and moves to the next one, so
          a whole division can be named without touching the mouse.
        - Drag the handle to reorder. An orange line shows where it will land.

@@ -16,6 +16,40 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.23
+
+New
+
+  * **Clippings from links.** "+ From links" takes a link - or a whole WhatsApp
+    message with a numbered list of a dozen in it - and captures each story as
+    a clipping: the headline, the picture and the first inches of the story,
+    without the menus, adverts and cookie bars.
+  * It lists what it found before it starts, numbered as the sender numbered
+    them, with their own words beside each link. Untick any you do not want.
+  * Each clipping arrives named after its publication, with the link under it
+    ready for the report, and filed as digital coverage. A post from X or
+    Facebook is filed as social coverage.
+  * A link that will not open, or a post that needs signing in, is said plainly
+    and the rest of the list carries on.
+  * **Sign in for captures.** X and Facebook only show a post to somebody
+    signed in. The button opens a browser window of the program's own where you
+    sign in once. Your everyday Chrome, its sign-ins and its history are not
+    touched, and the program never sees your password.
+  * **Trim.** The full-size view of any clipping now has "Trim…": drag the
+    edges in and only what is left is used. The picture itself is not cut, and
+    Ctrl+Z puts the edges back.
+
+Needs
+
+  * Capturing links uses the Google Chrome already on the PC. Without Chrome
+    the other ways of adding clippings work exactly as before.
+
+Changed
+
+  * The program still does the morning's work on the machine and uploads
+    nothing. Capturing a link opens that page, which is the one time it reaches
+    the internet besides "Check for updates".
+
 ## 2.0.22
 
 New

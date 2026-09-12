@@ -331,6 +331,40 @@ def reparent(rows, clip_ids, group_key: str, source_kind: str, source_name: str)
             row.source_name = source_name
 
 
+class SetCrop(_Base):
+    """Trim a clipping, or put its edges back.
+
+    The picture itself is never cut: the crop is a rectangle stored with the
+    clipping and applied when it is drawn, so undo is exact and nothing is
+    lost. The thumbnail is rebuilt here, or the list would go on showing the
+    untrimmed picture until the session was reopened.
+    """
+
+    def __init__(self, model: "ClipModel", clip_id: int, crop, text: str = "Trimmed"):
+        super().__init__(model, text)
+        self.clip_id = clip_id
+        self.after = crop
+        self.before = model.by_id(clip_id).crop
+
+    def _put(self, crop) -> None:
+        from .model import pixmap_from_png, thumbnail_png
+
+        row = self.model.row_for(self.clip_id)
+        if row is None:
+            return
+        row.clip.crop = crop
+        row.thumb_png = thumbnail_png(row.clip)
+        row.thumbnail = pixmap_from_png(row.thumb_png)
+        self.model.refresh_clip(self.clip_id)
+        self.model.layoutChanged.emit()
+
+    def redo(self) -> None:
+        self._put(self.after)
+
+    def undo(self) -> None:
+        self._put(self.before)
+
+
 class Reorder(_Base):
     """Any change of order, and any change of which bracket a row sits in.
 

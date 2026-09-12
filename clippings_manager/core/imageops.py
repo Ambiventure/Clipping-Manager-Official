@@ -19,7 +19,7 @@ from typing import Iterable, Literal
 
 from PIL import Image
 
-from .models import Clip, Section
+from .models import Clip, CropRect, Section
 
 Direction = Literal["vertical", "horizontal", "auto"]
 
@@ -554,3 +554,63 @@ def pictures_apart(first: str, second: str) -> int:
         return (int(first, 16) ^ int(second, 16)).bit_count()
     except ValueError:
         return -1
+
+
+# --------------------------------------------------------------------- trim
+#
+# Trimming happens on the picture as it is SHOWN - already cropped, already
+# turned - because that is the picture somebody is looking at when they drag
+# the edges in. What has to be stored is a crop of the ORIGINAL, so the box is
+# turned back the way the picture was turned and then laid over the crop that
+# is already there. Cropping twice must narrow the picture, never start again
+# from the whole of it.
+
+
+def _unturn(box: tuple, rotation: int) -> tuple:
+    """A box on the shown picture, put back the way it was before turning.
+
+    render() turns the picture clockwise by ``rotation`` after cropping, so
+    this is that turn undone, in fractions of the picture's own width and
+    height.
+    """
+    x0, y0, x1, y1 = box
+    turn = rotation % 360
+    if turn == 90:
+        return y0, 1.0 - x1, y1, 1.0 - x0
+    if turn == 180:
+        return 1.0 - x1, 1.0 - y1, 1.0 - x0, 1.0 - y0
+    if turn == 270:
+        return 1.0 - y1, x0, 1.0 - y0, x1
+    return x0, y0, x1, y1
+
+
+def crop_from_view(clip: Clip, box: tuple) -> CropRect:
+    """The crop to store for a box drawn on the clipping as it is shown.
+
+    ``box`` is (left, top, right, bottom) as fractions of the shown picture,
+    0-1. The answer includes whatever crop the clipping already carried.
+    """
+    x0, y0, x1, y1 = (max(0.0, min(1.0, float(value))) for value in box)
+    x0, x1 = min(x0, x1), max(x0, x1)
+    y0, y1 = min(y0, y1), max(y0, y1)
+    left, top, right, bottom = _unturn((x0, y0, x1, y1), clip.rotation)
+    across = 1.0 - clip.crop.left - clip.crop.right
+    down = 1.0 - clip.crop.top - clip.crop.bottom
+    return CropRect(
+        left=round(clip.crop.left + left * across, 6),
+        top=round(clip.crop.top + top * down, 6),
+        right=round(clip.crop.right + (1.0 - right) * across, 6),
+        bottom=round(clip.crop.bottom + (1.0 - bottom) * down, 6),
+    )
+
+
+#: A trim smaller than this, either way, is a slip of the mouse rather than a
+#: decision - ten per cent of the picture is still a big cutting.
+LEAST_TRIM = 0.06
+
+
+def worth_trimming(box: tuple) -> bool:
+    """Whether a box is a real trim, and not the whole picture over again."""
+    x0, y0, x1, y1 = box
+    return (x1 - x0) > LEAST_TRIM and (y1 - y0) > LEAST_TRIM and (
+        x0 > 0.002 or y0 > 0.002 or x1 < 0.998 or y1 < 0.998)

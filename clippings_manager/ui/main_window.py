@@ -57,13 +57,14 @@ from ..core.assemble import (ExtractionError, detect_division, is_advisory,
                              load_config, looks_like_url)
 from ..core.extract_docx import extract_docx
 from ..core.extract_pdf import extract_pdf
-from ..core import duplicates, newspads, ocr, sentiment, training, wordlist
+from ..core import (duplicates, links, newspads, ocr, sentiment, training,
+                    wordlist)
 from ..core.models import Clip, Section
 from ..core.profiles import NameIndex
 from .. import version
 from ..core.session import SessionStore, decode_clip, encode_clip
 from . import (collect, commands, datefield, dropped, export_dialog, icons,
-               reader, theme, win_drop, zoom)
+               reader, theme, webclip, win_drop, zoom)
 from .clip_list import ClipList
 from .cover_card import CoverCard
 from .fluid import ElidedLabel, FlowLayout, ShrinkingCombo
@@ -1155,7 +1156,15 @@ class MainWindow(QMainWindow):
         self.btn_word.setObjectName("NavyOutline")
         self.btn_pdf = QPushButton("+  From PDF (.pdf)")
         self.btn_pdf.setObjectName("OrangeOutline")
-        for button in (self.btn_photos, self.btn_word, self.btn_pdf):
+        # Digital coverage arrives as links, not files: one button for a link
+        # and for a whole message full of them.
+        self.btn_links = QPushButton("+  From links")
+        self.btn_links.setObjectName("NavyOutline")
+        self.btn_links.setToolTip(
+            "Paste a link, or a whole WhatsApp message with a list of them, and "
+            "each story is captured as a clipping.")
+        for button in (self.btn_photos, self.btn_word, self.btn_pdf,
+                       self.btn_links):
             button.setCursor(Qt.PointingHandCursor)
             button.setMinimumHeight(38)
             buttons.addWidget(button)
@@ -1643,6 +1652,7 @@ class MainWindow(QMainWindow):
         self.btn_word.clicked.connect(lambda: self._choose("word"))
         self.btn_pdf.clicked.connect(lambda: self._choose("pdf"))
         self.btn_photos.clicked.connect(lambda: self._choose("photos"))
+        self.btn_links.clicked.connect(self.open_links)
         self.clear_all_btn.clicked.connect(self._clear_all)
         self.collapse_btn.clicked.connect(self._toggle_card)
 
@@ -2125,6 +2135,55 @@ class MainWindow(QMainWindow):
 
         return run
 
+    def open_links(self, words: str = "") -> None:
+        """The window where links are pasted and captured.
+
+        ``words`` fills the box - a message pasted with Ctrl+V arrives here
+        rather than in the "nothing to add" box.
+        """
+        if self._refuse_if_read_only():
+            return
+        dialog = getattr(self, "links_dialog", None)
+        if dialog is None:
+            dialog = self.links_dialog = webclip.LinksDialog(self)
+        if words:
+            dialog.box.setPlainText(words)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def clip_from_link(self, shot, found) -> None:
+        """One captured page, added as a clipping where the person is working.
+
+        The picture already carries the headline, so nothing is typed over it:
+        the caption is the publication's name, and the link prints underneath
+        as it does for any digital coverage.
+        """
+        try:
+            clip = self._clip_from_bytes(shot.png, f"{found.site}.png")
+        except Exception:  # noqa: BLE001 - one link, never the morning
+            self._flash(f"That page's picture could not be read ({found.site}).",
+                        "bad")
+            return
+        clip.source_file = "link"
+        clip.source_ref = shot.url
+        clip.url = shot.url
+        clip.show_url_box = True
+        clip.outlet = shot.site
+        clip.caption_raw = (found.label or shot.title or "")[:300]
+        clip.section = (Section.SOCIAL if links.is_social(shot.site)
+                        else Section.DIGITAL)
+        paper = links.paper_for_site(shot.site, self.name_index)
+        if paper:
+            clip.newspaper = paper
+            clip.name_confidence = 1.0
+        clip.name_source = "link"
+        pool = self.pool()
+        rows = self._add_loose([clip], quiet=True) or []
+        if rows:
+            self._flash(f"Captured {shot.site} — No. "
+                        f"{pool.position_of(rows[0].id) + 1}.", "good")
+
     def _clip_from_bytes(self, data: bytes, name: str) -> Clip:
         from PIL import Image
         import io as _io
@@ -2174,6 +2233,22 @@ class MainWindow(QMainWindow):
                 and collector.watcher.already_read()):
             self._flash(collect.PASTE_NOT_NEEDED, "info")
             return
+        # A link on the clipboard is not a picture, and the "nothing to add"
+        # box was the wrong answer to it: what somebody pasting a story link
+        # wants is the story. The list opens with it already in, so they can
+        # see what was found before anything is captured.
+        mime = QGuiApplication.clipboard().mimeData()
+        carried = dropped.read(mime) if mime is not None else None
+        if carried is not None and not carried.images and not carried.files:
+            words = mime.text() if mime.hasText() else ""
+            found = links.find(words) if words else []
+            if found:
+                self.open_links(words)
+                many = len(found)
+                self._flash(f"{many} link{'s' if many != 1 else ''} on the "
+                            f"clipboard — press Capture to take "
+                            f"{'them' if many != 1 else 'it'}.", "info")
+                return
         section = None
         if self.mode == "sentiment":
             # A pair, not a QPoint: _section_under indexes what it is given,
@@ -2713,6 +2788,7 @@ class MainWindow(QMainWindow):
             self.preview.deleteRequested.connect(self._preview_delete)
             self.preview.rotateRequested.connect(self._preview_rotate)
             self.preview.splitRequested.connect(self._preview_split)
+            self.preview.cropChanged.connect(self._preview_crop)
             self.preview.navigate.connect(self._preview_navigate)
         # Set before the row is shown: it decides whether the Section control
         # is the heading picker or the board's sentiment control, and showing
@@ -2818,6 +2894,27 @@ class MainWindow(QMainWindow):
             self._refresh_preview(following.id)
         elif self.preview:
             self.preview.close()
+
+    def _preview_crop(self, clip_id: int, crop) -> None:
+        """A trim dragged out in the full-size view, or put back.
+
+        One undo step on the history of the screen the clipping belongs to.
+        The picture keeps all its pixels: what is stored is the rectangle to
+        show, so Ctrl+Z gives the edges back exactly.
+        """
+        pool = self._preview_pool()
+        clip = pool.by_id(clip_id) if pool.row_for(clip_id) is not None else None
+        if clip is None or crop == clip.crop:
+            return
+        whole = getattr(crop, "is_identity", False)
+        self._preview_stack().push(commands.SetCrop(
+            pool, clip_id, crop, "Trim put back" if whole else "Trimmed"))
+        if pool is getattr(self, "board_model", None):
+            self._refresh_board()
+        self.list.refresh_height()
+        self._refresh_preview(clip_id)
+        self._flash("Trim put back — the whole picture again." if whole else
+                    "Trimmed — Ctrl+Z puts the edges back.", "good")
 
     def _preview_rotate(self, clip_id: int) -> None:
         self._preview_stack().push(commands.Rotate(self._preview_pool(), [clip_id]))
@@ -4216,6 +4313,9 @@ class MainWindow(QMainWindow):
         # whichever newspad the person chooses to collect into.
         was_collecting = self.collector.is_on
         dropped_copies = self.collector.stop("newspad")
+        dialog = getattr(self, "links_dialog", None)
+        if dialog is not None:
+            dialog.close()
         self._hide_move_note()
         self._collect_note = ""
         if was_collecting:
@@ -4953,6 +5053,9 @@ class MainWindow(QMainWindow):
         collector = getattr(self, "collector", None)
         if collector is not None:
             collector.stop("closing")
+        dialog = getattr(self, "links_dialog", None)
+        if dialog is not None:
+            dialog.close()
         reader_thread = getattr(self, "_reader", None)
         if reader_thread is not None:
             try:

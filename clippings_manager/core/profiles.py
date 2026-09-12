@@ -356,11 +356,11 @@ def parse_caption(
 def apply_to_clip(clip: Clip, config: dict, index: NameIndex) -> Parsed:
     """Fill a clip's newspaper/edition/page from its caption. Never overwrites a
     value the user typed themselves."""
-    # Typed by hand, or taken from a caption copied in WhatsApp (see
-    # core/copied.py): already worked out, and more carefully than the fallback
-    # below would. Merging or splitting a clipping runs its name through here
+    # Typed by hand, taken from a caption copied in WhatsApp (core/copied.py),
+    # or the publication a captured link belongs to (core/links.py): already
+    # worked out, and more carefully than the fallback below would. Merging or splitting a clipping runs its name through here
     # again, and must not turn "Amar Ujala, Jalandhar" into a guess.
-    if clip.name_source in ("manual", "copied"):
+    if clip.name_source in ("manual", "copied", "link"):
         return Parsed(clip.newspaper, clip.edition, clip.page, clip.name_confidence)
 
     # Electronic and social coverage is named, not datelined. What sits over the

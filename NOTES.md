@@ -1034,6 +1034,76 @@ and arrange" painted its headings blank: the badge-icon lookup indexed a dict
 that had no entry for arranged groups, so the KeyError stopped the header after
 its badge - no title, no count, invisible but working buttons.
 
+## Clippings from links (2.0.23)
+
+Digital coverage arrives as links, not files. Pasting one - or the whole
+WhatsApp message with a numbered list of a dozen in it - now gives a clipping
+per story: the headline, the picture and the first inches of the text.
+
+**The browser is the one already on the PC.** Chrome is started with no window,
+pointed at a settings folder of the program's own, and driven over the debugging
+port it opens for the purpose (core/webshot.py, with a twenty-line WebSocket
+client rather than another library in the hand-over copy). The alternative was
+to carry Chromium inside the program: PySide6 ships it, and the spec has always
+excluded it, because Qt6WebEngineCore.dll alone is 195 MB against a 230 MB
+application - the download would have gone from about 100 MB to 250 MB. Asked,
+the department chose the Chrome they already have.
+
+**Its own settings folder** (%APPDATA%\ClippingsManager\browser) is what keeps
+the person's Chrome out of it. Theirs stays open with WhatsApp Web in it, is
+never read and never closed, and a sign-in made for capturing - X and Facebook
+show a post to nobody else - lives only in the program's folder. The sign-in
+happens in a browser window the program opens: no password is ever typed into
+the program, and it never sees one.
+
+**The page says where its story is.** A script runs inside the page
+(core/blockjs.py) and measures the headline, the picture under it and the first
+run of body text; only that rectangle is captured. Anything fixed or sticky is
+taken away before measuring, so a cookie bar never lands across the picture.
+Three things were learned by measuring real pages:
+
+  * **The window is 820 pixels wide on purpose.** At that width a news site
+    lays itself out in one column and there is no advert rail to crop away. At
+    1280 the Indian Express put "you may like" beside the headline, and the
+    cutting had to be cut again.
+  * **The body is found by weight of text, not by tag.** The Times of India
+    puts its story in plain divs with no <p> at all, so a paragraph rule found
+    only the photo and the cutting ended mid-sentence.
+  * **The width comes from the picture and the first lines**, never the
+    headline's box, which can span the page while its words wrap early.
+
+**Chrome must not say it is headless.** With the default user agent X answers
+"Access to x.com was denied" before the page is drawn; the same browser with
+"HeadlessChrome" changed to "Chrome" is let in. A page that never arrives leaves
+Chrome showing its own error page, which is recognised by its address and
+refused in words rather than photographed.
+
+**One browser for a list, not one per link.** Twelve links cost one startup
+(about a second) and three to four seconds each. The capturing runs on a thread
+of its own so the window stays usable, and the thread ends itself from inside -
+see ui/reader.py for what happens when it does not.
+
+**Trimming.** A capture is a good cutting, not always the right one, so the
+full-size view has "Trim…": drag the edges in, and what is left is the clipping.
+Nothing is cut from the picture - the box becomes the clipping's crop, applied
+when it is drawn and exported, so Ctrl+Z is exact. The box is drawn on the
+picture as SHOWN, already cropped and turned, so imageops.crop_from_view turns
+it back and lays it over any crop already there: trimming twice narrows, never
+starts again from the whole.
+
+**Reading the links out of a message** (core/links.py) is plain text work. A
+numbered list often has the words on one line and the link on the next, so a
+label waits for the link that follows it; the sender's name is stripped only
+where WhatsApp itself put one, or "BRICS Summit: ..." lost its first two words;
+group invites are not stories; and the same link twice is one clipping.
+
+**The site names the paper** from the newspaper list rather than a table here,
+so a paper the office adds is recognised the same day. The SHORTEST listed name
+holding the site's own word wins: jagran.com is Dainik Jagran, not Punjabi
+Jagran, and tribuneindia.com is The Tribune. A site matching nothing gets no
+name at all - a wrong masthead is worse than none, the same rule as the caption
+reader.
+
 ## Making the window narrow
 
 Narrow the window and controls on the right were cut off and could not be

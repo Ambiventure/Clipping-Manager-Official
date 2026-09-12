@@ -31,6 +31,12 @@ headline style, so several reports with different titles can be worked on in the
 same sitting. The newspaper list, section headings, the words kept out and
 everything the duplicate check has learned are shared by all four.
 
+**Makes a clipping out of a link.** Paste a link - or the whole WhatsApp
+message with a numbered list of a dozen in it - and each story is captured as a
+clipping: the headline, the picture and the first inches of the story, without
+the menus, adverts and cookie bars. Posts on X and Facebook are captured as the
+post. Any capture can be trimmed by dragging its edges in.
+
 **Collects straight from WhatsApp Web.** Switch on "Collect from WhatsApp" and
 stay in the chat: copy a photo and it becomes a clipping, copy its caption and
 the newspaper, city and page are filled in. Anything that is not clearly a
@@ -40,13 +46,22 @@ it was not asked to.
 
 ## Two things worth knowing
 
-**It works offline.** The whole morning's work is done on the machine, with the
-network cable unplugged if you like. Nothing is uploaded anywhere, ever.
+**The morning's work is done on the machine.** Reading the documents, naming
+the clippings, finding the repeats, building the report: all of it happens on
+the PC, with the network cable unplugged if you like. Nothing is ever uploaded,
+and no clipping leaves the machine.
 
-There is one outbound request in the whole program: a "Check for updates"
-button, which asks this repository for a version number when you press it and at
-no other time. If it finds a newer version it offers to open the download page
-in your browser - it never downloads or installs anything itself.
+Two things reach out, and only when you ask them to:
+
+  * **"Check for updates"** asks this repository for a version number when you
+    press it, and at no other time. If it finds a newer version it offers to
+    open the download page in your browser - it never downloads or installs
+    anything itself.
+  * **Capturing a link** opens that page, in the Chrome already on the PC, to
+    photograph it. It is the same as opening the page yourself. The program
+    keeps its own browser settings folder, so your everyday Chrome, its
+    sign-ins and its history are untouched; a sign-in you make for capturing
+    lives in that folder and nowhere else.
 
 **Your settings are not in the program folder.** The newspaper list, the cover
 settings, and everything the duplicate trainer has been taught live in

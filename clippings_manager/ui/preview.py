@@ -34,8 +34,10 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import sections as section_list
-from ..core.models import Section
+from ..core import imageops
+from ..core.models import CropRect, Section
 from . import theme
+from .trimming import TrimCanvas
 from .fluid import ElidedLabel
 from .scroll import WHEEL_PIXELS, smooth
 
@@ -89,6 +91,8 @@ class PreviewDialog(QDialog):
     #: The size or colour every heading prints at changed.
     headingStyleChanged = Signal()
     labelChanged = Signal(int, str)
+    #: (clip id, CropRect) - a trim applied, or put back.
+    cropChanged = Signal(int, object)
     navigate = Signal(int)
 
     def __init__(self, model, parent=None):
@@ -102,6 +106,7 @@ class PreviewDialog(QDialog):
         self._loading = False
         self._connected = False
         self._zoom_index = ZOOM_STEPS.index(1.0)
+        self._position = self._total = 0
         self._pixmap: QPixmap | None = None
 
         self.setWindowTitle("Clipping")
@@ -202,7 +207,8 @@ class PreviewDialog(QDialog):
         self.scroll.horizontalScrollBar().setSingleStep(WHEEL_PIXELS // 2)
         smooth(self.scroll)
         smooth(self.scroll, Qt.Horizontal)
-        self.canvas = QLabel()
+        self.canvas = TrimCanvas()
+        self.canvas.changed.connect(self._trim_moved)
         self.canvas.setAlignment(Qt.AlignCenter)
         self.canvas.setStyleSheet(f"background: {theme.DARK_VIEWPORT}; padding: 18px;")
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -330,12 +336,27 @@ class PreviewDialog(QDialog):
         actions.setSpacing(8)
         self.rotate_btn = QPushButton("Rotate 90°")
         self.split_btn = QPushButton("Split in two")
+        # A capture from a link, or a photo taken at arm's length, often has a
+        # strip of something else along one edge.
+        self.trim_btn = QPushButton("Trim…")
+        self.trim_btn.setToolTip(
+            "Drag the edges in to keep only part of this clipping. The picture "
+            "itself is not cut - Ctrl+Z puts the edges back.")
+        self.trim_apply = QPushButton("Keep this")
+        self.trim_cancel = QPushButton("Cancel")
+        self.trim_reset = QPushButton("Whole picture")
+        self.trim_reset.setToolTip("Put back everything a trim took off.")
         self.exclude_btn = QPushButton("Exclude")
-        for button in (self.rotate_btn, self.split_btn):
+        for button in (self.rotate_btn, self.split_btn, self.trim_btn,
+                       self.trim_apply, self.trim_cancel, self.trim_reset):
             button.setStyleSheet(DARK_BUTTON)
         self.exclude_btn.setStyleSheet(DANGER_BUTTON)
         actions.addWidget(self.rotate_btn)
         actions.addWidget(self.split_btn)
+        actions.addWidget(self.trim_btn)
+        actions.addWidget(self.trim_apply)
+        actions.addWidget(self.trim_cancel)
+        actions.addWidget(self.trim_reset)
         actions.addStretch(1)
         actions.addWidget(self.exclude_btn)
         body.addLayout(actions)
@@ -343,6 +364,11 @@ class PreviewDialog(QDialog):
         self.rotate_btn.clicked.connect(self._rotate)
         self.split_btn.clicked.connect(self._split)
         self.exclude_btn.clicked.connect(self._toggle_include)
+        self.trim_btn.clicked.connect(self._trim_start)
+        self.trim_apply.clicked.connect(self._trim_keep)
+        self.trim_cancel.clicked.connect(self._trim_stop)
+        self.trim_reset.clicked.connect(self._trim_whole)
+        self._show_trim_buttons(False)
         return panel
 
     def _labelled(self, text, layout, stretch):
@@ -463,6 +489,11 @@ class PreviewDialog(QDialog):
         self.row = row
         clip = row.clip
         self._loading = True
+        # Kept so the view can draw this same clipping again after a trim.
+        self._position, self._total = position, total
+        if self.canvas.trimming:
+            self.canvas.stop_trim()
+            self._show_trim_buttons(False)
 
         self._pixmap = self._render(clip)
         self._apply_zoom()
@@ -684,6 +715,66 @@ class PreviewDialog(QDialog):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_zoom()
+
+    # ---------------------------------------------------------------- trim
+    def _show_trim_buttons(self, trimming: bool) -> None:
+        """While trimming, the bar offers only what a trim can do."""
+        self.trim_btn.setVisible(not trimming)
+        self.rotate_btn.setVisible(not trimming)
+        self.split_btn.setVisible(not trimming)
+        self.exclude_btn.setVisible(not trimming)
+        self.trim_apply.setVisible(trimming)
+        self.trim_cancel.setVisible(trimming)
+        clip = self.row.clip if self.row is not None else None
+        self.trim_reset.setVisible(
+            trimming and clip is not None and not clip.crop.is_identity)
+
+    def _trim_start(self) -> None:
+        if self.row is None:
+            return
+        self.canvas.start_trim()
+        self._show_trim_buttons(True)
+        self.notice.setText("Drag the edges in, then press Keep this.")
+        self.notice.show()
+
+    def _trim_stop(self) -> None:
+        self.canvas.stop_trim()
+        self._show_trim_buttons(False)
+        self.notice.hide()
+        if self.row is not None:
+            self.show_row(self.row, self._position, self._total)
+
+    def _trim_moved(self) -> None:
+        """What the box is worth, said while it is being dragged."""
+        if not self.canvas.trimming or self.row is None:
+            return
+        left, top, right, bottom = self.canvas.where()
+        across, down = self.row.clip.rendered_size()
+        self.notice.setText(
+            f"Keeping {int((right - left) * across)} × "
+            f"{int((bottom - top) * down)} pixels of "
+            f"{int(across)} × {int(down)}.")
+
+    def _trim_keep(self) -> None:
+        if self.row is None:
+            return
+        box = self.canvas.where()
+        clip_id = self.row.id
+        self.canvas.stop_trim()
+        self._show_trim_buttons(False)
+        self.notice.hide()
+        if not imageops.worth_trimming(box):
+            return                      # the whole picture: nothing to do
+        self.cropChanged.emit(clip_id, imageops.crop_from_view(self.row.clip, box))
+
+    def _trim_whole(self) -> None:
+        if self.row is None:
+            return
+        clip_id = self.row.id
+        self.canvas.stop_trim()
+        self._show_trim_buttons(False)
+        self.notice.hide()
+        self.cropChanged.emit(clip_id, CropRect())
 
     # -------------------------------------------------------------- actions
     def _rotate(self) -> None:
