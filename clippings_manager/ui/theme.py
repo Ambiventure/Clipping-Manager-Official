@@ -78,6 +78,9 @@ CROWN_HOVER = "#3A5691"
 # light green edge stands out 8.36:1 against the crown.
 COLLECT_ON = "#166534"
 COLLECT_ON_LINE = "#86EFAC"
+#: The Collect button's edge while its options differ from the defaults - the
+#: crown's amber, 6.96:1 on the header and 4.23:1 on the Collecting green.
+COLLECT_TUNED_LINE = "#FDBA74"
 CROWN_SUB = "#D7E1F2"         # secondary text on the crown
 CROWN_DIM = "#B3C2DC"         # tertiary text on the crown
 CROWN_AMBER = "#FDBA74"       # the crown's orange, readable where ORANGE is not
@@ -320,6 +323,13 @@ QPushButton#HeaderButton:hover {{
 QPushButton#HeaderButton:checked {{
     background: {COLLECT_ON}; border: 1px solid {COLLECT_ON_LINE}; color: #FFFFFF;
 }}
+/* Collect's options changed from their defaults. Only the edge's colour: a
+   wider border or a glyph would move the header's floor. */
+QPushButton#HeaderButton[tuned="true"],
+QPushButton#HeaderButton[tuned="true"]:hover,
+QPushButton#HeaderButton[tuned="true"]:checked {{
+    border: 1px solid {COLLECT_TUNED_LINE};
+}}
 /* Brand ORANGE is only 4.0:1 on the crown and this is 10px text. */
 #ModeLabel {{
     color: {CROWN_AMBER}; font-size: 10px; font-weight: 800; letter-spacing: .06em;
@@ -422,6 +432,37 @@ QPushButton#LinkNavy {{
     padding: 4px 2px; font-size: 12px;
 }}
 QPushButton#LinkNavy:hover {{ color: {ORANGE}; }}
+QFrame#MethodSwitch {{
+    background: {SURFACE}; border: 1px solid {HAIRLINE_STRONG}; border-radius: 10px;
+}}
+QPushButton#MethodChoice {{
+    background: {SURFACE}; color: {NAVY}; border: 1px solid transparent;
+    border-radius: 7px; padding: 5px 12px; font-weight: 600;
+}}
+QPushButton#MethodChoice:hover {{ background: {NAVY_WASH}; }}
+QPushButton#MethodChoice:checked {{ background: {NAVY}; color: #FFFFFF; border-color: {NAVY}; }}
+QPushButton#MethodChoice:disabled {{ color: {FAINT}; }}
+QPushButton#MethodChoice:checked:disabled {{ background: {SLATE_TEXT_LIGHT}; color: #FFFFFF; }}
+QToolButton#MethodMore {{
+    background: {SURFACE}; color: {NAVY}; border: 1px solid {HAIRLINE_STRONG};
+    border-radius: 7px; padding: 4px 9px; font-weight: 700;
+}}
+QToolButton#MethodMore:hover {{ background: {NAVY_WASH}; }}
+QFrame#TourStrip {{
+    background: {NAVY_WASH}; border: 1px solid {NAVY_BAND_LINE}; border-radius: 8px;
+}}
+QFrame#SidePanel {{
+    background: {SURFACE}; border-right: 1px solid {HAIRLINE_STRONG};
+}}
+QLabel#SideHeading {{ color: {NAVY}; font-weight: 700; padding-top: 6px; }}
+QLabel#TourChip {{
+    background: {SURFACE}; color: {SLATE_TEXT_LIGHT}; border: 1px solid {HAIRLINE_STRONG};
+    border-radius: 9px; padding: 2px 8px;
+}}
+QLabel#TourChip[done="true"] {{ background: {GREEN_WASH}; color: {GREEN}; border-color: {GREEN}; }}
+QFrame#StuckNote {{
+    background: {FLAG_WASH}; border: 1px solid {FLAG}; border-radius: 8px;
+}}
 
 /* ------------------------------------------------------------ status strip */
 #StatusInfo {{

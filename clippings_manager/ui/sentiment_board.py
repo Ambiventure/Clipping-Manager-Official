@@ -52,6 +52,8 @@ from PySide6.QtWidgets import (
 from ..core import sentiment
 from ..core.models import Section
 from . import icons, theme
+from .clip_list import MIME as ROW_MIME
+from .clip_list import ClipList
 from .fluid import ElidedLabel, FlowLayout
 from .layout_card import HeadingLayoutCard
 from .scroll import (
@@ -116,7 +118,10 @@ CARD_HEIGHT = (CARD_PAD * 2 + CARD_HEAD + CARD_IMAGE + CARD_TITLE + CARD_SECOND
                + CARD_ACTIONS + 14)
 CARD_GAP = 10
 THUMB = 76
-ALL_DIVISIONS = "__all__"
+ALL_DIVISIONS = sentiment.ALL_DIVISIONS
+#: Qt's "no ceiling" for a widget's height, which is what the column strip
+#: goes back to when a category is closed again.
+NO_CEILING = 16777215
 
 
 # --------------------------------------------------------------------- model
@@ -865,10 +870,56 @@ class SentimentColumn(QListView):
 # -------------------------------------------------------------------- board
 
 
+class _DropBubble(QPushButton):
+    """A focus-bar bubble that also takes clippings dragged out of the list.
+
+    With one category opened out, the other three are not on screen to drag
+    a card into, and a list row's grip is the only thing that drags. Letting
+    go of rows on another category's bubble moves them there - the card
+    columns' drag, reached from the list. Its own category's bubble takes
+    nothing: they are already there.
+    """
+
+    rowsDropped = Signal(list)          # clip ids
+
+    def __init__(self, value: str, board: "SentimentBoard"):
+        super().__init__()
+        self._value = value
+        self._board = board
+        self.setAcceptDrops(True)
+
+    def _takes(self, event) -> bool:
+        return (event.mimeData().hasFormat(ROW_MIME)
+                and self._board.focused not in (None, self._value))
+
+    def dragEnterEvent(self, event):  # noqa: N802 - Qt name
+        if self._takes(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):  # noqa: N802 - Qt name
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):  # noqa: N802 - Qt name
+        if not self._takes(event):
+            event.ignore()
+            return
+        raw = bytes(event.mimeData().data(ROW_MIME)).decode("ascii", "ignore")
+        ids = [int(part) for part in raw.split(",") if part.strip().isdigit()]
+        event.acceptProposedAction()
+        if ids:
+            self.rowsDropped.emit(ids)
+
+
 class SentimentBoard(QWidget):
     """The whole sentiment interface: division bar, totals, four columns."""
 
     assignRequested = Signal(list, str)   # clip ids, section value
+    # The category opened out, or "" for all four. Also sent when the division
+    # changes, because what a category's list holds changes with it. Sent
+    # freely, so whoever listens has to take it again without harm.
+    focusChanged = Signal(str)
     previewRequested = Signal(int)
     divisionChanged = Signal(str)
     addRequested = Signal(str)            # section value to import into
@@ -953,6 +1004,8 @@ class SentimentBoard(QWidget):
         self.column_scroll = SideScroll("ColumnScroll", self._build_columns(),
                                         min_height=CARD_HEIGHT + 96)
         work_stack.addWidget(self.column_scroll, 1)
+        self._work_stack = work_stack
+        work_stack.addWidget(self._build_focus_area(), 1)
 
         # One page, scrolled by the wheel. The columns are kept at least as tall
         # as the window, so turning the wheel to the bottom takes the set-up off
@@ -966,6 +1019,9 @@ class SentimentBoard(QWidget):
         page_stack.setSpacing(11)
         page_stack.addWidget(settings)
         page_stack.addWidget(work)
+        # Kept for set_foot_room: the room at the foot of the page for the bar
+        # that floats over it while rows of a category's list are ticked.
+        self._page_stack = page_stack
 
         # No ceiling on the set-up half. Capping it made the board scroll in two
         # places - the page, and the set-up within its own frame - which is the
@@ -1467,6 +1523,11 @@ class SentimentBoard(QWidget):
         self.column_counts: dict[str, QLabel] = {}
         self.column_panels: dict[str, QFrame] = {}
         self.expand_buttons: dict[str, QPushButton] = {}
+        # The coloured header of each column. While a category is opened out
+        # its header is all that is left of the column, and the strip holding
+        # the columns is held to that header's height - which changes when the
+        # window's width makes its subtitle wrap, so each is watched.
+        self.column_headers: dict[str, QFrame] = {}
 
         for section in sentiment.COLUMNS:
             style = theme.SENTIMENT_STYLES[section.value]
@@ -1554,6 +1615,8 @@ class SentimentBoard(QWidget):
             )
             head_col.addWidget(subtitle)
             column_layout.addWidget(header)
+            self.column_headers[slug] = header
+            header.installEventFilter(self)
 
             view = SentimentColumn(section)
             view.cardsDropped.connect(self.assignRequested)
@@ -1574,6 +1637,57 @@ class SentimentBoard(QWidget):
             self.column_panels[slug] = panel
             row.addWidget(panel, 1)
         return holder
+
+    def _build_focus_area(self) -> QWidget:
+        """Where a category opened out is shown as the press report's own list.
+
+        Under the category's coloured header: the list's bar and its filter
+        strip (made by the window, which owns what they do - see set_list_bar)
+        and the one list, built once and kept. It is never rebuilt, because a
+        headline box opened on it is found again a moment later by a timer.
+
+        The list stands at its full height and the board's page scrolls, the
+        way the press report's page does. A list scrolling inside a page that
+        also scrolls is two bars for one gesture, and everything that follows
+        a clipping - the headline box on the next row, a drag held at the
+        window's edge, the buttons that jump to the top and the bottom - moves
+        the page, not the list.
+        """
+        area = QWidget()
+        area.setObjectName("FocusArea")
+        area.setStyleSheet("#FocusArea { background: transparent; }")
+        stack = QVBoxLayout(area)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(8)
+        self._list_bar_slot = QVBoxLayout()
+        self._list_bar_slot.setContentsMargins(0, 0, 0, 0)
+        self._list_bar_slot.setSpacing(8)
+        stack.addLayout(self._list_bar_slot)
+        self.focus_list = ClipList()
+        stack.addWidget(self.focus_list)
+        # Whatever height the page has left over goes under the list, not
+        # between its rows.
+        stack.addStretch(1)
+        area.hide()
+        self.focus_area = area
+        return area
+
+    def set_list_bar(self, bar: QWidget, filter_bar: Optional[QWidget] = None) -> None:
+        """Put the list's bar, and its filter strip, over the category's list."""
+        for widget in (bar, filter_bar):
+            if widget is not None:
+                self._list_bar_slot.addWidget(widget)
+
+    def set_foot_room(self, px: int) -> None:
+        """Room at the foot of the page, so the last row of a category's list
+        can be scrolled clear of the bar floating over it."""
+        stack = getattr(self, "_page_stack", None)
+        if stack is None:
+            return
+        left, top, right, bottom = stack.getContentsMargins()
+        px = max(0, int(px))
+        if bottom != px:
+            stack.setContentsMargins(left, top, right, px)
 
     def _build_column_bar(self) -> QWidget:
         """Two states in one slot: the quiet strip, or the dark focus bar."""
@@ -1689,12 +1803,15 @@ class SentimentBoard(QWidget):
         self.bubbles: dict[str, dict] = {}
         for section in sentiment.COLUMNS:
             meta = COLUMN_META[section.value]
-            bubble = QPushButton()
+            bubble = _DropBubble(section.value, self)
             bubble.setCursor(Qt.PointingHandCursor)
             bubble.setMinimumHeight(30)
             bubble.setIconSize(QSize(14, 14))
             bubble.clicked.connect(
                 lambda _c=False, v=section.value: self.toggle_focus(v)
+            )
+            bubble.rowsDropped.connect(
+                lambda ids, v=section.value: self.assignRequested.emit(ids, v)
             )
             self.bubbles[section.value] = {"button": bubble, "icon": meta["icon"]}
             row.addWidget(bubble)
@@ -1796,17 +1913,28 @@ class SentimentBoard(QWidget):
             edit.setText(str(wanted[key] or ""))
             edit.blockSignals(was)
 
+    def _editor_views(self) -> list:
+        """Every view a headline can be typed on: the four columns, and the
+        list a category is shown as while it is opened out."""
+        views = list(self.columns.values())
+        listed = getattr(self, "focus_list", None)
+        if listed is not None:
+            views.append(listed)
+        return views
+
     def commit_editors(self) -> None:
-        """Finish any headline being typed on a card, in every column."""
-        for view in self.columns.values():
+        """Finish any headline being typed on a card, in every column, or on
+        a row of the category's list."""
+        for view in self._editor_views():
             try:
                 view.commit_editor()
             except Exception:  # noqa: BLE001 - a column mid-teardown
                 continue
 
     def settle_editors(self, clip_id: int) -> None:
-        """Put away an open box on one card, whichever column it is in."""
-        for view in self.columns.values():
+        """Put away an open box on one card, whichever column it is in - or
+        on its row, in the category's list."""
+        for view in self._editor_views():
             try:
                 view.settle_editor(clip_id)
             except Exception:  # noqa: BLE001 - a column mid-teardown
@@ -1821,8 +1949,13 @@ class SentimentBoard(QWidget):
         """Show one column on its own, or bring all four back.
 
         With four columns a long positive run is a narrow strip; focusing gives it
-        the whole width without moving anything.
+        the whole width without moving anything. Opened out, the category is the
+        press report's list rather than cards (see _seat_focus), and the set-up
+        is scrolled away so the list has the window.
         """
+        # A headline half typed in the list or on a card is kept, whichever
+        # way the board is about to change under it.
+        self.commit_editors()
         self.focused = None if self.focused == value else value
         for key, panel in self.column_panels.items():
             panel.setVisible(self.focused is None or key == self.focused)
@@ -1833,7 +1966,103 @@ class SentimentBoard(QWidget):
         self.focus_bar.setVisible(self.focused is not None)
         if self.focused:
             self.focus_lead.setText(f"FOCUS: {self.focused.upper()}")
+        self._seat_focus()
         self._refresh_bubbles()
+        self.focusChanged.emit(self.focused or "")
+
+    def _seat_focus(self) -> None:
+        """The category's list in place of its cards, or the cards back.
+
+        Opened out, the column keeps only its header, the strip holding the
+        columns is held to that header's height, and the list takes the rest
+        of the page. Closed, every one of those is put back exactly as it was:
+        no height of its own on the strip, and the stretch that makes the four
+        columns fill the window.
+        """
+        focused = self.focused
+        for key, view in self.columns.items():
+            view.setVisible(key != focused)
+        listed = self.focus_list
+        if focused:
+            self._work_stack.setStretchFactor(self.column_scroll, 0)
+            try:
+                listed.drop_section = Section(focused)
+            except ValueError:
+                listed.drop_section = None
+            meta = COLUMN_META.get(focused, {})
+            listed.empty_hint = (meta.get("empty", "") + "\n"
+                                 + meta.get("hint", "")).strip()
+            listed.follow_content(True)
+            self.focus_area.show()
+            self._cap_header()
+            # Once the list has been laid out, so the page's range already
+            # reaches far enough to take the set-up off the top.
+            QTimer.singleShot(0, self._to_work_if_focused)
+        else:
+            self.focus_area.hide()
+            listed.follow_content(False)
+            listed.drop_section = None
+            listed.empty_hint = ""
+            self.column_scroll.setMinimumHeight(0)
+            self.column_scroll.setMaximumHeight(NO_CEILING)
+            self._work_stack.setStretchFactor(self.column_scroll, 1)
+
+    def _to_work_if_focused(self) -> None:
+        if self.focused:
+            self.show_settings(False)
+
+    def _cap_header(self) -> None:
+        """Hold the column strip to the opened-out category's header.
+
+        Measured, not fixed: the header's subtitle wraps onto a second line
+        when the window is narrow, and a strip held to one line cut its
+        second line off.
+        """
+        if not self.focused:
+            return
+        header = self.column_headers.get(self.focused)
+        if header is None:
+            return
+        width = self.column_scroll.viewport().width() - 2
+        if width <= 0:
+            width = header.width()
+        need = header.heightForWidth(width) if header.hasHeightForWidth() else -1
+        need = max(need, header.minimumSizeHint().height())
+        # The panel's own edge above and below the header - its stylesheet
+        # border and its layout's margin, which are measured, not assumed: a
+        # cap counting only the margin cut two pixels off the subtitle - and
+        # the sideways bar while there still is one.
+        panel = self.column_panels.get(self.focused)
+        edge = 0
+        if panel is not None:
+            edge = panel.rect().height() - panel.contentsRect().height()
+            shape = panel.layout()
+            if shape is not None:
+                margins = shape.contentsMargins()
+                edge += margins.top() + margins.bottom()
+        cap = need + edge
+        bar = self.column_scroll.horizontalScrollBar()
+        if bar is not None and bar.isVisible():
+            cap += bar.height()
+        if (self.column_scroll.minimumHeight() != cap
+                or self.column_scroll.maximumHeight() != cap):
+            self.column_scroll.setFixedHeight(cap)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt name
+        # The opened-out category's header changed size - the window's width
+        # changed, and its subtitle wraps differently - so the strip is held
+        # to its new height. Later, not inside the header's own resize.
+        if (event.type() in (QEvent.Resize, QEvent.LayoutRequest)
+                and getattr(self, "focused", None)
+                and watched is getattr(self, "column_headers", {}).get(self.focused)
+                and not getattr(self, "_cap_pending", False)):
+            self._cap_pending = True
+            QTimer.singleShot(0, self._cap_later)
+        return super().eventFilter(watched, event)
+
+    def _cap_later(self) -> None:
+        self._cap_pending = False
+        self._cap_header()
 
     # -- data --------------------------------------------------------------
     def set_rows(self, rows: list) -> None:
@@ -1878,8 +2107,8 @@ class SentimentBoard(QWidget):
         them - which is the order the dossier prints them in."""
         ordered = []
         for section in sentiment.COLUMNS:
-            for row in self._visible_rows():
-                if sentiment.column_for(row.clip.section) is section:
+            for row in self._rows:
+                if sentiment.shows(row.clip, section, self.active):
                     ordered.append(row.clip)
         return ordered
 
@@ -1887,17 +2116,17 @@ class SentimentBoard(QWidget):
         return sentiment.division_by_code(self.active, self.config)
 
     def _visible_rows(self) -> list:
-        if self.active == ALL_DIVISIONS:
-            return self._rows
         # Unassigned clippings stay visible, or they would be unreachable here.
+        # The rule is sentiment.shows, which a category's list uses as well.
         return [r for r in self._rows
-                if r.clip.division == self.active or not r.clip.division]
+                if sentiment.shows(r.clip, None, self.active)]
 
     def _refresh_columns(self) -> None:
         visible = self._visible_rows()
-        buckets: dict[str, list] = {s.value: [] for s in sentiment.COLUMNS}
-        for row in visible:
-            buckets[sentiment.column_for(row.clip.section).value].append(row)
+        buckets: dict[str, list] = {
+            s.value: [r for r in visible
+                      if sentiment.shows(r.clip, s, self.active)]
+            for s in sentiment.COLUMNS}
 
         for value, rows in buckets.items():
             self.columns[value].model().set_rows(rows)
@@ -1922,13 +2151,38 @@ class SentimentBoard(QWidget):
         )
 
     def begin_rename(self, clip_id: int) -> None:
-        """Open the headline box on a card, whichever column it landed in."""
+        """Open the headline box on a card, whichever column it landed in.
+
+        With a category opened out the cards are hidden, and a box opened on
+        one was typed into by nobody: the box opens on the clipping's row in
+        the list instead. A clipping the list does not hold - it landed in
+        another category - opens nothing rather than a box out of sight.
+        """
+        if self.focused is not None:
+            listed = self.focus_list
+            model = listed.model()
+            if model is None or model.entry_row_for_clip(clip_id) < 0:
+                return
+            listed.open_editor_for(clip_id)
+            if listed.editing_id() != clip_id:
+                # Straight after an arrival the list may still be laying out.
+                QTimer.singleShot(140, lambda: self._rename_again(clip_id))
+            return
         for view in self.columns.values():
             for row in range(view.model().rowCount()):
                 entry = view.model().index(row, 0).data(Qt.UserRole)
                 if entry is not None and entry.id == clip_id:
                     view.open_editor_for(clip_id)
                     return
+
+    def _rename_again(self, clip_id: int) -> None:
+        listed = self.focus_list
+        model = listed.model()
+        if (self.focused is None or model is None
+                or listed.editing_id() == clip_id
+                or model.entry_row_for_clip(clip_id) < 0):
+            return
+        listed.open_editor_for(clip_id)
 
     def select_division(self, code: str) -> None:
         """Show a division by code - used when a saved session is restored."""
@@ -1941,11 +2195,18 @@ class SentimentBoard(QWidget):
         self.division_pick.blockSignals(False)
         self._refresh_divisions()
         self._refresh_columns()
+        # An opened-out category's list holds this division's clippings now.
+        self.focusChanged.emit(self.focused or "")
 
     def scroll_columns(self, top: bool = True) -> None:
-        """Send every visible column to one end - the floating buttons use this."""
+        """Send every visible column to one end - the floating buttons use this.
+
+        A category opened out has no cards on show, and its list scrolls with
+        the page, which the floating buttons have already moved."""
         for value, view in self.columns.items():
             if self.focused is not None and value != self.focused:
+                continue
+            if not view.isVisibleTo(self):
                 continue
             bar = view.verticalScrollBar()
             bar.setValue(bar.minimum() if top else bar.maximum())
@@ -1954,6 +2215,9 @@ class SentimentBoard(QWidget):
         for view in self.columns.values():
             view.delegate.selected_ids = set(ids)
             view.viewport().update()
+        listed = getattr(self, "focus_list", None)
+        if listed is not None:
+            listed.viewport().update()
 
     def _division_picked(self, index: int) -> None:
         code = self.division_pick.itemData(index)
@@ -1962,3 +2226,4 @@ class SentimentBoard(QWidget):
             self._refresh_divisions()
             self._refresh_columns()
             self.divisionChanged.emit(code)
+            self.focusChanged.emit(self.focused or "")

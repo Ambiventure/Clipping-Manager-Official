@@ -16,6 +16,251 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.32
+
+Added
+
+  * **The six division short forms in a copied caption.** "HT LKO", "DB UMB
+    4" or "LKO NBT" copied under a photo now names it - Hindustan Times,
+    Lucknow - instead of printing the words as typed. LKO is Lucknow, MB
+    Moradabad, UMB Ambala, DLI Delhi, JAT Jammu and FZR Ferozpur, either
+    way round and with a page number. JAT and MB count only in capitals,
+    because "Jat" and "mb" are ordinary words.
+  * **Right-click Collect from WhatsApp for its options.** What it collects,
+    how it reads a caption, where a photo goes, and what it does when a copy
+    is not used. A tick can be set without the menu closing.
+  * **Collect's options last until the program is closed, and are never
+    saved.** While any is changed, the Collect bar lists them with Change…,
+    and the button has an amber edge.
+  * **Every photo Collect adds can arrive already named** with a newspaper,
+    city, page and division for the session. A copied caption still replaces
+    the name, and what it leaves out is kept. On a sentiment board showing
+    one division, a card keeps that division, and the bar says so.
+  * **A city on its own can be a caption** - "LKO" or "Lucknow page 3" - with
+    the newspaper left for you to type, or taken from the session's.
+  * **A caption with a division's short form files the clipping under that
+    division** when it has none. A card on the sentiment board keeps the
+    division the board is showing, and the bar says so.
+  * **More ways to pair a caption with its photo.** A new caption can replace
+    one already copied, a caption copied just before its photo can go on it,
+    or a caption can go on the one clipping ticked in the press report. A
+    caption copied before a photo that was not taken - too small, or its
+    address copied instead - is never put on the photo after it by itself.
+  * **Choose how links are captured.** The links window has "Capture with:
+    Browser inside the app / My Chrome", and one Capture button that uses
+    the choice - "Capture 4" in the background, or "Take 4 from Chrome". The
+    choice is remembered.
+  * **Right-click either way for more,** or press the ⋯ beside them. Browser
+    inside the app: open the browser at the links, sign in to X, Facebook or
+    Instagram, see what is saved, sign out. My Chrome: take the ticked links
+    now, take only the posts that need a sign-in, and whether the trim opens
+    after each picture.
+  * **Each link in the list says what happened to it** - waiting, capturing,
+    ✓ with its clipping's number and which way took it, ✕ with the reason, or
+    "needs a sign-in". The marks stay when more links are pasted, and a
+    captured clipping that is undone gives its link back.
+  * **Right-click a link in the list** to capture just that one, take it from
+    your Chrome, open it in the browser inside the app or in your Chrome, or
+    show its clipping. Double-click opens it in the browser inside the app.
+  * **Posts that hit a sign-in wall get two ways past it** in the line under
+    the box: sign in to that site in the browser inside the app, or take
+    them from your Chrome. Both are links that do it.
+  * **The browser inside the app goes through the message's links.** A strip
+    shows Previous, "3 of 12 · site · headline" (pick any) and Next, whether
+    this link is captured yet, and "Then open the next link", which is on.
+    Alt+PgDown and Alt+PgUp move between links; Ctrl+Enter captures.
+  * **Capture this page pictures the page as you see it,** without loading
+    it again: its pictures have loaded, and a pop-up you closed stays
+    closed. It is filed under the link from the message, with the sender's
+    words, and the links window ticks it off - also when the link goes on to
+    another address, as youtu.be, fb.watch and twitter.com links do.
+  * **A page that is not the message's link is filed as a clipping of its
+    own** - another video or post that YouTube or Facebook moves on to, or
+    the page left open after its link was deleted from the list - and the
+    link that was sent stays waiting. Next then opens the link that came
+    after the deleted one.
+  * **Closing the browser while it captures closes it at once.** The capture
+    is dropped, and its link is not marked as failed.
+  * **The browser's ☰ panel shows your sign-ins and what the sites keep.**
+    Each signed-in site has Sign out, and the panel says plainly that no
+    passwords are stored. Every site that keeps data is listed with how
+    much and until when, with Remove. Site permissions have Forget. There is
+    also Clear stored pages and pictures, Forget visited pages, and Remove
+    everything.
+  * **Sign in from the ☰ panel and press Next ›** to come back to the post
+    that asked for the sign-in.
+  * **The program's own hidden Chrome's sign-ins are listed in that panel
+    too,** and can be removed. Your everyday Chrome is never read. While
+    that Chrome is open, the panel says so rather than showing nothing.
+  * **The browser has a forward button and a loading bar.** "Sign in with
+    Google" and other sign-in pop-ups open in a small window of their own,
+    and a site asking for your location, camera or notifications is refused.
+  * **A page that stops responding in the browser says so,** with Reload and
+    Skip to the next link.
+  * **A link dragged onto the window, the clippings list or a sentiment
+    column opens the links window with the link in it.**
+  * **A link dropped on the browser's address bar opens at once,** and so does
+    one pasted into an empty address bar. Right-click the bar for Paste and
+    go.
+  * **Expand on a sentiment category shows it as the press report's list.**
+    The same rows, file brackets, move buttons and pills, numbered as the
+    cards are, and the set-up scrolls away so the list has the window.
+  * **Show all, All four or the category's bubble brings the four columns
+    back** exactly as they were, in the order made in the list.
+  * **Tick, Shift-click, Select all and Ctrl+A work in an opened category,**
+    and the navy bar acts on its ticks. Every change there is one Ctrl+Z on
+    the board and never touches the press report.
+  * **Move to on the bar lists the other three categories first,** then the
+    category's files. Right-click a row for Move to category.
+  * **Drag rows within an opened category,** and every other category and
+    division keeps its order.
+  * **Drop rows on another category's bubble** to move them there.
+  * **Type headlines down an opened category.** Enter or Tab goes to the next
+    clipping in that category, Up goes back, and Esc leaves it.
+  * **Hindi to English and Filter and arrange work on one category** from
+    the bar over its list.
+  * **A picture pasted, dropped, dragged from a browser or added while a
+    category is opened lands in that category,** at the top of its loose
+    clippings, with its headline box open in the list.
+  * **A photo Collect from WhatsApp adds to an opened category is brought
+    into view in its list.** One Collect's options send to another category
+    leaves the list where it is, and the bar says where it went.
+  * **The preview opened from a category walks that category,** counts only
+    its clippings, and Delete there shows its next one.
+  * **Check for Duplicates, Preview and Delete Duplicates and Check
+    automatically work in an opened category,** on that category's
+    clippings: the red badge on its rows, the repeat beside it in the
+    preview, and every delete one Ctrl+Z on the board. Pressed while the
+    other list is being checked, it says so and checks its own list next -
+    or says it was not run, if another category is opened before its turn.
+  * **A link captured while a category is opened is named by its number in
+    that category,** or by the column it went into when that is another one.
+
+Fixed
+
+  * **A card moved to another column comes back with one Ctrl+Z.** A card
+    with no division, moved while one division was showing, used to need
+    two: the first left it in the column it had been sent to.
+  * **The Filter and arrange strip's count stays right** after a delete, a
+    Ctrl+Z, or a clipping moved to another category, instead of keeping the
+    count from when the filter was chosen.
+  * **A filtered list no longer goes blank with the filter looking off.** When
+    the last clipping of a chosen paper moves to another category, is
+    deleted, is put in English or is given another paper, the filter lets
+    that paper go and the list shows everything again. Before, the list
+    stayed empty with Show all again greyed out until the strip was shut.
+  * **A paper brought back by Ctrl+Z is offered in Filter and arrange again**
+    at once, in both interfaces. Its filter is not put back on by itself: a
+    paper's last clipping deleted and brought back shows the whole list, and
+    the paper can be picked again.
+  * **Right-click in an opened category under a filter acts only on the
+    clippings you can see.** Exclude, Set newspaper, Set edition, Delete and
+    Move to category all take the ticked ones on screen, or the one clicked
+    when none of those is ticked, and say how many. Ticked ones the filter
+    hides are counted at the top of the menu and left alone, and Merge waits
+    until the filter is cleared.
+  * **A story link copied while Collect is on goes to the links list when no
+    photo is waiting for it** - before any photo, or after the photo's
+    caption - instead of being lost when the next photo came. The links
+    window opens when you come back to the program, never over WhatsApp,
+    and the links already in it stay. After a caption, "Put the link on"
+    is still offered, and a link put on the photo that way comes back out
+    of the list.
+  * **Ctrl+V of a story link while Collect is on opens the links window,**
+    instead of saying that Ctrl+V is not needed. A link Collect has already
+    put on a photo or in the list is not listed a second time.
+  * **Collect's messages about a card on the sentiment board start with a
+    capital letter.**
+  * **Every link pasted or dragged into the links window goes on a line of
+    its own,** so the next paste is always read as its own link. No blank
+    lines are left, an address is never cut in two, the words written over a
+    link stay with that link, and one Ctrl+Z takes a whole paste back.
+  * **A second link pasted with Ctrl+V while the links window is open is
+    added under the first,** instead of taking its place.
+  * **Dragging a link from Chrome no longer says "Nothing came with that
+    drop".**
+  * **A site you only visited is no longer shown as signed in.** Opening
+    x.com used to be enough to show "Signed in: x.com".
+  * **Two links pasted with nothing between them are two links.** Run
+    together, they used to be taken as one address that went nowhere; each
+    is now its own story in the links list, an Instagram or Facebook share
+    link as well as a newspaper's.
+  * **Two links copied together under a photo are no longer put on it as
+    one.** Collect used to join them into an address that went nowhere; it
+    now leaves the photo alone and says the copy had more than one web
+    address.
+  * **A link's cutting no longer stops at an advert.** An "Advertisement"
+    strip between the standfirst and the photo is taken out and the story
+    closes up, so an India Today cutting keeps its photo, caption and first
+    paragraph. Nor does a cutting stop at the photo's caption on a site that
+    styles its first paragraph as the introduction.
+  * **A headline laid over its photo is kept, with the photo.** Such a
+    headline used to be taken for a pop-up and removed - especially one
+    about advertising - and the page was printed without it.
+  * **Headlines are no longer clipped at the right or the left.** A cutting
+    is never narrower than its headline: one centred over the story and its
+    side column (Economic Times) comes out whole, with the side column
+    blanked beside the story, and a headline at the very edge of the page
+    gets a clean white margin.
+  * **Photos are waited for.** A cutting waits, up to a few seconds, for the
+    story's photos - late ones, ones that load only when scrolled to, and a
+    post's photos and link-card pictures - instead of printing empty boxes.
+  * **No half lines at the edges.** The bottom of a cutting no longer shows
+    the top half of the next line of text, and the top no longer shows the
+    bottom half of the small heading over the headline. A very long page no
+    longer ends through the middle of a line.
+  * **The edges added round a cutting match the page.** A white story on a
+    grey page stays white under its last line, and a page with a light grey
+    background no longer gets black bars.
+  * **A story or post that the page puts up a moment after it opens is waited
+    for**, instead of the page's grey "Loading" box being captured, or the
+    post being called one that needs a sign-in.
+  * **A page's own message boxes no longer stop a capture.** An "Ad blocker
+    detected" box that a page pops up is answered without being shown. In
+    the browser inside the app it used to open in the corner of the screen,
+    stop the whole program, and fail the next link as well.
+  * **Pop-ups are taken off before the picture.** Ad-blocker notices and
+    "register to continue reading" boxes - even ones with a big heading of
+    their own, however they are worded, in English or Hindi - cookie and
+    notification prompts and their dark backdrops are removed, a page that
+    was locked is let scroll, and blur is taken off. The "Ad blocker
+    detected" box on Economic Times comes from the ad-blocker in your own
+    Chrome; the program's browsers have none.
+  * **A wallpaper advert behind a story stays out of its cutting.** The
+    cutting is as wide as the story, not as wide as the advert painted
+    across the page behind it.
+  * **A link that passes through a "taking you to the story" page is
+    followed to the story**, instead of capturing the page in between.
+  * **A story that opens with a video prints the video's picture**, not the
+    black box the player shows once it has started.
+  * **A public X post is captured when X shows it signed out**, instead of
+    being refused. When a post really does need a sign-in, the message now
+    says to sign in to it in the browser inside the app, or take it from
+    your Chrome.
+  * **The browser inside the app takes the same cutting as Chrome.** No
+    scrollbar strip at the edge of its cuttings any more.
+  * **A page that stops responding fails only its own link**, in either
+    browser. The rest of the list is captured, and so is the next list -
+    even when a page stops responding a few seconds after its cutting was
+    taken, which used to fail the next link, or every link after it in the
+    browser inside the app until the program was closed.
+  * **A link the browser inside the app stopped on is tried again with
+    Chrome,** quietly, and marked "taken with Chrome" when that works.
+  * **An "Ad-Blocker Detected" box from your own Chrome is explained.** My
+    Chrome's help and its Take it panel say to close the box or pause the
+    blocker for that site, or to use Browser inside the app, which has no
+    blocker. Economic Times and Times of India links are marked with this
+    in the list.
+  * **Clear this division, pressed with a category opened out, says it clears
+    every category in the division,** beside how many are in the list on
+    show. It used to ask to remove 24 clippings over a list of four.
+  * **With every division showing, Clear this division no longer calls it
+    "__all__".** It asks to remove the clippings from the board.
+  * **"Show it in its folder" opens the folder the report was saved into,**
+    with the report selected, instead of Documents. It went wrong whenever
+    the folder or the report's name had a space in it - which the report's
+    name always does.
+
 ## 2.0.31
 
 Added

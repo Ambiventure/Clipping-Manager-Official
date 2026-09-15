@@ -57,6 +57,14 @@ class ClipList(QListView):
         # and simply stands at its full height inside the page. See
         # follow_content().
         self._follows_content = False
+        # Set while the list stands in for one of the board's columns - a
+        # category opened out. A file or picture dropped on it then lands in
+        # that category, not wherever the window would have put it. None for
+        # the press report's list, which behaves as it always has.
+        self.drop_section = None
+        # Words drawn in the middle of the list while it has nothing in it.
+        # Empty for the press report's list, which has a drop zone of its own.
+        self.empty_hint = ""
 
         self._press_point: QPoint | None = None
         self._press_hit = None
@@ -183,6 +191,11 @@ class ClipList(QListView):
             Qt.ScrollBarAlwaysOff if on else Qt.ScrollBarAsNeeded)
         self._match_content_height()
 
+    #: How tall an empty list stands when it has words to show, so the words
+    #: can be read. A list standing at its content's height is otherwise one
+    #: pixel tall with nothing in it.
+    EMPTY_HINT_HEIGHT = 120
+
     def _match_content_height(self) -> None:
         if not self._follows_content:
             self.setMinimumHeight(0)
@@ -190,11 +203,25 @@ class ClipList(QListView):
             return
         model = self.model()
         tall = 0
-        if model is not None:
-            for row in range(model.rowCount()):
-                tall += self.sizeHintForRow(row)
+        rows = model.rowCount() if model is not None else 0
+        for row in range(rows):
+            tall += self.sizeHintForRow(row)
+        if not rows and getattr(self, "empty_hint", ""):
+            tall = self.EMPTY_HINT_HEIGHT
         tall += 2 * self.frameWidth()
         self.setFixedHeight(max(1, tall))
+
+    def paintEvent(self, event):  # noqa: N802 - Qt name
+        super().paintEvent(event)
+        hint = getattr(self, "empty_hint", "")
+        model = self.model()
+        if not hint or (model is not None and model.rowCount()):
+            return
+        painter = QPainter(self.viewport())
+        painter.setPen(theme.QFAINT)
+        painter.drawText(self.viewport().rect().adjusted(24, 12, -24, -12),
+                         Qt.AlignCenter | Qt.TextWordWrap, hint)
+        painter.end()
 
     def refresh_height(self) -> None:
         """The list changed, so how tall it stands changed with it."""
@@ -648,8 +675,19 @@ class ClipList(QListView):
         self._drag_point = None
         if not event.mimeData().hasFormat(MIME):
             window = self.window()
+            from .sentiment_board import CARD_MIME
+
+            if event.mimeData().hasFormat(CARD_MIME):
+                # A card dragged off the board is not something to import.
+                # Handed on, it came back as "Nothing to add" over a drop
+                # that was only let go in the wrong place.
+                event.ignore()
+                return
             event.acceptProposedAction()
-            if hasattr(window, "accept_payload"):
+            if (self.drop_section is not None
+                    and hasattr(window, "accept_payload_into")):
+                window.accept_payload_into(event.mimeData(), self.drop_section)
+            elif hasattr(window, "accept_payload"):
                 window.accept_payload(event.mimeData())
             return
         raw = bytes(event.mimeData().data(MIME)).decode("ascii")

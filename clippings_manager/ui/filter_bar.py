@@ -72,7 +72,11 @@ def _paint(button: QPushButton, on: bool) -> None:
     # the way the interface switch does it, so a chip cannot end up looking
     # picked while the list says it is not.
     button.setChecked(on)
-    button.setStyleSheet(_LIT if on else _PLAIN)
+    sheet = _LIT if on else _PLAIN
+    # Only when it changes: a sheet set again is parsed and laid out again,
+    # and the strip is repainted after every step while it is open.
+    if button.styleSheet() != sheet:
+        button.setStyleSheet(sheet)
 
 
 def _lead(text: str) -> QLabel:
@@ -126,9 +130,22 @@ class PickList(ChipRow):
         super().__init__(label, parent)
         self.axis = axis
         self.chosen: list = []
+        self._offered = None
 
     def offer(self, choices: list) -> None:
-        """Rebuild the chips for the values this morning actually contains."""
+        """Rebuild the chips for the values this morning actually contains.
+
+        Not when they are the chips already there. The strip is offered again
+        after every step while it is open - a headline typed, a rotate, a
+        Ctrl+Z - and nearly none of those changes a paper or a count. Rebuilt
+        anyway, every chip was deleted and made again and the row laid out
+        from nothing: Enter in a headline box took 130-200ms instead of 15.
+        What is picked cannot be stale when nothing on offer changed, since a
+        pick is only ever made from a chip that was offered."""
+        choices = list(choices)
+        if choices == self._offered:
+            return
+        self._offered = choices
         _empty(self.flow)
         self._buttons = {}
         # Anything picked that is no longer on offer is dropped, or the filter
@@ -206,8 +223,18 @@ class RankList(ChipRow):
         super().__init__("First", parent)
         self.ranked: list = []
         self._counts: dict = {}
+        self._offered = None
 
     def offer(self, choices: list) -> None:
+        # Rebuilt only when the values or their counts changed, as the pick
+        # rows are. The chips are still repainted: a new arrangement empties
+        # the ranking before offering, and the same values offered again
+        # would otherwise go on showing the old places.
+        choices = list(choices)
+        if choices == self._offered:
+            self._show()
+            return
+        self._offered = choices
         _empty(self.flow)
         self._buttons = {}
         self._counts = dict(choices)

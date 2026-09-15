@@ -50,6 +50,18 @@ the first letters of a city ("jalan") - is refused. A town missing from PLACES
 is refused too, which costs one name typed by hand, and the name typed by hand
 goes onto the list, so the next copy reads.
 
+A DIVISION'S SHORT FORM IS ITS CITY. The office writes the six Northern
+Railway divisions the way the railway does - LKO, MB, UMB, DLI, JAT, FZR - so
+"HT LKO" is Hindustan Times, Lucknow, and so is "LKO HT". The codes and their
+names come from divisions.json, the file that names the divisions everywhere
+else, and the city prints as the edition list spells it. JAT and MB count only
+in capitals: "Jat" is a community's name and "mb" is megabytes.
+
+WHAT A PERSON MAY LET THROUGH. read() takes a ReaderRules as its third
+argument, for a morning when the office wants more read than the rules above
+allow - a city with no paper, a paper not on the list typed in English. Left
+out, the rules are the ones above. Nothing here remembers them between reads.
+
 NOTHING COPIED IS KEPT OR REPEATED. This module never logs, prints or stores the
 text, and every reason it gives is a fixed sentence, so a refused copy - which
 might be a password somebody copied while Collect was on - is never shown back
@@ -68,7 +80,7 @@ from dataclasses import dataclass, replace
 from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein
 
-from .assemble import address_in, unreadable
+from .assemble import address_in, load_config, unreadable
 from .profiles import NameIndex
 
 # ------------------------------------------------------------------- limits
@@ -341,6 +353,15 @@ _SCHEME = re.compile(r"^[^\w]*([a-z][a-z0-9+.-]*):", re.I)
 #: Where a web address starts inside a token it is glued into:
 #: "Jalandhar:https://..", "👉https://..", "Link:-https://..".
 _ADDRESS_START = re.compile(r"(?i)https?://|www\.")
+#: Where a second link may start inside an address it is glued to, and what
+#: says it is carried inside that address instead: the twins of the same five
+#: in links.py, which this module may not import. test_copied holds the two
+#: to the same answers. _carried explains them.
+_SECOND_LINK = re.compile(r"(?i)https?://")
+_CARRIER_MARK = re.compile(r"(?i)(?:[:_&#?]|%[0-9a-f]{2})$")
+_KEY_EQUALS = re.compile(r"(?i)(?:[?&;#]|%3F|%26|%3B|%23)(?:(?!%3D)[^=&?#/])*(?:=|%3D)$")
+_GLUED_END = re.compile(r"[^\W_]$|[.,;!)\]}>»”’'\"…।]$")
+_SITE_ONLY = re.compile(r"(?i)(?:https?://|www\.)[^/?#\s]+/")
 #: A picture's own address, as "Copy image address" gives it. "File:" or
 #: "Data:" on their own are ordinary words in front of a caption.
 _PICTURE = re.compile(r"(?i)^(?:blob:\S|data:[a-z-]+/[\w.+-]+[;,]|file:/)")
@@ -435,6 +456,45 @@ def _nothing(reason: str) -> Reading:
 
 def _link(url: str) -> Reading:
     return Reading(kind="link", url=url)
+
+
+# -------------------------------------------------------------------- rules
+
+
+@dataclass(frozen=True)
+class ReaderRules:
+    """What one read may take as a caption, beyond the rules it always keeps.
+
+    The defaults are what the reader has always done, with the division short
+    forms read, because that is how the office types a city. Each of the
+    others lets through something the reader would refuse, so each is off
+    unless a person switches it on - for a session, never for good: this is
+    passed to read() every time, and nothing here keeps it.
+    """
+
+    #: "HT LKO", "LKO NBT": the six division short forms are the division's
+    #: city, as the edition list spells it.
+    division_codes: bool = True
+    #: "LKO", "Lucknow page 3": a listed city with no newspaper is a caption.
+    #: The newspaper is left empty, and the card flags that amber.
+    city_alone: bool = False
+    #: "Veer Arjun Delhi": a paper not on the list, typed in English, in
+    #: front of a listed city. Named as typed and flagged, as a Hindi one is.
+    #: Off by default because English chat takes that shape far more often
+    #: than Hindi chat does - "Reached Delhi".
+    unlisted_paper_in_english: bool = False
+    #: "NBT Mumbai": a real town missing from the edition list is kept as
+    #: typed at 0.8. Switched off, only a listed city is taken.
+    towns_as_typed: bool = True
+
+
+DEFAULT_RULES = ReaderRules()
+
+#: Division short forms that are also an ordinary word when they are not in
+#: capitals: "Jat" is a community's name and "mb" is megabytes. "Amar Ujala
+#: Jat andolan" is a headline, not the Jammu edition. The other four mean
+#: nothing else, so "lko" and "Umb" are read as well.
+DIVISION_CODES_IN_CAPITALS = frozenset({"JAT", "MB"})
 
 
 # ----------------------------------------------------------------- cleaning
@@ -566,20 +626,28 @@ def _flat(folded: str) -> str:
 
 @dataclass(frozen=True)
 class _Names:
-    """Every spelling of every listed paper and city, folded, for one read."""
+    """Every spelling of every listed paper and city, folded, for one read -
+    with the division short forms, and the rules that read goes by."""
 
     papers: tuple   # ((name, (folded spelling, ...)), ...)
     cities: tuple
+    codes: tuple = ()   # ((folded code, code, division name), ...)
+    rules: ReaderRules = DEFAULT_RULES
 
 
-def _names(index: NameIndex) -> _Names:
+def _names(index: NameIndex, rules: ReaderRules | None = None) -> _Names:
     """The two lists as the index holds them, aliases and all, read once.
 
     NameIndex hands out the canonical names but keeps the other spellings
     ("NBT", "अमर उजाला", "नई दिल्ली") to itself, so they are read from where it
     keeps them. Read, never written - and if that ever moves, the canonical
     names alone are used, which refuses more and never guesses.
+
+    The division short forms are read here too, once per read like the rest,
+    and only when the rules want them.
     """
+    rules = rules if isinstance(rules, ReaderRules) else DEFAULT_RULES
+
     def table(held, names):
         if not isinstance(held, dict):
             held = {name: [] for name in names}
@@ -591,7 +659,8 @@ def _names(index: NameIndex) -> _Names:
 
     papers = table(getattr(index, "_papers", None), index.newspaper_names)
     return _Names(_with_shorthand(papers),
-                  table(getattr(index, "_editions", None), index.edition_names))
+                  table(getattr(index, "_editions", None), index.edition_names),
+                  _division_codes() if rules.division_codes else (), rules)
 
 
 #: What the office types on WhatsApp for the big papers. Kept here rather than
@@ -613,6 +682,86 @@ def _with_shorthand(papers: tuple) -> tuple:
         if name in listed and short not in listed[name]:
             listed[name] = listed[name] + (short,)
     return tuple((name, listed[name]) for name, _s in papers)
+
+
+def _division_codes() -> tuple:
+    """((folded code, code, division name), ...), from divisions.json.
+
+    Read from the file that names the divisions everywhere else, through
+    load_config, which already keeps it once read - so there is no second
+    table here to fall out of step with it. A division with no name stands
+    for itself, which is on no edition list and so reads as nothing. A file
+    that is missing or not the shape expected gives no codes at all: "HT LKO"
+    is then refused, as it was before the codes were read, and the read
+    itself never fails over it.
+    """
+    try:
+        rows = []
+        for code, profile in load_config()["divisions"].items():
+            code = str(code).strip()
+            name = profile.get("name") if isinstance(profile, dict) else None
+            name = name.strip() if isinstance(name, str) and name.strip() else code
+            if _flat(_fold(code)):
+                rows.append((_flat(_fold(code)), code, name))
+        return tuple(rows)
+    except Exception:  # noqa: BLE001 - a broken file costs the codes, never the read
+        return ()
+
+
+def _code_in(word: str, codes: tuple) -> tuple[str, str] | None:
+    """(code, division name) when this one word is a division's short form.
+
+    In any case - "lko", "Lko" - except the codes that are also an everyday
+    word, which count only as the railway writes them, in capitals.
+    """
+    flat = _flat(_fold(word))
+    for folded, code, name in codes:
+        if flat and flat == folded:
+            typed = "".join(ch for ch in word if ch.isalnum())
+            if code in DIVISION_CODES_IN_CAPITALS and typed != code:
+                return None
+            return code, name
+    return None
+
+
+def division_code(word: str) -> str:
+    """The division short form this one word is - "LKO" for "lko" or "(LKO)"
+    - or "".
+
+    The reader's own test on the reader's own words: the word is cut up the
+    way a caption is, so "L-K-O" and "l_k_o", which the reader takes as three
+    letters and refuses, are no code here either. JAT and MB only in
+    capitals, and never a phrase. To know which code a caption was read
+    from, ask division_used: a caption typed "HT-LKO" is one word to split().
+    """
+    if not isinstance(word, str) or len(word.split()) != 1:
+        return ""
+    _page, words, why = _name_words(_unmark(word.translate(_INVISIBLE)))
+    found = _code_in(words[0], _division_codes()) if len(words) == 1 and not why else None
+    return found[0] if found else ""
+
+
+def division_used(reading: Reading, index: NameIndex) -> str:
+    """The division short form a caption's city was read from - "LKO" for
+    "HT-LKO", "LKO NBT" or "HT (LKO) page 3" - or "".
+
+    For filing a collected clipping under its division. The caption is cut
+    into words the way the reader cut it, and a code counts only when its
+    division's name is the city the reading printed. "HT Delhi" names Delhi
+    but was not read from DLI, and gives "": nothing is guessed from a city
+    typed in full, and a word that is not what the reader read gives nothing.
+    """
+    if not isinstance(reading, Reading) or not reading.has_caption or not reading.edition:
+        return ""
+    names = _names(index)
+    _page, words, why = _name_words(_unmark(reading.text or ""))
+    if why:
+        return ""
+    for word in words:
+        code = _code_in(word, names.codes)
+        if code and _exact(_fold(code[1]), names.cities) == reading.edition:
+            return code[0]
+    return ""
 
 
 def _places() -> dict:
@@ -725,6 +874,57 @@ def _address(token: str) -> tuple[str, str, str]:
     return "story", found, before
 
 
+def _carried(before: str) -> bool:
+    """Whether a "https://" coming straight after this much of an address is
+    part of it - another address carried inside it - rather than the next
+    link glued on. The twin of links._carried; the rule is written out there.
+
+    Carried after an "=" that closes a key's name ("?url="), after ":", "_",
+    "&", "#", "?" or a percent-escape, anywhere in the query or fragment
+    unless straight after a letter, a digit, "-", "_", "~" or a sentence's
+    punctuation, and after a site's front page. Glued after an "=" that ends
+    a value - the padding an Instagram share link ends in, "?igsh=…==" - and
+    anywhere else in the path, a "/" included.
+    """
+    if before.endswith("=") or before[-3:].upper() == "%3D":
+        return bool(_KEY_EQUALS.search(before))
+    in_query = "?" in before or "#" in before
+    if in_query and before.endswith(("-", "_", "~")):
+        return False
+    if _CARRIER_MARK.search(before):
+        return True
+    if in_query:
+        return not _GLUED_END.search(before)
+    return bool(_SITE_ONLY.fullmatch(before))
+
+
+def _unglued(token: str) -> list[str]:
+    """One token, cut where a second link is glued onto the first.
+
+    "https://a.in/xhttps://b.in/y" is two addresses, as the links list takes
+    it, so a copy like that is refused for having two - never put on the
+    photo as one address that goes nowhere. What stands in front of the first
+    address stays on the first piece, for _address to take off:
+    "Jalandhar:https://a.in/xhttps://b.in/y" is "Jalandhar:https://a.in/x" and
+    "https://b.in/y". A piece that is only "https://" is nothing, and dropped.
+    """
+    first = _ADDRESS_START.search(token)
+    if not first:
+        return [token]
+    starts, piece_start = [], first.start()
+    for found in _SECOND_LINK.finditer(token, first.start()):
+        at = found.start()
+        if at > piece_start and not _carried(token[piece_start:at]):
+            starts.append(at)
+            piece_start = at
+    if not starts:
+        return [token]
+    cuts = [0, *starts, len(token)]
+    pieces = [token[a:b] for a, b in zip(cuts, cuts[1:])]
+    return [piece for piece in pieces
+            if not re.fullmatch(r"(?i)https?://", piece.strip(_LINK_TAIL))]
+
+
 def _story(url: str) -> str:
     """What makes two addresses the same story: the site without "www.",
     "m." or "amp.", the path without its "/amp" part, and the query."""
@@ -826,6 +1026,16 @@ def _listed_city(words: list[str], names: _Names) -> str:
     folded = _fold(" ".join(words))
     if not folded:
         return ""
+    # A division's short form is its city: "LKO" is Lucknow. One word on its
+    # own - "LKO MB" is two places, not one - and only when the division's
+    # name is on the edition list, so a division renamed in divisions.json
+    # never prints a city the list does not know. Checked first, because
+    # both orders come through here: "HT LKO" and "LKO HT".
+    if len(words) == 1 and names.codes:
+        code = _code_in(words[0], names.codes)
+        listed = _exact(_fold(code[1]), names.cities) if code else ""
+        if listed:
+            return listed
     listed = _exact(folded, names.cities)
     if listed:
         return listed
@@ -850,7 +1060,10 @@ def _edition(words: list[str], names: _Names) -> tuple[str, bool, str]:
         return listed, True, ""
     folded = _fold(" ".join(words))
     place = _PLACE_BY_SPELLING.get(folded) or _PLACE_BY_SPELLING.get(_flat(folded))
-    if (place is None or len(words) > VERBATIM_EDITION_WORDS
+    # With towns kept as typed switched off for the session, only a listed
+    # city is taken, and "NBT Mumbai" is refused the way "NBT nahi" is.
+    if (not names.rules.towns_as_typed
+            or place is None or len(words) > VERBATIM_EDITION_WORDS
             or any(len(w) < MIN_VERBATIM_LETTERS for w in words)
             or not all(_letter(ch) for w in words for ch in w)
             or any(w.casefold() in CHAT_WORDS for w in words)):
@@ -907,17 +1120,39 @@ def _paper_at_end(words: list[str], names: _Names) -> tuple[str, str] | None:
     return (end[1], end[2]) if end else None
 
 
+def _name_words(text: str) -> tuple[str, list[str], str]:
+    """(page, the words that name the paper and the city, reason if refused).
+
+    How the caption test cuts a caption into words: the page lifted out, then
+    the dates and the words that describe a cutting ("edition", "e-paper"),
+    then the separators. In one place, so that anything asking which words a
+    caption was read from - which division short form, say - is given the
+    words the reader used, and "HT-LKO" is "HT" and "LKO" there too.
+    """
+    page, body, why = _lift_page(" ".join(text.split()))
+    if why:
+        return "", [], why
+    return page, _words(_NOT_A_NAME.sub(" ", _strip_dates(body))), ""
+
+
 def _caption_test(candidate: str, names: _Names, index: NameIndex) -> Reading:
     """Whether one string is a caption: a Reading of kind caption, or nothing."""
     text = " ".join(candidate.split())
-    page, body, why = _lift_page(text)
+    page, words, why = _name_words(text)
     if why:
         return _nothing(why)
-    words = _words(_NOT_A_NAME.sub(" ", _strip_dates(body)))
 
     bare = False
     if (not page and len(words) >= 3 and words[-1].isdecimal()
             and 1 <= int(words[-1]) <= BARE_PAGE_MAX):
+        page, words, bare = str(int(words[-1])), words[:-1], True
+    # With a city on its own let through, "LKO 3" is the city and its page.
+    # Only behind a listed city that is not also a paper's name, so
+    # "Hindustan 4" stays a number nobody explained.
+    elif (names.rules.city_alone and not page and len(words) == 2
+          and words[-1].isdecimal() and 1 <= int(words[-1]) <= BARE_PAGE_MAX
+          and _listed_city(words[:1], names)
+          and not _find(_fold(words[0]), names.papers, paper=True)):
         page, words, bare = str(int(words[-1])), words[:-1], True
 
     if not words:
@@ -971,14 +1206,26 @@ def _caption_test(candidate: str, names: _Names, index: NameIndex) -> Reading:
         found = _paper_at_end(words, names)
         if found is None:
             spelt = _unlisted_paper(words, names)
-            if spelt is None:
-                return _nothing(WHY_NO_PAPER)
-            (paper, edition), known = spelt, True
-            return Reading(
-                kind="caption", text=text, newspaper=paper, edition=edition,
-                page=page, edition_known=True, page_from_bare_number=bare,
-                paper_known=False, confidence=UNLISTED_PAPER_CONFIDENCE,
-            )
+            if spelt is None and names.rules.unlisted_paper_in_english:
+                spelt = _unlisted_in_english(words, names)
+            if spelt is not None:
+                paper, edition = spelt
+                return Reading(
+                    kind="caption", text=text, newspaper=paper, edition=edition,
+                    page=page, edition_known=True, page_from_bare_number=bare,
+                    paper_known=False, confidence=UNLISTED_PAPER_CONFIDENCE,
+                )
+            # A listed city and nothing else, when a person has said that is
+            # a caption. The newspaper is left empty, which the card flags
+            # amber. Never a chat word that happens to be a listed edition:
+            # "main" is "I" long before it is Main.
+            city = _listed_city(words, names) if names.rules.city_alone else ""
+            if city and not any(w.casefold() in CHAT_WORDS for w in words):
+                return Reading(
+                    kind="caption", text=text, edition=city, page=page,
+                    edition_known=True, page_from_bare_number=bare, confidence=1.0,
+                )
+            return _nothing(WHY_NO_PAPER)
         (paper, edition), known = found, True
 
     return Reading(
@@ -1030,6 +1277,39 @@ def _unlisted_paper(words: list[str], names: _Names) -> tuple[str, str] | None:
         city = _listed_city(tail, names)
         if city:
             return " ".join(romanise(w) for w in head), city
+    return None
+
+
+def _unlisted_in_english(words: list[str], names: _Names) -> tuple[str, str] | None:
+    """(paper as typed, listed city) for an English caption whose paper is
+    not on the list - "Veer Arjun Delhi" - or None.
+
+    The Hindi rule above, for English letters, and read only when a person
+    has switched it on. Every word plain letters, one to three in front, the
+    first not chat and not all of them chat, and a LISTED city after. What
+    is in front may not itself be a place or a division's short form:
+    "Lucknow Delhi" and "LKO Delhi" are two places, not a paper. The name
+    keeps the casing it was typed in, unless it was typed all in capitals
+    or all in small letters, when each word is given a capital.
+    """
+    if len(words) < 2 or not all(w.isascii() and w.isalpha() for w in words):
+        return None
+    for k in range(1, min(3, len(words) - 1) + 1):
+        head, tail = words[:k], words[k:]
+        if head[0].casefold() in CHAT_WORDS or all(w.casefold() in CHAT_WORDS
+                                                   for w in head):
+            return None
+        folded = _fold(" ".join(head))
+        if (any(len(w) < 2 for w in head) or _listed_city(head, names)
+                or _PLACE_BY_SPELLING.get(folded)
+                or any(_code_in(w, names.codes) for w in head)):
+            continue
+        city = _listed_city(tail, names)
+        if city:
+            typed = " ".join(head)
+            if typed.isupper() or typed.islower():
+                typed = " ".join(w[:1].upper() + w[1:].lower() for w in head)
+            return typed, city
     return None
 
 
@@ -1174,6 +1454,16 @@ def _caption_in(lines: list[str], names: _Names, index: NameIndex) -> Reading:
         return joined
     singles = [_caption_test(line, names, index) for line in lines]
     passed = [i for i, r in enumerate(singles) if r.has_caption]
+    if names.rules.city_alone:
+        # A city on a line of its own under its newspaper - "Amar Ujala" over
+        # "Jalandhar" - is the caption wrapping, not a second caption. A line
+        # like that only passes alone when a city on its own is let through,
+        # so without that rule nothing here changes.
+        named = [r for r in (joined, *(singles[i] for i in passed))
+                 if r.has_caption and r.newspaper]
+        passed = [i for i in passed if singles[i].newspaper or not any(
+            r.edition == singles[i].edition and singles[i].page in ("", r.page)
+            for r in named)]
     if len({(singles[i].newspaper, singles[i].edition, singles[i].page)
             for i in passed}) > 1:
         return _nothing(WHY_TWO_CAPTIONS)
@@ -1193,7 +1483,9 @@ def _read_bubble(lines: list[str], names: _Names, index: NameIndex) -> Reading:
     stories, seen, whatsapp, site, rest = [], set(), False, False, []
     for line in lines:
         kept = []
-        for token in line.split():
+        # Two links glued together with nothing between them are two
+        # addresses, each looked at on its own.
+        for token in (piece for whole in line.split() for piece in _unglued(whole)):
             kind, found, before = _address(token)
             if not kind:
                 kept.append(token)
@@ -1241,9 +1533,14 @@ def _read_bubble(lines: list[str], names: _Names, index: NameIndex) -> Reading:
 # --------------------------------------------------------------------- read
 
 
-def read(text: str, index: NameIndex) -> Reading:
+def read(text: str, index: NameIndex, rules: ReaderRules | None = None) -> Reading:
     """What this copy is, and for a caption what it names. Never raises on
-    odd text, never changes the index, and gives the same answer every time."""
+    odd text, never changes the index, and gives the same answer every time
+    for the same rules.
+
+    The rules are what a person has let through for the session. Left out,
+    they are DEFAULT_RULES: what the reader has always taken, and the six
+    division short forms."""
     text = text if isinstance(text, str) else ""
     if len(text) > HARD_MAX_CHARS:
         return _nothing(WHY_TOO_LONG)
@@ -1266,7 +1563,7 @@ def read(text: str, index: NameIndex) -> Reading:
     # Each bubble on its own. A selection that ran over two messages is only
     # used when they say the same thing: taking one of two would put the
     # previous photo's name, or its link, on this one.
-    names = _names(index)
+    names = _names(index, rules)
     said = [r for r in (_read_bubble(b, names, index) for b in bubbles)
             if r.reason != WHY_EMPTY]
     if not said:
@@ -1324,6 +1621,25 @@ def caption_values(reading: Reading) -> dict:
         "name_confidence": reading.confidence,
         "no_title": False,
     }
+
+
+def listed_paper(typed: str, index: NameIndex) -> str:
+    """The newspaper as the list spells it - "Dainik Jagran" for "dj" - or "".
+
+    For a box a person types a newspaper into, to say whether it is on the
+    list. The reader's own test, shorthand and one slip included, and nothing
+    guessed beyond it.
+    """
+    words = _words(_unmark(typed if isinstance(typed, str) else ""))
+    names = _names(index, ReaderRules(division_codes=False))
+    return _find(_fold(" ".join(words)), names.papers, paper=True)
+
+
+def listed_city(typed: str, index: NameIndex) -> str:
+    """The city as the edition list spells it - "Lucknow" for "LKO" or
+    "लखनऊ" - or "". The reader's own test, division short forms included."""
+    words = _words(_unmark(typed if isinstance(typed, str) else ""))
+    return _listed_city(words, _names(index)) if words else ""
 
 
 # ------------------------------------------------------------ into English

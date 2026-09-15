@@ -328,6 +328,31 @@ def find(clips: Iterable, threshold: float = SIMILARITY,
     return pairs
 
 
+def marked_pairs(clips: Iterable) -> list:
+    """The pairs these clippings are already marked as, in list order, with
+    nothing compared again and nothing read.
+
+    Every clipping whose ``duplicate_of`` names another of them, paired with
+    that one - which is what its badge and the preview's twin both show. For a
+    list whose pairs were put away while the marks stayed on the clippings (a
+    category of the board closed and opened again), so that its review offers
+    what the screen says is flagged. The score is the likeness of the two
+    headlines as they were read, the measure :func:`find` gives.
+    """
+    clips = list(clips)
+    by_uid = {clip.uid: clip for clip in clips}
+    pairs = []
+    for clip in clips:
+        primary = by_uid.get(getattr(clip, "duplicate_of", None))
+        if primary is None or primary is clip:
+            continue
+        forgiving, _whole = _score(
+            ocr.normalise(getattr(clip, "ocr_text", "") or ""),
+            ocr.normalise(getattr(primary, "ocr_text", "") or ""))
+        pairs.append(Pair(primary, clip, forgiving))
+    return pairs
+
+
 # How many second looks are worth offering. Enough to be useful on a morning
 # where the check missed several, few enough that the dialog is still a
 # few decisions rather than an afternoon.

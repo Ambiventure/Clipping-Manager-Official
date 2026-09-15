@@ -168,8 +168,11 @@ class FillFromCopy(_Base):
     added after it.
     """
 
+    # The division too: a caption typed with a division's short form ("HT
+    # LKO") files a clipping that had none under that division, and one undo
+    # has to take back the caption and the division together.
     FIELDS = ("caption_raw", "newspaper", "edition", "page", "name_source",
-              "name_confidence", "no_title", "url", "show_url_box")
+              "name_confidence", "no_title", "url", "show_url_box", "division")
 
     def __init__(self, model: "ClipModel", clip_id: int, values: dict,
                  text: str = "Caption copied"):
@@ -427,12 +430,57 @@ class Reorder(_Base):
         self.model.replace_all(list(self.before))
 
 
-def move_to(model: "ClipModel", clip_ids: Iterable[int], target: int) -> list:
-    """Row order with the given clippings lifted out and dropped at ``target``."""
+def _in_scope(model) -> bool:
+    """Whether the model is showing one category of the board (model.Scope)."""
+    return getattr(model, "scope", None) is not None
+
+
+def _holds(model, row) -> bool:
+    return not _in_scope(model) or model.in_scope(row)
+
+
+def _weave(model: "ClipModel", scoped_new: list) -> list:
+    """The whole pool, with the scope's rows laid back in their new order.
+
+    A gesture in an opened-out category decides an order among that
+    category's clippings and nothing else. So its rows go back into the slots
+    they already hold, in the new order, and every clipping of another
+    category or division keeps its exact place - the place the other three
+    columns and the dossier read. It lives here, inside the ordering helpers,
+    so no caller can build an order from the category's rows and forget to
+    put the rest back.
+    """
+    slots = [index for index, row in enumerate(model.rows) if model.in_scope(row)]
+    # Only a helper's own reordering of the scope comes here. Anything else
+    # is taken as no change rather than losing a clipping - and that has to
+    # be judged by which rows, not how many: a list of the right length with
+    # one row twice, or one from another category, would lay a clipping
+    # into two slots and drop another from the pool.
+    if sorted(map(id, scoped_new)) != sorted(id(model.rows[i]) for i in slots):
+        return list(model.rows)
+    woven = list(model.rows)
+    for index, row in zip(slots, scoped_new):
+        woven[index] = row
+    return woven
+
+
+def move_to(model: "ClipModel", clip_ids: Iterable[int], target: int,
+            rows: list | None = None) -> list:
+    """Row order with the given clippings lifted out and dropped at ``target``.
+
+    ``target`` is a place in ``rows``, which is the whole pool unless given.
+    Under a scope it is still a place in the whole pool - what a drop on the
+    list works out - and is turned into a place in the category first.
+    """
+    if rows is None and _in_scope(model):
+        inside = sum(1 for r in model.rows[:target] if model.in_scope(r))
+        return _weave(model, move_to(model, clip_ids, inside,
+                                     rows=model.scoped_rows()))
+    source = model.rows if rows is None else rows
     ids = set(clip_ids)
-    moving = [r for r in model.rows if r.id in ids]
-    rest = [r for r in model.rows if r.id not in ids]
-    above = sum(1 for r in model.rows[:target] if r.id in ids)
+    moving = [r for r in source if r.id in ids]
+    rest = [r for r in source if r.id not in ids]
+    above = sum(1 for r in source[:target] if r.id in ids)
     at = max(0, min(target - above, len(rest)))
     return rest[:at] + moving + rest[at:]
 
@@ -486,7 +534,9 @@ def plan_move_into(model: "ClipModel", clip_ids: Iterable[int], run) -> MovePlan
 
     wanted = set(clip_ids)
     in_run = set(run.row_ids)
-    ordered = [r.id for r in model.rows if r.id in wanted]
+    # Under a scope only the category's own clippings can move. One outside
+    # it would be filed under the bracket without being moved at all.
+    ordered = [r.id for r in model.rows if r.id in wanted and _holds(model, r)]
     plan = MovePlan(
         run_ident=run.ident, run_key=run.key, run_title=run.title,
         run_kind=run.source_kind,
@@ -496,8 +546,20 @@ def plan_move_into(model: "ClipModel", clip_ids: Iterable[int], run) -> MovePlan
     )
     if not plan.moving:
         return plan
-    plan.rows_after = move_to(model, plan.moving,
-                              model.position_of(run.rows[-1].id) + 1)
+    if _in_scope(model):
+        scoped = model.scoped_rows()
+        places = [r.id for r in scoped]
+        last = run.rows[-1].id
+        at = places.index(last) + 1 if last in places else len(scoped)
+        plan.rows_after = _weave(model, move_to(model, plan.moving, at,
+                                                rows=scoped))
+    else:
+        plan.rows_after = move_to(model, plan.moving,
+                                  model.position_of(run.rows[-1].id) + 1)
+    # A pool that prints no section headings - the board's, whose dossier has
+    # none - has no heading to hand on and no move to refuse for one.
+    if not getattr(model, "headings_print", True):
+        return plan
     movers = set(plan.moving)
     before = openers_of(model.rows)
     expected = {i: w for i, w in before.items() if i not in movers}
@@ -580,7 +642,7 @@ def plan_move_into(model: "ClipModel", clip_ids: Iterable[int], run) -> MovePlan
 
 
 def _fold_sets(model: "ClipModel", new_rows: list, movers: set, folded_now: set,
-               fallback: dict) -> tuple:
+               fallback: dict, scope=None, groups_now=()) -> tuple:
     """(collapsed_groups, collapsed_row_ids) for the rows in their new order.
 
     Moved clippings take the state of the bracket they arrive in - an open file
@@ -588,11 +650,23 @@ def _fold_sets(model: "ClipModel", new_rows: list, movers: set, folded_now: set,
     else keeps its own. The run sets are worked out again from the rows, never
     carried over: idents are numbered by order of appearance, so a move can
     renumber them, and an ident left behind would fold a different bracket.
+
+    ``scope`` is the category the move was made in, and the brackets are that
+    category's whichever one is open when the move is undone or redone. Worked
+    out under another, the movers sat in no bracket at all, and an undo run
+    while Negative was open came back with a Positive file drawn open. Every
+    other category and division with a folded bracket in ``groups_now`` has its
+    identities worked out again too, or a move in Positive threw away Negative's
+    Collapse all.
     """
+    from .model import Scope
+
     folded = set(folded_now) - movers
-    for run in model.file_runs(new_rows):
+    placed: set = set()
+    for run in model.file_runs(new_rows, scope=scope):
         staying = [r.id for r in run.rows if r.id not in movers]
         arriving = [r.id for r in run.rows if r.id in movers]
+        placed.update(arriving)
         if not arriving:
             continue
         if staying:
@@ -600,13 +674,19 @@ def _fold_sets(model: "ClipModel", new_rows: list, movers: set, folded_now: set,
                 folded |= set(arriving)
         else:
             folded |= {i for i in arriving if fallback.get(i)}
+    # A mover no bracket of that category holds keeps its own fold rather than
+    # losing it: there is nothing to take one from.
+    folded |= {i for i in movers if i not in placed and fallback.get(i)}
     # Clippings not in the list just now - deleted, or sent to the board, and
     # waiting further back in the history - keep their fold for when they
     # return. Their ids are their own, so they cannot fold anything else.
     present = {r.id for r in new_rows}
     folded |= {i for i in folded_now if i not in present}
-    groups = {run.ident for run in model.file_runs(new_rows)
-              if any(r.id in folded for r in run.rows)}
+    scopes = {scope} | {Scope.of_ident(ident) for ident in groups_now} - {None}
+    groups = set()
+    for each in scopes:
+        groups |= {run.ident for run in model.file_runs(new_rows, scope=each)
+                   if any(r.id in folded for r in run.rows)}
     return groups, folded
 
 
@@ -637,6 +717,8 @@ class MoveIntoFile(_Base):
         # Each moved clipping's own fold state, for undo when the bracket it
         # goes back to has nothing else left in it.
         self.folded_before = {i: i in model.collapsed_row_ids for i in self.moving}
+        # The category the move was made in, for its fold sets: see _fold_sets.
+        self.scope = getattr(model, "scope", None)
 
     def _write(self, forwards: bool) -> None:
         steps = self.fields if forwards else list(reversed(self.fields))
@@ -655,7 +737,8 @@ class MoveIntoFile(_Base):
         self._write(forwards)
         _restore(rows, identity)
         model.collapsed_groups, model.collapsed_row_ids = _fold_sets(
-            model, rows, set(self.moving), folded_now, fallback)
+            model, rows, set(self.moving), folded_now, fallback,
+            scope=self.scope, groups_now=set(model.collapsed_groups))
         if forwards:
             model.selected -= self.ticks
         else:
@@ -670,15 +753,26 @@ class MoveIntoFile(_Base):
         self._apply(self.before, self.identity_before, self.folded_before, False)
 
 
-def move_relative(model: "ClipModel", clip_ids: Iterable[int], where: str) -> list:
-    """Row order after nudging a selection to the top, up, down or the bottom."""
-    ids = set(clip_ids)
-    moving = [r for r in model.rows if r.id in ids]
-    rest = [r for r in model.rows if r.id not in ids]
-    if not moving:
-        return list(model.rows)
+def move_relative(model: "ClipModel", clip_ids: Iterable[int], where: str,
+                  rows: list | None = None) -> list:
+    """Row order after nudging a selection to the top, up, down or the bottom.
 
-    positions = [i for i, r in enumerate(model.rows) if r.id in ids]
+    Worked out over ``rows`` when given, else the whole pool. Under a scope it
+    is worked out over the category and woven back: in the pool the row above
+    a Positive clipping is as likely to be a Negative one, and stepping over
+    that moved nothing anybody could see.
+    """
+    if rows is None and _in_scope(model):
+        return _weave(model, move_relative(model, clip_ids, where,
+                                           rows=model.scoped_rows()))
+    source = model.rows if rows is None else rows
+    ids = set(clip_ids)
+    moving = [r for r in source if r.id in ids]
+    rest = [r for r in source if r.id not in ids]
+    if not moving:
+        return list(source)
+
+    positions = [i for i, r in enumerate(source) if r.id in ids]
     first, last = positions[0], positions[-1]
 
     if where == "top":
@@ -703,7 +797,7 @@ def _runs(rows: list) -> list:
 
 
 def move_group_relative(model: "ClipModel", clip_ids: Iterable[int],
-                        where: str) -> list:
+                        where: str, rows: list | None = None) -> list:
     """Row order after moving one whole file past the file next to it.
 
     The arrows on a file's header used to call move_relative, which nudges a
@@ -714,14 +808,21 @@ def move_group_relative(model: "ClipModel", clip_ids: Iterable[int],
 
     A file moves past a file. Anything that is not exactly one whole run falls
     back to the old behaviour, which is right for a hand-picked selection.
+
+    Under a scope the runs are the category's own brackets: one file's
+    Positive clippings are not one unbroken run of the pool, so matched there
+    the whole-file move could never be found.
     """
+    if rows is None and _in_scope(model):
+        return _weave(model, move_group_relative(model, clip_ids, where,
+                                                 rows=model.scoped_rows()))
     ids = set(clip_ids)
-    rows = list(model.rows)
-    runs = _runs(rows)
+    source = list(model.rows if rows is None else rows)
+    runs = _runs(source)
     here = next((i for i, run in enumerate(runs)
                  if {r.id for r in run} == ids), None)
     if here is None:
-        return move_relative(model, clip_ids, where)
+        return move_relative(model, clip_ids, where, rows=rows)
 
     order = list(runs)
     run = order.pop(here)

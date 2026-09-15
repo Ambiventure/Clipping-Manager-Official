@@ -16,8 +16,11 @@ registration fails, the caller simply keeps Qt's behaviour.
 
 from __future__ import annotations
 
+import re
 import sys
 from typing import Callable, Optional
+
+from ..core import links
 
 Available = False
 if sys.platform == "win32":
@@ -34,9 +37,17 @@ if sys.platform == "win32":
 # What the browser offers, and what we ask for.
 CF_FILEDESCRIPTORW = 0
 CF_FILECONTENTS = 0
+#: The address a dragged link carries beside its ".url" shortcut.
+CF_URLW = 0
+CF_URL = 0
+CF_UNICODETEXT = 13
 if Available:
     CF_FILEDESCRIPTORW = win32clipboard.RegisterClipboardFormat("FileGroupDescriptorW")
     CF_FILECONTENTS = win32clipboard.RegisterClipboardFormat("FileContents")
+    CF_URLW = win32clipboard.RegisterClipboardFormat("UniformResourceLocatorW")
+    CF_URL = win32clipboard.RegisterClipboardFormat("UniformResourceLocator")
+
+_WEB_ADDRESS = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 
 DROPEFFECT_NONE = 0
 DROPEFFECT_COPY = 1
@@ -217,6 +228,85 @@ def extract_files(data_object) -> list[tuple[bytes, str]]:
         if data and len(data) > 64:
             found.append((data, name))
     return found
+
+
+def _text_of(data_object, fmt: int, codec: str) -> str:
+    try:
+        medium = data_object.GetData(
+            (fmt, None, pythoncom.DVASPECT_CONTENT, -1, pythoncom.TYMED_HGLOBAL))
+    except Exception:  # noqa: BLE001 - not offered in this shape
+        return ""
+    raw = getattr(medium, "data", None)
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        text = raw
+    else:
+        try:
+            text = bytes(raw).decode(codec, "ignore")
+        except Exception:  # noqa: BLE001
+            return ""
+    return text.split("\x00", 1)[0].strip()
+
+
+def _shortcut_address(data: bytes) -> str:
+    """The address inside a Windows internet shortcut: "[InternetShortcut]",
+    then "URL=https://…"."""
+    try:
+        text = data.decode("utf-8", "ignore")
+    except Exception:  # noqa: BLE001
+        return ""
+    if "[InternetShortcut]" not in text[:64]:
+        return ""
+    for line in text.splitlines():
+        if line.strip().upper().startswith("URL="):
+            return line.strip()[4:].strip()
+    return ""
+
+
+def link_words(data_object, files=None) -> str:
+    """The web address a drag carries when it is a LINK rather than a picture
+    - a Chrome address-bar or page-link drag - or "".
+
+    Chrome hands such a drag over as a "<page title>.url" internet shortcut
+    in a file stream, the same shape as a dragged picture, plus the address
+    itself as UniformResourceLocatorW and as text. Any of the three says so.
+    """
+    if not Available:
+        return ""
+    for fmt, codec in ((CF_URLW, "utf-16-le"), (CF_URL, "mbcs"),
+                       (CF_UNICODETEXT, "utf-16-le")):
+        if fmt:
+            text = _text_of(data_object, fmt, codec)
+            if _a_story_link(text):
+                return text
+    shortcuts = [(data, name) for data, name in (files or [])
+                 if name.lower().endswith(".url") or data.lstrip()[:18] == b"[InternetShortcut]"]
+    for data, _name in shortcuts:
+        address = _shortcut_address(data)
+        if _WEB_ADDRESS.match(address) and _a_story_link(address):
+            return address
+    names = _descriptor_names(data_object)
+    if names and all(name.lower().endswith(".url") for name in names):
+        # The shortcut itself may be too small for extract_files to keep.
+        for index in range(len(names)):
+            address = _shortcut_address(_one_file(data_object, index) or b"")
+            if _WEB_ADDRESS.match(address) and _a_story_link(address):
+                return address
+    return ""
+
+
+def _a_story_link(text: str) -> bool:
+    """Whether words hold a link to a story, asked the way the window's own
+    drop asks it (core/links.story_links).
+
+    Not a picture's address, nor a blob: one. WhatsApp Web hands a picture
+    over as "blob:https://web.whatsapp.com/…", beside the picture's bytes or,
+    when they do not come, instead of them. "https://" anywhere in the words
+    took that for a link: the panel-only target handed it on as one and
+    nothing happened, and the window's target gave the drop to Qt without the
+    advice to copy the image (review of step B)."""
+    return bool(text and text.strip()) and bool(links.story_links(text))
 
 
 def available_formats(data_object) -> set[int]:
@@ -401,10 +491,12 @@ class _DropTarget:
 
     def __init__(self, on_files: Callable[[list[tuple[bytes, str]]], None],
                  on_enter: Callable[[bool], None] | None = None,
-                 on_empty: Callable[[], None] | None = None):
+                 on_empty: Callable[[], None] | None = None,
+                 on_link: Callable[[str], None] | None = None):
         self.on_files = on_files
         self.on_enter = on_enter
         self.on_empty = on_empty
+        self.on_link = on_link
         self._interested = False
         # Screen coordinates of the drop, so the caller can work out which
         # column or list it landed on.
@@ -463,6 +555,22 @@ class _DropTarget:
             except Exception:  # noqa: BLE001
                 pass
             return True
+
+        # A LINK dragged from Chrome - its address bar, or a link on a page -
+        # comes as a "<title>.url" internet shortcut in a file stream, with the
+        # address itself beside it. It is not a picture that failed to come:
+        # no box. The window's target gives it back to Qt, whose drop opens
+        # the links window with the link in it; the panel-only target hands
+        # the words over itself.
+        words = link_words(data_object, files)
+        if words:
+            if self.on_link is not None:
+                try:
+                    self.on_link(words)
+                    return True
+                except Exception:  # noqa: BLE001
+                    pass
+            return False
 
         # Accepted the drag but found nothing usable in it: say so rather than
         # leaving the drop looking as though it silently worked.
@@ -605,7 +713,8 @@ def install_window(widget, on_files, on_enter=None, on_empty=None
         return None
 
 
-def install(widget, on_files, on_enter=None, on_empty=None) -> Optional[Registration]:
+def install(widget, on_files, on_enter=None, on_empty=None,
+            on_link=None) -> Optional[Registration]:
     """Take over drag and drop for one widget. Returns None if it cannot be done.
 
     The widget is given its own native window so only its own area is affected;
@@ -635,7 +744,7 @@ def install(widget, on_files, on_enter=None, on_empty=None) -> Optional[Registra
             pass
 
         target = _com_util.wrap(
-            _DropTarget(on_files, on_enter, on_empty),
+            _DropTarget(on_files, on_enter, on_empty, on_link),
             pythoncom.IID_IDropTarget,
         )
         pythoncom.RegisterDragDrop(hwnd, target)

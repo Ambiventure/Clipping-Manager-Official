@@ -12,10 +12,12 @@ import functools
 import itertools
 import json
 import os
+import re
 import sys
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from PySide6.QtCore import (QEvent, QPoint, QRectF, QSize, Qt, QTimer,
                             QUrl)
@@ -80,6 +82,7 @@ from .model import (
     LOOSE_TITLE,
     ClipModel,
     Row,
+    Scope,
     make_thumbnail,
     pixmap_from_png,
     thumbnail_png,
@@ -224,6 +227,24 @@ class MainWindow(QMainWindow):
         self._auto_duplicates = bool(
             export_dialog.load_settings().get("auto_duplicates", True))
         self._duplicate_pairs: list = []
+        # The same for a category of the sentiment board opened out as a list,
+        # which is checked over its own clippings and nothing else (see
+        # _duplicate_clips). One background pass at a time serves both lists:
+        # _duplicate_pool says whose it is, _duplicate_scope which category it
+        # was started over, and a list asking while the other's pass is under
+        # way waits in _duplicates_waiting rather than being forgotten.
+        self._board_duplicate_pairs: list = []
+        self._board_duplicate_hints: list = []
+        self._board_duplicate_timer = None
+        self._board_out_loud = False
+        # Check for Duplicates starts from scratch, but only when that list's
+        # own pass starts: True for the report, the Scope pressed over for the
+        # board. See _run_duplicate_check.
+        self._fresh_report = False
+        self._fresh_board = None
+        self._duplicate_pool = None
+        self._duplicate_scope = None
+        self._duplicates_waiting: set = set()
         self._reader_thread = None
         self._reader = None
         self.board_undo = QUndoStack(self)
@@ -242,9 +263,15 @@ class MainWindow(QMainWindow):
                                      ids=self._clip_ids)
         self.model.set_undo_stack(self.undo_stack)
         self.board_model.set_undo_stack(self.board_undo)
+        # The dossier prints no section headings, so the board's pool has none
+        # to show on a row or to refuse a move for (see ClipModel.headings_print).
+        self.board_model.headings_print = False
         self.preview: PreviewDialog | None = None
         self._group_serial = itertools.count(1)
         self._last_clicked_id: int | None = None
+        # The other end of a shift-click run in a board category's list. Its
+        # own, so a run started in the press report never ends on the board.
+        self._board_last_clicked_id: int | None = None
         self.mode = "standard"
 
         # A morning's work is written as it goes: the pictures once, the rest on
@@ -773,6 +800,10 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(standard)
 
         self.board = SentimentBoard(self.config)
+        # A category opened out is the press report's own list, shown over the
+        # board's own pool - the same clippings its cards show, not a copy.
+        self.board.focus_list.setModel(self.board_model)
+        self._build_board_list_bar()
         self.pages.addWidget(self.board)
 
         layout.addWidget(self.pages, 1)
@@ -916,8 +947,13 @@ class MainWindow(QMainWindow):
         self.collect_btn.setCheckable(True)
         self.collect_btn.setCursor(Qt.PointingHandCursor)
         self.collect_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.collect_btn.setToolTip(collect.TIP_OFF)
+        self.collect_btn.setToolTip(collect.TIP_OFF + collect.TIP_MENU)
         self.collect_btn.clicked.connect(self._toggle_collect)
+        # Right-click for Collect's options for the session. A popup, never
+        # exec(): nothing waits on the menu, and copies made while it is open
+        # are held and applied in order once it closes.
+        self.collect_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.collect_btn.customContextMenuRequested.connect(self._collect_menu)
         controls.addWidget(self.collect_btn)
 
         # Beside the interface switch rather than inside it, and the difference
@@ -1219,6 +1255,50 @@ class MainWindow(QMainWindow):
 
     # -- select-all bar ----------------------------------------------------
     def _build_select_bar(self) -> QWidget:
+        bar, parts = self._make_list_bar(for_board=False)
+        self.select_all_btn = parts.select_all
+        self.select_hint = parts.hint
+        self.collapse_all_btn = parts.collapse_all
+        self.expand_all_btn = parts.expand_all
+        self.english_btn = parts.english
+        self.duplicates_btn = parts.duplicates
+        self.check_dupes_btn = parts.check_dupes
+        self.auto_dupes = parts.auto_dupes
+        self.filter_btn = parts.filter_btn
+        self.clear_selection_btn = parts.clear_selection
+        self.select_bar = bar
+        bar.hide()
+        return bar
+
+    def _build_board_list_bar(self) -> None:
+        """The same bar over a category of the sentiment board opened out as
+        a list, whose buttons do the same things to that category - the
+        duplicate buttons included, checking that category's clippings."""
+        from .filter_bar import FilterBar
+
+        bar, parts = self._make_list_bar(for_board=True)
+        self.board_list_bar = bar
+        self.board_select_all = parts.select_all
+        self.board_select_hint = parts.hint
+        self.board_collapse_all = parts.collapse_all
+        self.board_expand_all = parts.expand_all
+        self.board_english = parts.english
+        self.board_duplicates_btn = parts.duplicates
+        self.board_check_dupes = parts.check_dupes
+        self.board_auto_dupes = parts.auto_dupes
+        self.board_filter_btn = parts.filter_btn
+        self.board_clear_selection = parts.clear_selection
+        self.board_filter_bar = FilterBar()
+        self.board_filter_bar.hide()
+        self.board.set_list_bar(bar, self.board_filter_bar)
+
+    def _make_list_bar(self, for_board: bool = False):
+        """The bar over a list: Select all, the hint, and its bubbles.
+
+        Returns (bar, parts). ``for_board`` is the copy over a category of the
+        sentiment board, whose buttons the window wires to the board's pool
+        (see _wire) - the duplicate buttons here, since they are made here.
+        """
         bar = QWidget()
         bar.setStyleSheet("background: transparent;")
         row = QHBoxLayout(bar)
@@ -1228,22 +1308,22 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(4, 0, 64, 0)
         row.setSpacing(12)
 
-        self.select_all_btn = QPushButton("Select all")
-        self.select_all_btn.setObjectName("LinkNavy")
-        self.select_all_btn.setCursor(Qt.PointingHandCursor)
-        row.addWidget(self.select_all_btn)
+        select_all = QPushButton("Select all")
+        select_all.setObjectName("LinkNavy")
+        select_all.setCursor(Qt.PointingHandCursor)
+        row.addWidget(select_all)
 
         # Elided, not plain. A QLabel refuses to be narrower than its whole
         # sentence, and this sentence is 469px of it - the widest thing in the
         # row, and the reason the row could not shrink. The full text stays on
         # its own tooltip.
-        self.select_hint = ElidedLabel(
+        hint = ElidedLabel(
             "Hold Ctrl to pick several, Shift for a run, or drag the handle to "
             "move a block anywhere",
             floor=90,
         )
-        self.select_hint.setObjectName("SubtleHint")
-        row.addWidget(self.select_hint)
+        hint.setObjectName("SubtleHint")
+        row.addWidget(hint)
         row.addStretch(1)
 
         # The bubbles wrap onto a second line rather than forcing the window
@@ -1259,12 +1339,12 @@ class MainWindow(QMainWindow):
         # list. A morning is six or seven documents and a hundred clippings; being
         # able to shut them all and open the one being worked on is the difference
         # between a list and a wall.
-        self.collapse_all_btn = QPushButton("Collapse all")
-        self.collapse_all_btn.setToolTip("Fold every document down to its name")
-        self.expand_all_btn = QPushButton("Expand all")
-        self.expand_all_btn.setToolTip("Open every document again")
-        for button, filled in ((self.collapse_all_btn, False),
-                               (self.expand_all_btn, False)):
+        collapse_all = QPushButton("Collapse all")
+        collapse_all.setToolTip("Fold every document down to its name")
+        expand_all = QPushButton("Expand all")
+        expand_all.setToolTip("Open every document again")
+        for button, filled in ((collapse_all, False),
+                               (expand_all, False)):
             button.setCursor(Qt.PointingHandCursor)
             button.setStyleSheet(
                 f"QPushButton {{ background: {theme.SURFACE};"
@@ -1276,33 +1356,40 @@ class MainWindow(QMainWindow):
                 f" border-color: {theme.NAVY}; }}"
             )
             bubbles.addWidget(button)
-        self.collapse_all_btn.clicked.connect(lambda: self._fold_all(True))
-        self.expand_all_btn.clicked.connect(lambda: self._fold_all(False))
+        if not for_board:
+            collapse_all.clicked.connect(lambda: self._fold_all(True))
+            expand_all.clicked.connect(lambda: self._fold_all(False))
 
         # Every card's Hindi into English at once, with a list of what was
         # done to which. Shown only while some card has Hindi in a field the
         # report prints: a button that does nothing is worse than no button.
-        self.english_btn = QPushButton("Hindi to English")
-        self.english_btn.setCursor(Qt.PointingHandCursor)
-        self.english_btn.setToolTip(
+        english = QPushButton("Hindi to English")
+        english.setCursor(Qt.PointingHandCursor)
+        english.setToolTip(
             "Read every card's Hindi or Punjabi the way a copied caption is "
             "read, and write the newspaper and city into the fields in "
             "English. A Hindi headline that is not a caption is left alone. "
             "Ctrl+Z puts it all back.")
-        self.english_btn.setStyleSheet(self.collapse_all_btn.styleSheet())
-        self.english_btn.clicked.connect(self._put_all_in_english)
-        self.english_btn.hide()
-        bubbles.addWidget(self.english_btn)
+        english.setStyleSheet(collapse_all.styleSheet())
+        if not for_board:
+            # Through a lambda: clicked's "checked" would otherwise arrive as
+            # the pool the handler now takes.
+            english.clicked.connect(lambda: self._put_all_in_english())
+        english.hide()
+        bubbles.addWidget(english)
 
+        # Made for both lists. Through lambdas: clicked's "checked" would
+        # otherwise arrive as the pool these handlers now take.
+        board_pool = getattr(self, "board_model", None) if for_board else None
         # The third bubble, in the same style as its neighbours. It is not
-        # shown at all when nothing is flagged: a button that does nothing is
-        # worse than no button, and on most mornings there are no repeats.
-        self.duplicates_btn = QPushButton("Preview and Delete Duplicates")
-        self.duplicates_btn.setCursor(Qt.PointingHandCursor)
-        self.duplicates_btn.setToolTip(
+        # shown at all when nothing is flagged: a button that does nothing
+        # is worse than no button, and on most mornings there are no repeats.
+        duplicates = QPushButton("Preview and Delete Duplicates")
+        duplicates.setCursor(Qt.PointingHandCursor)
+        duplicates.setToolTip(
             "Look at each suspected repeat beside the clipping it repeats, "
             "and decide.")
-        self.duplicates_btn.setStyleSheet(
+        duplicates.setStyleSheet(
             f"QPushButton {{ background: {theme.SURFACE};"
             f" color: {theme.DANGER};"
             f" border: 1px solid {theme.DANGER};"
@@ -1311,17 +1398,18 @@ class MainWindow(QMainWindow):
             f"QPushButton:hover {{ background: {theme.SURFACE};"
             f" border-color: {theme.DANGER}; }}"
         )
-        self.duplicates_btn.clicked.connect(self.review_duplicates)
-        self.duplicates_btn.hide()
-        bubbles.addWidget(self.duplicates_btn)
+        duplicates.clicked.connect(
+            lambda: self.review_duplicates(pool=board_pool))
+        duplicates.hide()
+        bubbles.addWidget(duplicates)
 
-        # The check runs by itself on every change, quietly. This is for being
-        # sure: it looks again on demand, from scratch, and says what it found
-        # either way - because "nothing flagged" and "never looked" are the
-        # same thing on screen otherwise.
-        self.check_dupes_btn = QPushButton("Check for Duplicates")
-        self.check_dupes_btn.setCursor(Qt.PointingHandCursor)
-        self.check_dupes_btn.setToolTip(
+        # The check runs by itself on every change, quietly. This is for
+        # being sure: it looks again on demand, from scratch, and says what
+        # it found either way - because "nothing flagged" and "never looked"
+        # are the same thing on screen otherwise.
+        check_dupes = QPushButton("Check for Duplicates")
+        check_dupes.setCursor(Qt.PointingHandCursor)
+        check_dupes.setToolTip(
             "Look again now, from scratch, and say what was found." + '\n\n'
             + "The check already runs by itself on every import, and "
             "remembers what it has read - so it never re-reads the same "
@@ -1329,7 +1417,7 @@ class MainWindow(QMainWindow):
             "lot again, which takes a moment on a full morning. Worth it "
             "after cropping or straightening, when what was read before "
             "no longer matches the picture.")
-        self.check_dupes_btn.setStyleSheet(
+        check_dupes.setStyleSheet(
             f"QPushButton {{ background: {theme.SURFACE};"
             f" color: {theme.NAVY};"
             f" border: 1px solid {theme.HAIRLINE_STRONG};"
@@ -1338,29 +1426,31 @@ class MainWindow(QMainWindow):
             f"QPushButton:hover {{ background: {theme.NAVY_WASH};"
             f" border-color: {theme.NAVY}; }}"
         )
-        self.check_dupes_btn.clicked.connect(self.check_duplicates_now)
-        self.check_dupes_btn.hide()
-        bubbles.addWidget(self.check_dupes_btn)
+        check_dupes.clicked.connect(
+            lambda: self.check_duplicates_now(pool=board_pool))
+        check_dupes.hide()
+        bubbles.addWidget(check_dupes)
 
-        # Beside the button it governs, so what it turns off is obvious. With it
-        # off nothing is checked until the button is pressed - which is what
-        # somebody wants when they are importing six files one after another and
-        # would rather the machine left them alone until they have finished.
-        self.auto_dupes = QCheckBox("Check automatically")
-        self.auto_dupes.setCursor(Qt.PointingHandCursor)
-        self.auto_dupes.setToolTip(
+        # Beside the button it governs, so what it turns off is obvious.
+        # With it off nothing is checked until the button is pressed -
+        # which is what somebody wants when they are importing six files
+        # one after another and would rather the machine left them alone
+        # until they have finished.
+        auto_dupes = QCheckBox("Check automatically")
+        auto_dupes.setCursor(Qt.PointingHandCursor)
+        auto_dupes.setToolTip(
             "On: every import is checked for repeats by itself.\n"
             "Off: nothing is checked until you press Check for Duplicates.\n\n"
             "The button works either way.")
-        self.auto_dupes.setStyleSheet(
+        auto_dupes.setStyleSheet(
             f"QCheckBox {{ color: {theme.MUTED}; font-size: 11px;"
             " font-weight: 700; spacing: 5px; }"
             f"QCheckBox:hover {{ color: {theme.NAVY}; }}"
         )
-        self.auto_dupes.setChecked(self._auto_duplicates)
-        self.auto_dupes.toggled.connect(self._auto_duplicates_toggled)
-        self.auto_dupes.hide()
-        bubbles.addWidget(self.auto_dupes)
+        auto_dupes.setChecked(self._auto_duplicates)
+        auto_dupes.toggled.connect(self._auto_duplicates_toggled)
+        auto_dupes.hide()
+        bubbles.addWidget(auto_dupes)
 
         # In the bubbles rather than the crown, for two reasons that are both
         # about this window. The crown is not inside a scroll area, so a
@@ -1368,16 +1458,16 @@ class MainWindow(QMainWindow):
         # somebody tried to scroll the page. And this row already hides itself
         # when there is nothing in the list, so the control cannot exist when
         # there is nothing to filter.
-        self.filter_btn = QPushButton("Filter and arrange")
-        self.filter_btn.setCursor(Qt.PointingHandCursor)
-        self.filter_btn.setCheckable(True)
-        self.filter_btn.setToolTip(
+        filter_btn = QPushButton("Filter and arrange")
+        filter_btn.setCursor(Qt.PointingHandCursor)
+        filter_btn.setCheckable(True)
+        filter_btn.setToolTip(
             "Show only some of the clippings, or put them in another order - "
             "by regional or national, by language, by how big the paper is."
             + "\n\n"
             + "It changes what you see, never what is exported, and never the "
             "order the clippings are really in.")
-        self.filter_btn.setStyleSheet(
+        filter_btn.setStyleSheet(
             f"QPushButton {{ background: {theme.SURFACE};"
             f" color: {theme.NAVY};"
             f" border: 1px solid {theme.HAIRLINE_STRONG};"
@@ -1388,17 +1478,20 @@ class MainWindow(QMainWindow):
             f"QPushButton:checked {{ background: {theme.NAVY};"
             f" color: #FFFFFF; border-color: {theme.NAVY}; }}"
         )
-        self.filter_btn.toggled.connect(self._filter_bar_shown)
-        bubbles.addWidget(self.filter_btn)
+        if not for_board:
+            filter_btn.toggled.connect(self._filter_bar_shown)
+        bubbles.addWidget(filter_btn)
 
-        self.clear_selection_btn = QPushButton("Clear selection")
-        self.clear_selection_btn.setObjectName("Quiet")
-        self.clear_selection_btn.hide()
-        bubbles.addWidget(self.clear_selection_btn)
+        clear_selection = QPushButton("Clear selection")
+        clear_selection.setObjectName("Quiet")
+        clear_selection.hide()
+        bubbles.addWidget(clear_selection)
 
-        self.select_bar = bar
-        bar.hide()
-        return bar
+        return bar, SimpleNamespace(
+            select_all=select_all, hint=hint, collapse_all=collapse_all,
+            expand_all=expand_all, english=english, duplicates=duplicates,
+            check_dupes=check_dupes, auto_dupes=auto_dupes,
+            filter_btn=filter_btn, clear_selection=clear_selection)
 
     def _build_filter_bar(self):
         from .filter_bar import FilterBar
@@ -1409,65 +1502,159 @@ class MainWindow(QMainWindow):
         self.filter_bar.hide()
         return self.filter_bar
 
-    def _filter_bar_shown(self, shown: bool) -> None:
+    def _list_parts(self, pool=None) -> SimpleNamespace:
+        """One list and what belongs to it: the pool it shows, the view, its
+        filter strip and the buttons on its bar. A board category's for the
+        board's pool; the press report's otherwise, over the pool on show, as
+        the report's own handlers have always read it."""
+        board = getattr(self, "board", None)
+        if (pool is not None and board is not None
+                and pool is getattr(self, "board_model", None)
+                and hasattr(self, "board_select_all")):
+            return SimpleNamespace(
+                board=True, pool=pool, view=board.focus_list,
+                filter_bar=self.board_filter_bar, filter_btn=self.board_filter_btn,
+                select_all=self.board_select_all, hint=self.board_select_hint,
+                collapse_all=self.board_collapse_all,
+                expand_all=self.board_expand_all, english=self.board_english,
+                clear_selection=self.board_clear_selection)
+        return SimpleNamespace(
+            board=False, pool=self.pool(), view=self.list,
+            filter_bar=getattr(self, "filter_bar", None),
+            filter_btn=getattr(self, "filter_btn", None),
+            select_all=getattr(self, "select_all_btn", None),
+            hint=getattr(self, "select_hint", None),
+            collapse_all=getattr(self, "collapse_all_btn", None),
+            expand_all=getattr(self, "expand_all_btn", None),
+            english=getattr(self, "english_btn", None),
+            clear_selection=getattr(self, "clear_selection_btn", None))
+
+    def _filter_bar_shown(self, shown: bool, pool=None) -> None:
         """The chip opens and shuts the strip.
 
         Shutting it clears the lens rather than leaving it on out of sight.
         A list quietly hiding half its clippings with no control on screen to
         say why is the one state this feature must never be able to reach.
+        ``pool`` is the board's for the strip over a category's list.
         """
+        parts = self._list_parts(pool)
+        bar, model = parts.filter_bar, parts.pool
         if shown:
             # Shown first, then filled. The refresh declines to do anything
             # for a strip that is not on screen, so the other way round opened
             # the strip with every row empty.
-            self.filter_bar.show()
+            bar.show()
             self._refresh_filter_choices()
         else:
-            self.filter_bar.hide()
-            if self.pool().lens.busy:
-                self.filter_bar.clear()
+            bar.hide()
+            if model.lens.busy:
+                bar.clear()
 
     def _refresh_filter_choices(self) -> None:
-        """Rebuild the chips from what is actually in the list right now."""
-        bar = getattr(self, "filter_bar", None)
-        if bar is None or not bar.isVisible():
-            return
-        pool = self.pool()
-        bar.offer([row.clip for row in pool.rows], pool.book)
-        bar.say(pool.shown_count(), len(pool.rows))
+        """Rebuild the chips from what is actually in the list right now -
+        the press report's, and a board category's opened out as a list, whose
+        chips are that category's papers and whose total is its clippings.
 
-    def _lens_changed(self) -> None:
-        pool = self.pool()
-        self.list.commit_editor()
-        pool.set_lens(self.filter_bar.lens())
-        self.filter_bar.say(pool.shown_count(), len(pool.rows))
+        A pick whose last clipping has gone - moved to another category, put
+        in English, given another paper - is dropped quietly as the chips are
+        rebuilt. The list is then handed the strip's lens again. Without that
+        it went on hiding every clipping under a pick nobody could see or
+        take off, with Show all again greyed out: the state _filter_bar_shown
+        says must never be reached. Never run inside a chip's own click (see
+        _say_filter_counts), so working the list out again here is safe.
+        """
+        bar = getattr(self, "filter_bar", None)
+        if bar is not None and bar.isVisible():
+            pool = self.pool()
+            bar.offer([row.clip for row in pool.rows], pool.book)
+            if bar.lens() != pool.lens:
+                self._lens_changed()
+            bar.say(pool.shown_count(), len(pool.rows))
+        board_bar = getattr(self, "board_filter_bar", None)
+        if board_bar is not None and board_bar.isVisible():
+            held = self.board_model.scoped_rows()
+            board_bar.offer([row.clip for row in held], self.board_model.book)
+            if board_bar.lens() != self.board_model.lens:
+                self._lens_changed(pool=self.board_model)
+            board_bar.say(self.board_model.shown_count(), len(held))
+
+    def _say_filter_counts(self) -> None:
+        """Only the words under each open strip - how many are showing, of
+        how many - asked on every recount.
+
+        A clipping moved to another category, deleted, or brought back by
+        Ctrl+Z changes the numbers without touching the chips, and the strip
+        went on saying "Showing 5 of 12" over a list of four. The chips are
+        not rebuilt here: a recount runs inside a chip's own click, and
+        rebuilding the row would take the button away from under it.
+        """
+        bar = getattr(self, "filter_bar", None)
+        if bar is not None and bar.isVisible():
+            bar.say(self.model.shown_count(), len(self.model.rows))
+        board_bar = getattr(self, "board_filter_bar", None)
+        if board_bar is not None and board_bar.isVisible():
+            board_bar.say(self.board_model.shown_count(),
+                          len(self.board_model.scoped_rows()))
+
+    def _lens_changed(self, pool=None) -> None:
+        if pool is not None and pool is self.board_model:
+            bar, view = self.board_filter_bar, self.board.focus_list
+        else:
+            pool = self.pool()
+            bar, view = self.filter_bar, self.list
+        view.commit_editor()
+        pool.set_lens(bar.lens())
+        bar.say(pool.shown_count(), len(pool.scoped_rows()))
         self._sync_fold_buttons()
         self._update_counts()
-        self.list.refresh_height()
+        view.refresh_height()
 
-    def edit_categories(self) -> None:
+    def edit_categories(self, pool=None) -> None:
         """Say which papers are regional, which are Hindi, which are the big
         ones. What is set here is kept when the program is updated."""
         from .categories_dialog import CategoriesDialog
 
-        pool = self.pool()
-        screen = CategoriesDialog([row.clip for row in pool.rows], self)
+        board = pool is not None and pool is self.board_model
+        pool = pool if board else self.pool()
+        screen = CategoriesDialog([row.clip for row in pool.scoped_rows()], self)
+        if board:
+            # open(), never exec(): nothing the board shows may hold up the
+            # window. It is still modal to the window, so the list cannot
+            # change under it; what it changed is read once it closes.
+            screen.setAttribute(Qt.WA_DeleteOnClose, True)
+            screen.finished.connect(
+                lambda _result: self._categories_edited(pool, board=True))
+            screen.open()
+            return
         screen.exec()
+        self._categories_edited(pool, board=False)
+
+    def _categories_edited(self, pool, board: bool) -> None:
+        """After Which papers are which: the papers' categories are read
+        again, and a filter on is worked out again under what was changed."""
         pool.forget_book()
         self.board_model.forget_book()
         self._refresh_filter_choices()
         if pool.lens.busy:
-            self._lens_changed()
+            self._lens_changed(pool=pool if board else None)
 
-    def _fold_all(self, collapsed: bool) -> None:
-        """Shut every document in the list, or open every one."""
-        pool = self.pool()
+    def _fold_all(self, collapsed: bool, pool=None) -> None:
+        """Shut every document in the list, or open every one - in a
+        category's list, that category's documents only."""
+        board = pool is not None and pool is self.board_model
+        pool = pool if board else self.pool()
         if pool.group_count() == 0:
             return
-        self.list.commit_editor()
+        view = self.board.focus_list if board else self.list
+        view.commit_editor()
         pool.set_all_collapsed(collapsed)
         if collapsed:
-            self.list.scrollToTop()
+            if board:
+                # The list stands in the page: its top is where the page's
+                # working half starts.
+                self.board.show_settings(False)
+            else:
+                self.list.scrollToTop()
         self._update_counts()
 
     def _sync_fold_buttons(self) -> None:
@@ -1483,6 +1670,16 @@ class MainWindow(QMainWindow):
             self.check_dupes_btn.setVisible(self.model.clip_count > 0)
         if hasattr(self, "auto_dupes"):
             self.auto_dupes.setVisible(self.model.clip_count > 0)
+        if hasattr(self, "board_collapse_all"):
+            pool = self.board_model
+            groups = pool.group_count() if pool.scope is not None else 0
+            for button in (self.board_collapse_all, self.board_expand_all):
+                button.setVisible(groups > 0)
+        if hasattr(self, "board_check_dupes"):
+            # As the report's: there while the category has clippings.
+            held = bool(self._duplicate_clips(self.board_model))
+            self.board_check_dupes.setVisible(held)
+            self.board_auto_dupes.setVisible(held)
 
     def _build_empty_state(self) -> QWidget:
         panel = QWidget()
@@ -1712,7 +1909,9 @@ class MainWindow(QMainWindow):
         self.clear_all_btn.clicked.connect(self._clear_all)
         self.collapse_btn.clicked.connect(self._toggle_card)
 
-        self.select_all_btn.clicked.connect(self._toggle_select_all)
+        # Through a lambda: clicked's "checked" would otherwise arrive as the
+        # pool the handler now takes, and a False pool acts on nothing.
+        self.select_all_btn.clicked.connect(lambda: self._toggle_select_all())
         self.clear_selection_btn.clicked.connect(self.model.clear_selection)
 
         self.list.clipAction.connect(self._on_clip_action)
@@ -1724,6 +1923,46 @@ class MainWindow(QMainWindow):
         self.list.selectionToggled.connect(self._on_selection_toggled)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._context_menu)
+
+        # A category of the sentiment board opened out is the same list over
+        # the board's pool. Every gesture on it reaches the same handler, told
+        # which pool it is for - and so the board's own history.
+        listed = self.board.focus_list
+        board_pool = self.board_model
+        listed.clipAction.connect(
+            functools.partial(self._on_clip_action, pool=board_pool))
+        listed.groupAction.connect(
+            functools.partial(self._on_group_action, pool=board_pool))
+        listed.labelEdited.connect(
+            functools.partial(self._on_label_edited, pool=board_pool))
+        listed.urlEdited.connect(
+            functools.partial(self._on_url_edited, pool=board_pool))
+        listed.previewRequested.connect(self.open_preview)
+        listed.reorderRequested.connect(
+            functools.partial(self._on_reorder, pool=board_pool))
+        listed.selectionToggled.connect(
+            functools.partial(self._on_selection_toggled, pool=board_pool))
+        listed.setContextMenuPolicy(Qt.CustomContextMenu)
+        listed.customContextMenuRequested.connect(
+            functools.partial(self._context_menu, pool=board_pool))
+        self.board_select_all.clicked.connect(
+            lambda: self._toggle_select_all(pool=board_pool))
+        self.board_clear_selection.clicked.connect(board_pool.clear_selection)
+        self.board_collapse_all.clicked.connect(
+            lambda: self._fold_all(True, pool=board_pool))
+        self.board_expand_all.clicked.connect(
+            lambda: self._fold_all(False, pool=board_pool))
+        self.board_english.clicked.connect(
+            lambda: self._put_all_in_english(pool=board_pool))
+        self.board_filter_btn.toggled.connect(
+            lambda on: self._filter_bar_shown(on, pool=board_pool))
+        self.board_filter_bar.changed.connect(
+            lambda: self._lens_changed(pool=board_pool))
+        self.board_filter_bar.editCategories.connect(
+            lambda: self.edit_categories(pool=board_pool))
+        self.board.focusChanged.connect(lambda _value: self._board_focus_changed())
+        board_pool.selectionChanged.connect(self._hide_move_note)
+        self.board_undo.indexChanged.connect(self._hide_move_note)
 
         self.model.countsChanged.connect(self._update_counts)
         self.model.selectionChanged.connect(self._update_selection_ui)
@@ -1760,6 +1999,19 @@ class MainWindow(QMainWindow):
         self.board_model.countsChanged.connect(self.touch_session)
         self.undo_stack.indexChanged.connect(lambda _i: self.touch_session())
         self.board_undo.indexChanged.connect(lambda _i: self.touch_session())
+        # A step done, undone or done again can take a paper's last clipping
+        # away or bring it back without passing anything that rebuilds the
+        # filter's chips: Ctrl+Z brought a clipping back and its paper was not
+        # offered, so it could be neither picked nor taken off. Rebuilt a
+        # moment later, once whatever pushed the step has finished - never
+        # inside a chip's own click - and only for a strip that is open (see
+        # _refresh_filter_choices). Several steps together ask once.
+        self._offer_timer = QTimer(self)
+        self._offer_timer.setSingleShot(True)
+        self._offer_timer.setInterval(0)
+        self._offer_timer.timeout.connect(self._refresh_filter_choices)
+        self.undo_stack.indexChanged.connect(lambda _i: self._offer_timer.start())
+        self.board_undo.indexChanged.connect(lambda _i: self._offer_timer.start())
 
         self.mode_switch.changed.connect(self.set_mode)
         self.board.assignRequested.connect(self._assign_sentiment)
@@ -1783,6 +2035,13 @@ class MainWindow(QMainWindow):
         self.undo_group.canUndoChanged.connect(self.float_undo.setEnabled)
         self.undo_group.canRedoChanged.connect(self.float_redo.setEnabled)
         self.undo_stack.indexChanged.connect(self._after_undo_change)
+        # The board's history, for a category opened out as a list: its check
+        # is asked on the same terms (and does nothing over four columns).
+        self.board_undo.indexChanged.connect(
+            lambda _i: self.recheck_duplicates(pool=self.board_model))
+        # And its review button counted again: a step can take one side of a
+        # pair out of the category, or bring it back.
+        self.board_undo.indexChanged.connect(lambda _i: self._count_board_review())
         self.float_undo.setEnabled(False)
         self.float_redo.setEnabled(False)
 
@@ -1794,7 +2053,8 @@ class MainWindow(QMainWindow):
         self.batch_bottom.clicked.connect(lambda: self._batch_move("bottom"))
         self.batch_exclude.clicked.connect(self._batch_exclude)
         self.batch_delete.clicked.connect(self._batch_delete)
-        self.batch_close.clicked.connect(self.model.clear_selection)
+        self.batch_close.clicked.connect(
+            lambda: (self._list_pool() or self.model).clear_selection())
 
         self.btn_pdf_out.clicked.connect(lambda: self._export("pdf"))
         self.btn_docx_out.clicked.connect(lambda: self._export("docx"))
@@ -1808,8 +2068,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self.undo_group.redo)
         QShortcut(QKeySequence.Paste, self, self.paste_clipboard)
         QShortcut(QKeySequence("Ctrl+A"), self, self._select_all)
-        QShortcut(QKeySequence("Home"), self, lambda: self.list.scrollToTop())
-        QShortcut(QKeySequence("End"), self, lambda: self.list.scrollToBottom())
+        QShortcut(QKeySequence("Home"), self, lambda: self._list_end(True))
+        QShortcut(QKeySequence("End"), self, lambda: self._list_end(False))
         QShortcut(QKeySequence(Qt.Key_Delete), self, self._batch_delete)
         QShortcut(QKeySequence(Qt.Key_Escape), self,
                   lambda: self.pool().clear_selection())
@@ -1838,10 +2098,22 @@ class MainWindow(QMainWindow):
             # registration rather than losing the browser drag altogether.
             self._native_drop = win_drop.install(
                 self.drop, self._native_files_dropped, self._native_drag_hover,
-                self._native_drop_empty,
+                self._native_drop_empty, on_link=self._native_link_dropped,
             )
         if self._native_drop is None and win_drop.Available:
             self.drop.setAcceptDrops(True)
+
+    def _native_link_dropped(self, words: str) -> None:
+        """A link dragged onto the drop panel when only the panel could be
+        taken over: to the links window, as a link dropped anywhere else is.
+        Words with no story link in them - a picture's own address - came with
+        a picture that did not: its advice, never a silent nothing."""
+        if not (words and links.story_links(words)):
+            self._native_drop_empty()
+            return
+        if self._refuse_if_read_only():
+            return
+        self._links_arrived(words, "drop")
 
     def _native_drop_empty(self) -> None:
         QMessageBox.information(
@@ -1874,6 +2146,11 @@ class MainWindow(QMainWindow):
                           self.childAt(self.mapFromGlobal(where))]
             for widget in candidates:
                 while widget is not None:
+                    # A list standing in for a column - a category opened
+                    # out on the board - says which one it is.
+                    listed = getattr(widget, "drop_section", None)
+                    if listed is not None:
+                        return listed
                     section = getattr(widget, "section", None)
                     if section is not None and hasattr(widget, "cardsDropped"):
                         return section
@@ -1882,9 +2159,26 @@ class MainWindow(QMainWindow):
             return None
         return None
 
+    def _focused_section(self) -> "Section | None":
+        """The category opened out as a list on the board, or None - in the
+        press report, over four columns, or for a value that is not one."""
+        board = getattr(self, "board", None)
+        focused = getattr(board, "focused", None) if board is not None else None
+        if self.mode != "sentiment" or not focused:
+            return None
+        try:
+            return Section(focused)
+        except ValueError:
+            return None
+
     def _native_files_dropped(self, files: list, point=None) -> None:
         """Images pulled straight out of a browser drag."""
         section = self._section_under(point)
+        if section is None:
+            # With a category opened out, only it is on show: a picture let go
+            # over its header, the focus bar or the page's margin is meant for
+            # it, as one let go on its list is.
+            section = self._focused_section()
         if section is not None:
             self._pending_section = section
         clips = []
@@ -2063,6 +2357,13 @@ class MainWindow(QMainWindow):
         section = getattr(self, "_pending_section", None)
         self._pending_section = None
         on_board = self.mode == "sentiment"
+        if section is None and on_board:
+            # A category opened out as a list is the only one on show, so a
+            # clipping that arrives with no column of its own goes into it -
+            # where the person is looking, and where its headline box opens.
+            # Collect and a captured link choose their own column and arm it
+            # before they come here, so this never overrides them.
+            section = self._focused_section()
         division = self.board.active if self.board.active not in ("", "__all__") else ""
         for clip in clips:
             if section is not None:
@@ -2086,20 +2387,34 @@ class MainWindow(QMainWindow):
             section=Section.NEUTRAL,
         )
 
-    def _add_loose(self, clips: list[Clip], quiet: bool = False) -> list:
+    def _add_loose(self, clips: list[Clip], quiet: bool = False,
+                   tidy: bool | None = None, reveal: bool = True) -> list:
         """Hand-added clippings share one group and land at the top, in order.
 
         ``quiet`` is Collect from WhatsApp, where the person is in Chrome, not
         here: nothing comes forward, no headline box opens, nothing takes the
         keyboard - the clipping simply appears. Returns the rows added.
+
+        ``tidy`` overrides the Layout card's "trim the phone's bars" for these
+        clippings only (None: as the card says), and ``reveal`` False leaves
+        the page where it is - both Collect's options for the session.
         """
         if self._refuse_if_read_only():
             return []
         target = self.pool()
         self._stamp_pending(clips)
-        tidied = self._tidy_screenshots(clips)
+        tidied = self._tidy_screenshots(clips, tidy)
         rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
         at = target.loose_insert_point()
+        scope = getattr(target, "scope", None)
+        if (target is getattr(self, "board_model", None) and scope is not None
+                and clips and all(scope.holds(clip) for clip in clips)):
+            # Into a category opened out as a list: at the top of ITS loose
+            # clippings, as the press report puts them. The pool's own rule is
+            # kept for a clipping that went to another category (Collect's
+            # column option), which would otherwise be put among this one's,
+            # and scoped_insert_point falls back to it in an empty category.
+            at = target.scoped_insert_point()
         self.stack_for(target).push(
             commands.AddClips(
                 target, rows,
@@ -2115,13 +2430,19 @@ class MainWindow(QMainWindow):
         if quiet:
             if target is not self.model:
                 self._refresh_board()
+                # A category opened out as a list follows the arrival, as the
+                # press report's page does - and not when Collect's options
+                # say to leave the page be, or it landed in another category.
+                if rows and reveal:
+                    self._reveal_in_board_list(rows[-1].id)
             else:
                 self._show_list()
                 # The list follows the newest arrival, wherever the person is
                 # looking: the caption they copy next goes on it, and they
                 # asked to see it land. Put at the foot of the view, so the
-                # ones before it stay in sight above.
-                if rows:
+                # ones before it stay in sight above. Unless Collect's options
+                # say to leave the page where the person put it.
+                if rows and reveal:
                     self._reveal_on_page(rows[-1].id)
                 self.list._place_editor()
             return rows
@@ -2192,11 +2513,24 @@ class MainWindow(QMainWindow):
 
         return run
 
-    def open_links(self, words: str = "") -> None:
+    def open_links(self, words: str = "", quiet: bool = False) -> None:
         """The window where links are pasted and captured.
 
         ``words`` fills the box - a message pasted with Ctrl+V arrives here
-        rather than in the "nothing to add" box.
+        rather than in the "nothing to add" box. With the window already open
+        they go under the links already listed, on lines of their own, and
+        every tick stays: a second link pasted used to replace the first.
+        Closed, it starts afresh with just what came.
+
+        ``quiet`` is Collect from WhatsApp, with the person still in Chrome.
+        The link goes under what the list holds - also when its window was
+        only closed in this newspad, so the links and marks left there are
+        not wiped by a copy the person made elsewhere. The window is never
+        brought forward nor given the keyboard, and it is shown only while
+        this window is the one in use: measured on the real window platform,
+        a window shown without activating still lands on top of the one in
+        front, which would have been WhatsApp. Otherwise it waits and opens
+        when the person comes back (changeEvent).
         """
         if self._refuse_if_read_only():
             return
@@ -2204,10 +2538,76 @@ class MainWindow(QMainWindow):
         if dialog is None:
             dialog = self.links_dialog = webclip.LinksDialog(self)
         if words:
-            dialog.box.setPlainText(words)
+            # Links Collect put there while the person was away, not yet seen,
+            # are never wiped by their own paste either.
+            if dialog.isVisible() or ((quiet or getattr(self, "_links_waiting", False))
+                                      and self.links_kept()):
+                dialog.add_words(words)
+            else:
+                dialog.start_over(words)
+        self._links_gen = self._newspad_gen
+        if quiet:
+            if dialog.isVisible():
+                return
+            if self.isActiveWindow():
+                self._show_links_quietly(dialog)
+            else:
+                self._links_waiting = True
+            return
+        self._links_waiting = False
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def links_kept(self) -> str:
+        """The words of the links list a link from Collect goes under: the
+        box while its window is open, or while it was last used in this
+        newspad and only closed. "" when the next link starts a fresh list."""
+        dialog = getattr(self, "links_dialog", None)
+        if dialog is None:
+            return ""
+        try:
+            if (dialog.isVisible()
+                    or getattr(self, "_links_gen", None) == self._newspad_gen):
+                return dialog.box.toPlainText()
+        except RuntimeError:
+            pass
+        return ""
+
+    @staticmethod
+    def _show_links_quietly(dialog) -> None:
+        """Shown, never activated. The flag goes on the native window too when
+        one already exists: measured on the real window platform, a native
+        window made before its first show (anything asking for its winId, as
+        win_drop does for the windows it takes drops on) keeps the flag it was
+        made with, and the show then took the keyboard from the window in use.
+        Qt passes the widget's attribute on only when it makes the window."""
+        made = dialog.windowHandle()
+        dialog.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        if made is not None:
+            made.setProperty("_q_showWithoutActivating", True)
+        try:
+            dialog.show()
+        finally:
+            dialog.setAttribute(Qt.WA_ShowWithoutActivating, False)
+            handle = dialog.windowHandle()
+            if handle is not None:
+                handle.setProperty("_q_showWithoutActivating", False)
+
+    def _show_waiting_links(self) -> None:
+        """The links window Collect filled while the person was in Chrome,
+        shown now they are back in this window - still without taking the
+        keyboard from whatever they came back to do."""
+        self._links_waiting = False
+        dialog = getattr(self, "links_dialog", None)
+        if (dialog is None or self._read_only or self._switching
+                or getattr(self, "_closing", False) or not self.links_kept().strip()):
+            return
+        try:
+            if not dialog.isVisible():
+                self._show_links_quietly(dialog)
+        except RuntimeError:
+            pass
 
     def clip_from_link(self, shot, found):
         """One captured page, added as a clipping where the person is working.
@@ -2237,20 +2637,47 @@ class MainWindow(QMainWindow):
             clip.name_confidence = 1.0
         clip.name_source = "link"
         pool = self.pool()
-        rows = self._add_loose([clip], quiet=True) or []
-        if rows:
+        on_board = pool is getattr(self, "board_model", None)
+        saved = self._pending_section
+        if on_board:
+            # A web page is digital coverage whichever category is opened out:
+            # armed with its own column, so the opened one does not take it.
+            # A column a board button armed for its own import is put back.
+            self._pending_section = clip.section
+        try:
+            rows = self._add_loose([clip], quiet=True) or []
+        finally:
+            if on_board:
+                self._pending_section = saved
+        if rows and not on_board:
             self._flash(f"Captured {shot.site} — No. "
-                        f"{pool.position_of(rows[0].id) + 1}.", "good")
+                        f"{pool.number_of(rows[0].id)}.", "good")
+        elif rows:
+            # Said by column, which is where it is on the board: a number is
+            # only a place in the category's list, and it may not be the one
+            # on show.
+            column = sentiment.column_for(rows[0].clip.section).value
+            number = pool.number_of(rows[0].id) if pool.scope is not None else 0
+            focused = self._focused_section()
+            if number:
+                said = f"Captured {shot.site} — No. {number} in {column}."
+            elif focused is not None:
+                said = (f"Captured {shot.site} into {column} — the board is "
+                        f"showing only {focused.value}.")
+            else:
+                said = f"Captured {shot.site} into {column}."
+            self._flash(said, "good")
         return rows[0].id if rows else None
 
-    def _tidy_screenshots(self, clips: list) -> int:
+    def _tidy_screenshots(self, clips: list, wanted: bool | None = None) -> int:
         """Take the phone's bars and the blank margins off pasted pictures, as
         a crop each carries - the picture itself is never altered, and the
         preview's Whole picture puts it back. Only when the layout card says
-        so, and only on pictures that arrived by hand. Returns how many."""
+        so - or ``wanted`` does, for Collect's "always" and "never" - and only
+        on pictures that arrived by hand. Returns how many."""
         from .layout_card import tidy_wanted
 
-        if not tidy_wanted():
+        if not (tidy_wanted() if wanted is None else wanted):
             return 0
         from ..core import tidy
 
@@ -2282,6 +2709,46 @@ class MainWindow(QMainWindow):
             section=Section.NEUTRAL,
         )
 
+    #: A web address that is a picture rather than a story: "…/photo.jpg",
+    #: "…/media/X?format=jpg". Dragged, it keeps the "copy the image" advice.
+    #: Kept in core/links, because win_drop's drop target asks the same.
+    _PICTURE_ADDRESS = links.PICTURE_ADDRESS
+
+    @classmethod
+    def _links_in(cls, mime, payload=None) -> str:
+        """The words of a drop or paste that carries story links and nothing
+        else - no files, no picture - or "" when it is not that.
+
+        A link dragged from Chrome's address bar, or copied, arrives as text,
+        or as addresses with no text at all. A link to a picture, a blob: or a
+        data: address is not a story, and keeps today's advice.
+        """
+        if mime is None:
+            return ""
+        if payload is None:
+            payload = dropped.read(mime)
+        if payload.files or payload.images:
+            return ""
+        words = mime.text() if mime.hasText() else ""
+        if not links.find(words):
+            words = "\n".join(url.toString() for url in mime.urls() if not url.isLocalFile())
+        return words if links.story_links(words) else ""
+
+    def _links_arrived(self, words: str, how: str) -> None:
+        """Links from a paste or a drop, into the links window, and said."""
+        many = len(links.find(words))
+        was_open = bool(getattr(self, "links_dialog", None) is not None
+                        and self.links_dialog.isVisible())
+        self.open_links(words)
+        if how == "clipboard":
+            self._flash(f"{many} link{'s' if many != 1 else ''} on the "
+                        f"clipboard — press Capture to take "
+                        f"{'them' if many != 1 else 'it'}.", "info")
+        else:
+            self._flash(f"{many} link{'s' if many != 1 else ''} "
+                        f"{'added to' if was_open else 'put in'} the links window "
+                        f"— press Capture to take {'them' if many != 1 else 'it'}.", "info")
+
     def accept_payload(self, mime) -> bool:
         """Take whatever a drop or a paste carried. Returns True if anything landed."""
         payload = dropped.read(mime)
@@ -2292,6 +2759,17 @@ class MainWindow(QMainWindow):
                 [self._clip_from_bytes(data, name) for data, name in payload.images]
             )
         if payload.empty:
+            # A story link dragged here - from Chrome's address bar, a page, or
+            # a message - is not a picture that failed to come through: it
+            # opens the links window with the link in it. The same whether it
+            # lands on the window, the list or a board column.
+            words = self._links_in(mime, payload)
+            if words and not self._read_only:
+                self._links_arrived(words, "drop")
+                return True
+            if words:
+                self.open_links(words)      # says why it cannot
+                return False
             QMessageBox.information(self, "Nothing to add", payload.note)
             return False
         return True
@@ -2305,30 +2783,37 @@ class MainWindow(QMainWindow):
         is not something a person can see, so a paste went somewhere they had
         not chosen and had to be dragged back.
         """
-        # Collect has already taken what is on the clipboard: pasting it too
-        # would add it twice - and a copied caption would open the "nothing to
-        # add" box.
-        collector = getattr(self, "collector", None)
-        if (collector is not None and collector.is_on
-                and collector.watcher.already_read()):
-            self._flash(collect.PASTE_NOT_NEEDED, "info")
-            return
         # A link on the clipboard is not a picture, and the "nothing to add"
         # box was the wrong answer to it: what somebody pasting a story link
         # wants is the story. The list opens with it already in, so they can
-        # see what was found before anything is captured.
+        # see what was found before anything is captured. Before Collect's
+        # "already taken" below: with Collect on, a pasted link used to be
+        # answered "Ctrl+V is not needed" and never reached the links window.
         mime = QGuiApplication.clipboard().mimeData()
-        carried = dropped.read(mime) if mime is not None else None
-        if carried is not None and not carried.images and not carried.files:
-            words = mime.text() if mime.hasText() else ""
-            found = links.find(words) if words else []
-            if found:
-                self.open_links(words)
-                many = len(found)
-                self._flash(f"{many} link{'s' if many != 1 else ''} on the "
-                            f"clipboard — press Capture to take "
-                            f"{'them' if many != 1 else 'it'}.", "info")
+        words = self._links_in(mime)
+        collector = getattr(self, "collector", None)
+        taken = bool(collector is not None and collector.is_on
+                     and collector.watcher.already_read())
+        if words and taken:
+            # Collect has already dealt with this copy. A link it put on a
+            # photo, or in the links list, is not listed again: Capture would
+            # make a second clipping of a story already on the page (review
+            # of A2, round 2). What is left - a link Collect did not take -
+            # still reaches the links window.
+            words = collector.links_not_taken(words)
+            if not words:
                 return
+        if words:
+            if self._refuse_if_read_only():
+                return
+            self._links_arrived(words, "clipboard")
+            return
+        # Collect has already taken what is on the clipboard: pasting it too
+        # would add it twice - and a copied caption would open the "nothing to
+        # add" box.
+        if taken:
+            self._flash(collect.PASTE_NOT_NEEDED, "info")
+            return
         section = None
         if self.mode == "sentiment":
             # A pair, not a QPoint: _section_under indexes what it is given,
@@ -2376,52 +2861,236 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event):
         self.dragLeaveEvent(event)
         event.acceptProposedAction()
+        focused = self._focused_section()
+        if focused is not None:
+            # Nothing under the pointer took it - the category's header, the
+            # focus bar, the page's margin - and the category opened out is
+            # the only one on show.
+            self.accept_payload_into(event.mimeData(), focused)
+            return
         self.accept_payload(event.mimeData())
 
     # ------------------------------------------------------------- actions
-    def _on_clip_action(self, name: str, clip_id: int) -> None:
-        model = self.model
+    # Every handler below serves two lists: the press report's, and a category
+    # of the sentiment board opened out as a list (see _list_pool). ``pool`` is
+    # the board's pool when the gesture came from that list and None for the
+    # press report, so the report's own calls are exactly what they were. The
+    # history and the list on screen follow the pool.
+    def _list_pool(self):
+        """The clippings the list on screen, the navy bar and the list's
+        keys act on: the press report's in its own interface, the board's
+        while one of its categories is opened out as a list, and nothing at
+        all while the board shows its four columns of cards."""
+        if self.mode == "standard":
+            return self.model
+        board = getattr(self, "board", None)
+        if self.mode == "sentiment" and board is not None and board.focused:
+            return self.board_model
+        return None
+
+    def _list_for(self, pool):
+        """The list that shows a pool: a category's, for the board's."""
+        board = getattr(self, "board", None)
+        if (board is not None and pool is not None
+                and pool is getattr(self, "board_model", None)):
+            return board.focus_list
+        return self.list
+
+    def _sync_board_scope(self) -> bool:
+        """Show in the category's list what the board is showing: one
+        category, in the division on show - or the whole pool, closed.
+
+        Asked often (every focus change, division change and recount) and
+        does nothing unless the answer changed. A change starts the list
+        afresh: the text half typed in it is kept, and the ticks, the filter
+        and the shift-click anchor belong to what it showed before. Returns
+        True when it changed the scope, having counted everything again.
+        """
+        board = getattr(self, "board", None)
+        pool = getattr(self, "board_model", None)
+        if (board is None or pool is None
+                or getattr(self, "_scope_changing", False)):
+            return False
+        wanted = None
+        if board.focused:
+            try:
+                # The board's own division as it is: "" and ALL_DIVISIONS
+                # are two different things to a Scope (see model.Scope).
+                wanted = Scope(Section(board.focused), board.active)
+            except ValueError:
+                wanted = None
+        if wanted == pool.scope:
+            return False
+        # Not "was": the filter bar's blockSignals below reuses that name.
+        left_scope = pool.scope
+        self._scope_changing = True
+        try:
+            board.focus_list.commit_editor()
+            pool.set_scope(wanted)
+        finally:
+            self._scope_changing = False
+        bar = getattr(self, "board_filter_bar", None)
+        if bar is not None:
+            was = bar.blockSignals(True)
+            try:
+                bar.clear()
+            finally:
+                bar.blockSignals(was)
+            bar.hide()
+        button = getattr(self, "board_filter_btn", None)
+        if button is not None and button.isChecked():
+            was = button.blockSignals(True)
+            button.setChecked(False)
+            button.blockSignals(was)
+        self._board_last_clicked_id = None
+        # Pairs found over the category that was on show are not this one's:
+        # its review would delete clippings nobody can see.
+        self._forget_board_duplicates()
+        self._let_board_request_go(left_scope, wanted)
+        if wanted is not None:
+            self._offer_board_marks()
+        board.focus_list.refresh_height()
+        self._update_counts()
+        if wanted is not None:
+            self.recheck_duplicates(pool=pool)
+        return True
+
+    def _let_board_request_go(self, was, now) -> None:
+        """A category's check that has not started yet belongs to the category
+        it was asked over, and goes when that category does.
+
+        Letting it go only while it waited in _duplicates_waiting was not
+        enough. Once the press report's pass ends, _pass_over puts it on the
+        board's timer, and a category opened in those 400ms was checked in its
+        place: answered out loud as if its own button had been pressed, and
+        with Check automatically off, read though nobody asked (D3 review). So
+        the timer is stopped as well; Check automatically asks afresh for the
+        category now on show (_sync_board_scope). A pass already under way is
+        left to its finish, which sees the change (_finish_board_check).
+        """
+        waiting = "board" in self._duplicates_waiting
+        self._duplicates_waiting.discard("board")
+        timer = self._board_duplicate_timer
+        armed = timer is not None and timer.isActive()
+        if armed:
+            timer.stop()
+        # Nothing was forgotten for it: that happens when its pass starts.
+        self._fresh_board = None
+        if self._is_board(self._duplicate_pool):
+            return
+        pressed, self._board_out_loud = self._board_out_loud, False
+        if pressed and (waiting or armed) and was is not None:
+            # Said, because the button was pressed and is otherwise never
+            # answered.
+            self._flash(f"{was.column.value}'s duplicate check was not run: "
+                        f"{self._scope_change_words(was, now)}.", "info")
+
+    @staticmethod
+    def _scope_change_words(was, now) -> str:
+        """Why a category's check was dropped, in the words of the screen."""
+        if now is None:
+            return "the category was closed"
+        if now.column != was.column:
+            return f"{now.column.value} was opened"
+        return "the division changed"
+
+    def _board_focus_changed(self) -> None:
+        """A category opened or closed, or the division changed."""
+        if not self._sync_board_scope():
+            self._sync_fold_buttons()
+            self._sync_english_button()
+            self._update_selection_ui()
+            self._place_floating()
+        # Collect's bar names the column a collected photo goes in, which is
+        # the one opened out.
+        collector = getattr(self, "collector", None)
+        if collector is not None:
+            collector.refresh()
+
+    def _reveal_in_board_list(self, clip_id: int) -> None:
+        """Bring a clipping that arrived without a hand on it - collected from
+        WhatsApp, or a captured link - into view in a category's list. The
+        list stands in the board's page, so it is the page that moves, and
+        not yet: see _reveal_on_page for why three times."""
+        def go() -> None:
+            board = getattr(self, "board", None)
+            if self.mode != "sentiment" or board is None or not board.focused:
+                return
+            at_row = self.board_model.entry_row_for_clip(clip_id)
+            if at_row < 0:
+                return
+            board.focus_list.scrollTo(self.board_model.index(at_row, 0))
+
+        for wait_ms in (0, 160, 450):
+            QTimer.singleShot(wait_ms, self._deferred(go))
+
+    def _list_end(self, top: bool) -> None:
+        """Home and End: to the ends of the list on screen."""
+        if self._list_pool() is self.board_model:
+            page = self.board.page
+            if top:
+                page.to_work()
+            else:
+                bar = page.verticalScrollBar()
+                bar.setValue(bar.maximum())
+            return
+        if top:
+            self.list.scrollToTop()
+        else:
+            self.list.scrollToBottom()
+
+    def _on_clip_action(self, name: str, clip_id: int, pool=None) -> None:
+        model = pool if pool is not None else self.model
+        if pool is not None and model.row_for(clip_id) is None:
+            return
+        stack = self.stack_for(model)
+        view = self._list_for(model)
         if name == "delete":
-            self.undo_stack.push(commands.RemoveClips(model, [clip_id]))
+            stack.push(commands.RemoveClips(model, [clip_id]))
             self._flash("Clipping deleted — Ctrl+Z brings it back.", "info")
         elif name == "rotate":
-            self.undo_stack.push(commands.Rotate(model, [clip_id]))
+            stack.push(commands.Rotate(model, [clip_id]))
         elif name == "split":
-            self.undo_stack.push(commands.Split(model, clip_id))
+            stack.push(commands.Split(model, clip_id))
             self._flash("Split in two — Ctrl+Z undoes it.", "info")
         elif name == "merge":
-            position = model.position_of(clip_id)
-            if position < 0 or position + 1 >= len(model.rows):
+            # The clipping the list shows under this one. In a category of
+            # the board that is the next one in the category: the next one in
+            # the pool is as likely to be another category's.
+            below = model.neighbour_below(clip_id)
+            if below is None:
                 return
-            below = model.rows[position + 1].id
-            self.undo_stack.push(commands.Merge(model, [clip_id, below]))
+            stack.push(commands.Merge(model, [clip_id, below]))
         elif name == "english":
-            self._put_in_english([clip_id])
+            self._put_in_english([clip_id], pool=pool)
         elif name == "add_title":
             row = model.entry_row_for_clip(clip_id)
             if row >= 0:
-                self.list.edit_field(row, "label")
+                view.edit_field(row, "label")
         elif name in ("edit_url", "add_url"):
             # Reachable even on a card with no address box showing, which is
             # every freshly pasted screenshot - otherwise there is nowhere to
             # put the link the story came from.
             row = model.entry_row_for_clip(clip_id)
             if row >= 0:
-                self.list.edit_field(row, "url")
+                view.edit_field(row, "url")
         elif name in ("move_top", "move_up", "move_down", "move_bottom"):
             if self._lens_holds(model):
                 return
             where = name.replace("move_", "")
+            # Within the category, in a category's list: the helper works the
+            # order out over its clippings and leaves every other one in place.
             rows = commands.move_relative(model, [clip_id], where)
-            self.undo_stack.push(commands.Reorder(model, rows, "Clipping reordered"))
+            stack.push(commands.Reorder(model, rows, "Clipping reordered"))
 
-    def _on_group_action(self, name: str, ident: str) -> None:
+    def _on_group_action(self, name: str, ident: str, pool=None) -> None:
         """Act on the one run of clippings under the header that was clicked.
 
         Addressing by key alone would sweep up a second run elsewhere in the list
         that happens to share it, which a re-filing drop can easily create.
         """
-        model = self.model
+        model = pool if pool is not None else self.model
+        stack = self.stack_for(model)
         group = model.group_by_ident(ident)
         ids = group.row_ids if group else []
         # Clicking the file name is the same as clicking its chevron - it is
@@ -2437,10 +3106,10 @@ class MainWindow(QMainWindow):
             all_selected = all(model.is_selected(i) for i in ids)
             model.set_selected(ids, not all_selected)
         elif name == "group_rotate":
-            self.undo_stack.push(commands.Rotate(model, ids))
+            stack.push(commands.Rotate(model, ids))
         elif name == "group_delete":
             if self._confirm_delete(len(ids)):
-                self.undo_stack.push(commands.RemoveClips(model, ids))
+                stack.push(commands.RemoveClips(model, ids))
         elif name in ("group_top", "group_up", "group_down", "group_bottom"):
             # Never under a lens. move_group_relative matches a file by its
             # clippings being one unbroken run; hide one of them and the match
@@ -2450,9 +3119,9 @@ class MainWindow(QMainWindow):
                 return
             rows = commands.move_group_relative(
                 model, ids, name.replace("group_", ""))
-            self.undo_stack.push(commands.Reorder(model, rows, "File reordered"))
+            stack.push(commands.Reorder(model, rows, "File reordered"))
 
-    def _on_label_edited(self, clip_id: int, text: str) -> None:
+    def _on_label_edited(self, clip_id: int, text: str, pool=None) -> None:
         """The headline, which prints above the picture.
 
         The card has a box for this and a box for the address, so neither has to
@@ -2460,11 +3129,13 @@ class MainWindow(QMainWindow):
         half-typed address - "https:/", before the second slash - land as a
         headline for as long as it took to type the next character.
         """
+        model = pool if pool is not None else self.model
         # The box can be committed by the switch that replaces its newspad, and
         # arrive after the clipping it belonged to has left the window.
-        if self.model.row_for(clip_id) is None:
+        if model.row_for(clip_id) is None:
             return
-        clip = self.model.by_id(clip_id)
+        clip = model.by_id(clip_id)
+        stack = self.stack_for(model)
 
         # A web address typed into the headline box is an address, whatever box
         # it was typed into. Screenshots arrive with no caption and no link, so
@@ -2475,12 +3146,12 @@ class MainWindow(QMainWindow):
         typed = (text or "").strip()
         if typed and looks_like_url(typed):
             if typed != clip.url.strip():
-                self.undo_stack.push(commands.EditUrl(self.model, clip_id, typed))
+                stack.push(commands.EditUrl(model, clip_id, typed))
                 self._flash("That looks like a web address, so it has gone in "
                             "the link box — it prints under the picture.", "info")
             if clip.label.strip():
                 # and it must not stay in the headline as well
-                self.undo_stack.push(commands.EditLabel(self.model, clip_id, ""))
+                stack.push(commands.EditLabel(model, clip_id, ""))
             # The boxes follow the text. Opening the headline box on an unnamed
             # clipping had switched that box on, and nothing switched it off
             # when what was typed into it turned out to be an address - so the
@@ -2490,48 +3161,71 @@ class MainWindow(QMainWindow):
             if not clip.effective_label.strip():
                 clip.show_title_box = False
             clip.show_url_box = True
-            self.model.refresh_clip(clip_id)
-            self.list.refresh_height()
+            model.refresh_clip(clip_id)
+            self._list_for(model).refresh_height()
             return
 
         if text == clip.effective_label:
             return
-        self.undo_stack.push(commands.EditLabel(self.model, clip_id, text))
+        stack.push(commands.EditLabel(model, clip_id, text))
 
-    def _on_url_edited(self, clip_id: int, text: str) -> None:
+    def _on_url_edited(self, clip_id: int, text: str, pool=None) -> None:
         """The address, which prints under the picture as a working link."""
-        if self.model.row_for(clip_id) is None:
+        model = pool if pool is not None else self.model
+        if model.row_for(clip_id) is None:
             return
-        clip = self.model.by_id(clip_id)
+        clip = model.by_id(clip_id)
         if text.strip() == clip.url.strip():
             return
-        self.undo_stack.push(
-            commands.EditUrl(self.model, clip_id, text.strip()))
+        self.stack_for(model).push(
+            commands.EditUrl(model, clip_id, text.strip()))
 
-    def _on_reorder(self, ids: list[int], target: int) -> None:
-        rows = commands.move_to(self.model, ids, target)
-        self.undo_stack.push(
+    def _on_reorder(self, ids: list[int], target: int, pool=None) -> None:
+        model = pool if pool is not None else self.model
+        if pool is not None:
+            # A drop on a category's list: only its own clippings, and never
+            # while a filter is on - what is on screen is not the real order.
+            ids = [i for i in ids if model.row_for(i) is not None]
+            if not ids or self._lens_holds(model):
+                return
+        # ``target`` is a place in the whole pool, as the list works it out;
+        # in a category the helper turns it into a place in the category.
+        rows = commands.move_to(model, ids, target)
+        self.stack_for(model).push(
             commands.Reorder(
-                self.model, rows,
+                model, rows,
                 f"{len(ids)} clippings reordered" if len(ids) > 1
                 else "Clipping reordered",
             )
         )
         self._flash("Moved — Ctrl+Z puts it back.", "info")
 
-    def _on_selection_toggled(self, clip_id: int, additive: bool, ranged: bool) -> None:
-        model = self.model
-        if ranged and self._last_clicked_id is not None:
-            model.select_range(self._last_clicked_id, clip_id)
+    def _on_selection_toggled(self, clip_id: int, additive: bool, ranged: bool,
+                              pool=None) -> None:
+        model = pool if pool is not None else self.model
+        # Each list keeps its own end of a shift-click run.
+        board = model is getattr(self, "board_model", None)
+        if board and model.row_for(clip_id) is None:
+            return
+        last = self._board_last_clicked_id if board else self._last_clicked_id
+        if ranged and last is not None:
+            model.select_range(last, clip_id)
         elif additive:
             model.set_selected([clip_id], not model.is_selected(clip_id))
         else:
             model.select_only([clip_id])
-        self._last_clicked_id = clip_id
+        if board:
+            self._board_last_clicked_id = clip_id
+        else:
+            self._last_clicked_id = clip_id
 
     # -------------------------------------------------------------- batch
-    def _selected_ids(self) -> list[int]:
-        return [r.id for r in self.model.rows if r.id in self.model.selected]
+    def _selected_ids(self, pool=None) -> list[int]:
+        """The ticked clippings of a list, in the order it shows them - by
+        default the list the navy bar acts on (see _list_pool)."""
+        if pool is None:
+            pool = self._list_pool() or self.model
+        return [r.id for r in pool.scoped_rows() if r.id in pool.selected]
 
     def _lens_holds(self, model=None) -> bool:
         """True when a filter or an arrangement is on, so nothing may be moved.
@@ -2547,10 +3241,11 @@ class MainWindow(QMainWindow):
                     "what you see is not the order they are really in.", "bad")
         return True
 
-    def _put_in_english(self, ids: list, summarise: bool = False) -> list:
+    def _put_in_english(self, ids: list, summarise: bool = False, pool=None) -> list:
         """Each card's Hindi into English, one undo step per card - or one
         for the lot when several are done together. Returns the lines said."""
-        model = self.model
+        model = pool if pool is not None else self.model
+        stack = self.stack_for(model)
         plans = []
         for clip_id in ids:
             if model.row_for(clip_id) is None:
@@ -2559,8 +3254,9 @@ class MainWindow(QMainWindow):
             plans.append((clip_id, plan))
         doing = [(clip_id, plan) for clip_id, plan in plans if plan.changes]
         # One line per card that had Hindi on it - done or left alone, and
-        # why - in list order. A card with no Hindi is not a line.
-        lines = [f"No. {model.position_of(clip_id) + 1}: {plan.said}."
+        # why - in list order. A card with no Hindi is not a line. Numbered as
+        # the list numbers it: in a category of the board, its place there.
+        lines = [f"No. {model.number_of(clip_id)}: {plan.said}."
                  for clip_id, plan in plans if not plan.nothing]
         if not doing:
             self._flash("Nothing on that card is in Hindi." if len(ids) == 1
@@ -2568,20 +3264,20 @@ class MainWindow(QMainWindow):
                         "info")
             return lines
         if len(doing) > 1:
-            self.undo_stack.beginMacro(f"{len(doing)} cards put in English")
+            stack.beginMacro(f"{len(doing)} cards put in English")
         try:
             for clip_id, plan in doing:
-                self.undo_stack.push(commands.PutInEnglish(
+                stack.push(commands.PutInEnglish(
                     model, clip_id,
                     {field: new for field, (_old, new) in plan.changes.items()}))
         finally:
             if len(doing) > 1:
-                self.undo_stack.endMacro()
+                stack.endMacro()
         self._refresh_filter_choices()
-        self.list.viewport().update()
+        self._list_for(model).viewport().update()
         flagged = sum(1 for _i, plan in doing if plan.flagged)
         said = (f"Put {len(doing)} card{'s' if len(doing) != 1 else ''} in English"
-                + (f" \u2014 {flagged} spelt out by rule, flagged for a check"
+                + (f" — {flagged} spelt out by rule, flagged for a check"
                    if flagged else "") + ". Ctrl+Z puts the Hindi back.")
         self._flash(said, "good")
         if summarise:
@@ -2589,10 +3285,13 @@ class MainWindow(QMainWindow):
             show_summary(self, lines, said)
         return lines
 
-    def _put_all_in_english(self) -> None:
-        ids = [row.id for row in self.model.rows
+    def _put_all_in_english(self, pool=None) -> None:
+        # Every card of the list: in a category of the board, that category's
+        # and nobody else's.
+        model = pool if pool is not None else self.model
+        ids = [row.id for row in model.scoped_rows()
                if row.clip is not None and copied.needs_english(row.clip)]
-        self._put_in_english(ids, summarise=True)
+        self._put_in_english(ids, summarise=True, pool=pool)
 
     def _sync_english_button(self) -> None:
         button = getattr(self, "english_btn", None)
@@ -2600,26 +3299,35 @@ class MainWindow(QMainWindow):
             button.setVisible(self.mode == "standard" and any(
                 row.clip is not None and copied.needs_english(row.clip)
                 for row in self.model.rows))
+        board_button = getattr(self, "board_english", None)
+        if board_button is not None:
+            pool = self.board_model
+            board_button.setVisible(pool.scope is not None and any(
+                row.clip is not None and copied.needs_english(row.clip)
+                for row in pool.scoped_rows()))
 
     def _batch_move(self, where: str) -> None:
-        ids = self._selected_ids()
-        if not ids or self.mode != "standard":
+        pool = self._list_pool()
+        ids = self._selected_ids(pool) if pool is not None else []
+        if not ids or pool is None:
             return
-        if self._lens_holds(self.model):
+        if self._lens_holds(pool):
             return
-        rows = commands.move_relative(self.model, ids, where)
-        self.undo_stack.push(
-            commands.Reorder(self.model, rows, f"{len(ids)} clippings moved"
+        rows = commands.move_relative(pool, ids, where)
+        self.stack_for(pool).push(
+            commands.Reorder(pool, rows, f"{len(ids)} clippings moved"
                              if len(ids) != 1 else "Clipping moved")
         )
 
-    def _all_excluded(self, ids: list) -> bool:
-        return bool(ids) and not any(self.model.by_id(i).include for i in ids)
+    def _all_excluded(self, ids: list, pool=None) -> bool:
+        pool = pool if pool is not None else (self._list_pool() or self.model)
+        held = [i for i in ids if pool.row_for(i) is not None]
+        return bool(held) and not any(pool.by_id(i).include for i in held)
 
     def _batch_exclude(self) -> None:
         self._toggle_included(self._selected_ids())
 
-    def _toggle_included(self, ids: list) -> None:
+    def _toggle_included(self, ids: list, pool=None) -> None:
         """Take these clippings out of the report - or, when every one of them
         is out already, put them all back. The button and the menu say which.
 
@@ -2629,13 +3337,19 @@ class MainWindow(QMainWindow):
         pressed a button meant that for the one among them they had not
         noticed was out.
         """
-        if not ids or self.mode != "standard":
-            return              # the bar and the list menu are the report's
-        if self._all_excluded(ids):
-            self.undo_stack.push(commands.SetIncluded(self.model, ids, True))
+        listed = self._list_pool()
+        pool = pool if pool is not None else listed
+        if not ids or pool is None or pool is not listed:
+            return              # the bar and the list menu act on the list on show
+        ids = [i for i in ids if pool.row_for(i) is not None]
+        if not ids:
             return
-        going = [i for i in ids if self.model.by_id(i).include]
-        self.undo_stack.push(commands.SetIncluded(self.model, going, False))
+        stack = self.stack_for(pool)
+        if self._all_excluded(ids, pool):
+            stack.push(commands.SetIncluded(pool, ids, True))
+            return
+        going = [i for i in ids if pool.by_id(i).include]
+        stack.push(commands.SetIncluded(pool, going, False))
         if len(going) != len(ids):
             out = len(ids) - len(going)
             self._flash(
@@ -2644,7 +3358,8 @@ class MainWindow(QMainWindow):
                 "info")
 
     def _sync_exclude_button(self) -> None:
-        back = self._all_excluded(self._selected_ids())
+        pool = self._list_pool() or self.model
+        back = self._all_excluded(self._selected_ids(pool), pool)
         self.batch_exclude.setText("Include" if back else "Exclude")
         self.batch_exclude.setToolTip(
             "Put these back into the report" if back else
@@ -2655,19 +3370,19 @@ class MainWindow(QMainWindow):
         return text if len(text) <= most else (
             text[:most - 20].rstrip() + " … " + text[-17:].lstrip())
 
-    def _move_line(self, run, ids: list, part: str, number_it: bool):
+    def _move_line(self, run, ids: list, part: str, number_it: bool, pool=None):
         """One file's line in the Move to list: (words, can it be chosen, tip).
 
         The file's own header words on the left - '&' doubled, or Qt would take
         it for a keyboard shortcut and swallow it - and on the right, after a
         tab, how many it holds and anything that stops a move there.
         """
-        model = self.model
+        model = pool if pool is not None else self.model
         name = self._elide_middle(run.title, 56).replace("&", "&&") + part
         count = f"{run.count} clip" + ("s" if run.count != 1 else "")
         if number_it:
-            first = model.position_of(run.rows[0].id) + 1
-            last = model.position_of(run.rows[-1].id) + 1
+            first = model.number_of(run.rows[0].id)
+            last = model.number_of(run.rows[-1].id)
             count += f" · No. {first}–{last}" if last != first else f" · No. {first}"
         inside = [i for i in ids if i in set(run.row_ids)]
         tip = run.title
@@ -2688,24 +3403,59 @@ class MainWindow(QMainWindow):
             count += f" · {len(inside)} of the {len(ids)} already here"
         return f"{name}\t{count}", True, tip
 
-    def _fill_move_menu(self, menu: QMenu, ids: list) -> None:
+    def _fill_category_actions(self, menu: QMenu, ids: list) -> None:
+        """The board's other three categories, for clippings of the one opened
+        out: the list's way of doing what dragging a card to another column
+        does, since the other columns are not on screen to drag to. (How many
+        ticked clippings a filter hides is said once, at the top of the
+        right-click menu, since every entry there leaves them alone.)"""
+        scope = self.board_model.scope
+        menu.addAction("Another category:").setEnabled(False)
+        for column in sentiment.COLUMNS:
+            if scope is not None and column is scope.column:
+                continue
+            label = theme.SENTIMENT_STYLES[column.value]["label"]
+            action = menu.addAction(label)
+            action.setEnabled(bool(ids))
+            action.setToolTip(f"File these under {label}. They leave this list; "
+                              "Ctrl+Z brings them back.")
+            action.triggered.connect(
+                lambda _checked=False, value=column.value, chosen=list(ids):
+                self._assign_sentiment(chosen, value))
+
+    def _fill_move_menu(self, menu: QMenu, ids: list, pool=None,
+                        categories: bool = True) -> None:
         """The file groups these clippings can be moved into, as they are now.
 
         What the earlier AI Studio version called its categories: every file in
         the list, and "Clipboard images" for everything added by hand, in list
         order. Filled as the menu opens, so it is always the list as it stands.
+
+        For a category of the board opened out as a list, the other three
+        categories come first (unless ``categories`` is False, for a menu that
+        offers them elsewhere) and then that category's own files.
         """
         menu.clear()
-        model = self.model
+        model = pool if pool is not None else (self._list_pool() or self.model)
         if model.lens.busy:
             menu.addAction("Clear the filter first — while one is on, what you "
                            "see is not the real order").setEnabled(False)
             return
-        ids = [r.id for r in model.rows if r.id in set(ids)]
+        wanted = set(ids)
+        ids = [r.id for r in model.scoped_rows() if r.id in wanted]
         n = len(ids)
         menu.addAction(f"Move {n} clipping{'s' if n != 1 else ''} to:").setEnabled(False)
         menu.addSeparator()
         runs = model.file_runs()
+        if model is self.board_model:
+            if categories:
+                self._fill_category_actions(menu, ids)
+                if len(runs) <= 1:
+                    return
+                menu.addSeparator()
+            column = model.scope.column.value if model.scope is not None else ""
+            menu.addAction(f"Another file in {column}:" if column
+                           else "Another file:").setEnabled(False)
         parts: dict = {}
         shown: dict = {}
         for run in runs:
@@ -2719,28 +3469,29 @@ class MainWindow(QMainWindow):
             part = f" — part {run.occurrence + 1}" if parts[run.key] > 1 else ""
             number_it = (parts[run.key] > 1
                          or shown[self._elide_middle(run.title, 56)] > 1)
-            text, enabled, tip = self._move_line(run, ids, part, number_it)
+            text, enabled, tip = self._move_line(run, ids, part, number_it, model)
             headed = headed or text.split("\t")[-1].startswith("would move")
             action = menu.addAction(text)
             action.setEnabled(enabled and n > 0)
             action.setToolTip(tip)
             action.triggered.connect(
-                lambda _checked=False, ident=run.ident, first=run.rows[0].id:
-                self._move_into(ids, ident, first))
+                lambda _checked=False, ident=run.ident, first=run.rows[0].id,
+                into=model: self._move_into(ids, ident, first, pool=into))
         if headed:
             menu.addSeparator()
             menu.addAction("Greyed: moving them there would change where a "
                            "heading prints in the report.").setEnabled(False)
 
-    def _move_into(self, ids: list, ident: str, first_id: int = -1) -> None:
+    def _move_into(self, ids: list, ident: str, first_id: int = -1, pool=None) -> None:
         """File these clippings under another file's group, at its end.
 
         One undo step (MoveIntoFile). Refused, and said so, when it would
         change where any section heading prints - see plan_move_into.
         """
-        model = self.model
-        if self.mode != "standard":
-            return              # the bar and its menu belong to the press report
+        listed = self._list_pool()
+        model = pool if pool is not None else listed
+        if model is None or model is not listed:
+            return              # the bar and its menu belong to the list on show
         if self._lens_holds(model):
             return
         run = next((g for g in model.file_runs() if g.ident == ident), None)
@@ -2765,22 +3516,22 @@ class MainWindow(QMainWindow):
         title = self._elide_middle(run.title, 40)
         text = (f"{n} clippings moved to {title}" if n != 1
                 else f"Clipping moved to {title}")
-        self.undo_stack.push(commands.MoveIntoFile(model, plan, text))
+        self.stack_for(model).push(commands.MoveIntoFile(model, plan, text))
         # After the push: the push moves the undo index, which hides the note.
-        said = self._move_message(plan)
+        said = self._move_message(plan, model)
         self._flash(said, "good")
         self._show_move_note(said)
 
-    def _move_message(self, plan) -> str:
-        model = self.model
+    def _move_message(self, plan, pool=None) -> str:
+        model = pool if pool is not None else self.model
         n = len(plan.moving)
-        places = [model.position_of(i) + 1 for i in plan.moving]
+        places = [model.number_of(i) for i in plan.moving]
         where = (f"No. {min(places)}–{max(places)}" if n > 1
                  else f"No. {places[0]}")
         said = (f"Moved {n} into {self._elide_middle(plan.run_title, 48)} — now "
                 f"{where}. Ctrl+Z puts {'them' if n != 1 else 'it'} back.")
         for _from_id, to_id, words in plan.handoffs:
-            said += f" {words} now prints over No. {model.position_of(to_id) + 1}."
+            said += f" {words} now prints over No. {model.number_of(to_id)}."
         if plan.now_under and plan.now_under not in plan.was_under:
             said += f" They now print under {plan.now_under}." if n != 1 else \
                 f" It now prints under {plan.now_under}."
@@ -2808,75 +3559,132 @@ class MainWindow(QMainWindow):
             note.hide()
 
     def _batch_delete(self) -> None:
-        if self.mode != "standard":
-            return          # the batch bar belongs to the press report
-        ids = self._selected_ids()
+        pool = self._list_pool()
+        if pool is None:
+            return          # the batch bar belongs to the list on show
+        self._delete_many(self._selected_ids(pool), pool)
+
+    def _delete_many(self, ids: list, pool) -> None:
+        """Several clippings out of a list in one step, once asked: the navy
+        bar's ticks, or the clippings a category's right-click menu names -
+        under a filter, the ticked ones on screen and not those it hides."""
+        if pool is None or pool is not self._list_pool():
+            return          # the bar and the list menu act on the list on show
+        ids = [i for i in ids if pool.row_for(i) is not None]
         if not ids:
             return
         if self._confirm_delete(len(ids)):
-            self.undo_stack.push(commands.RemoveClips(self.model, ids))
+            self.stack_for(pool).push(commands.RemoveClips(pool, ids))
             self._flash(f"{len(ids)} deleted — Ctrl+Z brings them back.", "info")
 
     def _merge_selected(self) -> None:
-        ids = self._selected_ids()
-        if self.mode != "standard":
+        pool = self._list_pool()
+        if pool is None:
             return
+        ids = self._selected_ids(pool)
         if len(ids) < 2:
             self._flash("Pick at least two clippings to merge.", "info")
             return
-        self.undo_stack.push(commands.Merge(self.model, ids))
+        self.stack_for(pool).push(commands.Merge(pool, ids))
         self._flash(f"{len(ids)} merged into one — Ctrl+Z undoes it.", "good")
 
-    def _bulk_field(self, field: str) -> None:
-        ids = self._selected_ids()
-        if not ids or self.mode != "standard":
+    def _bulk_field(self, field: str, ids: list | None = None) -> None:
+        """Set newspaper or Set edition on the ticked clippings - or, from a
+        category's right-click menu, on ``ids``: the row clicked when nothing
+        is ticked."""
+        pool = self._list_pool()
+        if pool is None:
+            return
+        if ids is None or pool is not self.board_model:
+            ids = self._selected_ids(pool)
+        else:
+            ids = [i for i in ids if pool.row_for(i) is not None]
+        if not ids:
             return
         options = (
             self.name_index.newspaper_names if field == "newspaper"
             else self.name_index.edition_names
         )
-        current = getattr(self.model.by_id(ids[0]), field)
+        current = getattr(pool.by_id(ids[0]), field)
+        if pool is self.board_model:
+            # open(), never exec(): nothing the board shows may hold up the
+            # window. Modal to the window, so the ticks cannot change under
+            # it; the clippings are fixed now and applied when it is answered.
+            box = QInputDialog(self)
+            box.setWindowTitle(f"Set {field}")
+            box.setLabelText(f"{field.title()} for {len(ids)} clipping(s):")
+            box.setComboBoxItems(options)
+            box.setComboBoxEditable(True)
+            box.setTextValue(current if current in options
+                             else (options[0] if options else ""))
+            box.textValueSelected.connect(
+                lambda value, chosen=list(ids):
+                self._set_field_on(pool, chosen, field, value))
+            box.finished.connect(box.deleteLater)
+            box.open()
+            return
         value, ok = QInputDialog.getItem(
             self, f"Set {field}", f"{field.title()} for {len(ids)} clipping(s):",
             options, options.index(current) if current in options else 0, True,
         )
         if not ok:
             return
+        self._set_field_on(pool, ids, field, value)
+
+    def _set_field_on(self, pool, ids: list, field: str, value: str) -> None:
+        """One step naming every one of these clippings' newspaper or edition.
+        Any deleted while the picker was open is left out."""
+        ids = [i for i in ids if pool.row_for(i) is not None]
+        if not ids:
+            return
         value = value.strip()
         if field == "newspaper":
             self.name_index.add_newspaper(value)
         else:
             self.name_index.add_edition(value)
-        self.undo_stack.push(
-            commands.SetFieldOnMany(self.model, ids, field, value)
+        self.stack_for(pool).push(
+            commands.SetFieldOnMany(pool, ids, field, value)
         )
 
     def _select_all(self) -> None:
-        if self.mode != "standard":
-            return          # the batch bar belongs to the press report
+        pool = self._list_pool()
+        if pool is None:
+            return          # the batch bar belongs to the list on show
         # Everything ON SCREEN. With a filter on, "all" cannot mean the
         # clippings it is hiding: somebody who has narrowed the list to the
         # regional papers, pressed this and then pressed Delete would lose the
         # whole morning, and there would have been nothing on screen to warn
         # them. So it selects what they can see, and says how many that was.
-        shown = self.model.visible_rows()
-        self.model.select_only([r.id for r in shown])
-        if self.model.lens.busy:
+        # In a category of the board, "all" is that category's.
+        shown = pool.visible_rows()
+        pool.select_only([r.id for r in shown])
+        if pool.lens.busy:
             self._flash(f"Selected the {len(shown)} clipping(s) on screen. "
-                        f"The other {len(self.model.rows) - len(shown)} are "
+                        f"The other {len(pool.scoped_rows()) - len(shown)} are "
                         f"hidden by the filter and were not touched.", "info")
 
-    def _toggle_select_all(self) -> None:
-        if self.mode != "standard":
-            return          # the batch bar belongs to the press report
-        shown = self.model.visible_rows()
-        if shown and len(self.model.selected) == len(shown):
-            self.model.clear_selection()
+    def _toggle_select_all(self, pool=None) -> None:
+        listed = self._list_pool()
+        pool = pool if pool is not None else listed
+        if pool is None or pool is not listed:
+            return          # the batch bar belongs to the list on show
+        shown = pool.visible_rows()
+        if shown and len(pool.selected) == len(shown):
+            pool.clear_selection()
         else:
             self._select_all()
 
     def _clear_all(self) -> None:
         """Clear the interface on show, not always the press report."""
+        if self.mode == "sentiment" and getattr(self, "board", None) is not None:
+            # Clear all is on the press report's card, which is not on show
+            # while the board is, so this is only ever reached by a call. It
+            # must not then empty the board's whole pool - every division,
+            # behind a box saying "from the list" over a category of four. The
+            # board's own clear answers instead: what the board is showing,
+            # asked the way the board asks.
+            self._clear_division(self.board.active)
+            return
         target = self.pool()
         if not target.rows:
             return
@@ -2931,11 +3739,17 @@ class MainWindow(QMainWindow):
             # taken to the review.
             self.preview.source_of = self._source_of
             self.preview.jumpRequested.connect(self.open_preview)
-            self.preview.reviewRequested.connect(self.review_duplicates)
+            # The review of the list the previewed clipping is in.
+            self.preview.reviewRequested.connect(
+                lambda: self.review_duplicates(pool=self._preview_pool()))
         # Set before the row is shown: it decides whether the Section control
         # is the heading picker or the board's sentiment control, and showing
         # the row is what reads it.
         self.preview.for_board = model is getattr(self, "board_model", None)
+        # And the pool it is in: the preview was made once, for whichever
+        # opened it first, and the clipping beside a repeat - and the numbers
+        # the two are called by - are looked up in this one.
+        self.preview.model = model
         at, walk = self._preview_place(clip_id)
         # The counter must count what is on screen. With a filter on it used to
         # read "3 / 40" while the list showed nine.
@@ -2986,6 +3800,9 @@ class MainWindow(QMainWindow):
         # removed or restyled has to reach both or the card starts promising a
         # heading the report will not print.
         self.list.viewport().update()
+        board = getattr(self, "board", None)
+        if board is not None:
+            board.focus_list.viewport().update()
 
     def _preview_field(self, clip_id: int, field: str, value) -> None:
         if field == "section":
@@ -3029,10 +3846,36 @@ class MainWindow(QMainWindow):
     def _preview_delete(self, clip_id: int) -> None:
         if not self._confirm_delete(1):
             return
-        position = self._preview_pool().position_of(clip_id)
-        self._preview_stack().push(commands.RemoveClips(self._preview_pool(), [clip_id]))
-        if self._preview_pool().rows:
-            following = self._preview_pool().rows[min(position, len(self._preview_pool().rows) - 1)]
+        pool = self._preview_pool()
+        position = pool.position_of(clip_id)
+        if getattr(pool, "scope", None) is None:
+            # The press report, and a card's preview over four columns: the
+            # pool's own next row, filter or not, as it has always been.
+            self._preview_stack().push(commands.RemoveClips(pool, [clip_id]))
+            if pool.rows:
+                following = pool.rows[min(position, len(pool.rows) - 1)]
+                self._refresh_preview(following.id)
+            elif self.preview:
+                self.preview.close()
+            return
+        # A category of the board opened out as a list: the next clipping in
+        # what the arrows walk, which is that category's. The pool's next row
+        # is as likely another category's, and the preview would then go on
+        # editing a clipping that is not on screen.
+        at, _walk = self._preview_place(clip_id)
+        self._preview_stack().push(commands.RemoveClips(pool, [clip_id]))
+        walk = self._preview_walk()
+        following = None
+        if walk and at is not None:
+            following = walk[min(at, len(walk) - 1)]
+        elif walk:
+            # It had already left the category - its Sentiment was changed
+            # here - so it had no place in the walk. The first of the
+            # category's clippings that stood after it, else the last.
+            where = {row.id: index for index, row in enumerate(pool.rows)}
+            following = next((row for row in walk
+                              if where.get(row.id, -1) >= position), walk[-1])
+        if following is not None:
             self._refresh_preview(following.id)
         elif self.preview:
             self.preview.close()
@@ -3053,7 +3896,7 @@ class MainWindow(QMainWindow):
             pool, clip_id, crop, "Trim put back" if whole else "Trimmed"))
         if pool is getattr(self, "board_model", None):
             self._refresh_board()
-        self.list.refresh_height()
+        self._list_for(pool).refresh_height()
         self._refresh_preview(clip_id)
         self._flash("Trim put back — the whole picture again." if whole else
                     "Trimmed — Ctrl+Z puts the edges back.", "good")
@@ -3079,6 +3922,11 @@ class MainWindow(QMainWindow):
         """
         pool = self._preview_pool()
         shown = pool.visible_rows() if hasattr(pool, "visible_rows") else None
+        if shown is not None and getattr(pool, "scope", None) is not None:
+            # A category opened out as a list walks that category alone, even
+            # when its last clipping has just left it: the whole board's pool
+            # is not what was on screen.
+            return list(shown)
         return list(shown) if shown else list(pool.rows)
 
     def _preview_place(self, row_id: int):
@@ -3132,63 +3980,147 @@ class MainWindow(QMainWindow):
             "good",
         )
 
-    def _context_menu(self, point: QPoint) -> None:
-        index = self.list.indexAt(point)
+    def _context_menu(self, point: QPoint, pool=None) -> None:
+        model = pool if pool is not None else self.model
+        on_board = model is self.board_model
+        view = self._list_for(model)
+        index = view.indexAt(point)
         if not index.isValid():
             return
         entry = index.data(Qt.UserRole)
         if entry is None or entry.row is None:
             return
         clip_id = entry.row.id
-        ids = self._selected_ids() or [clip_id]
+        ticked = self._selected_ids(model)
+        ids = ticked or [clip_id]
+        hidden = 0
+        if on_board and model.lens.busy:
+            # Under a filter a category's menu acts on what is on screen: the
+            # ticked rows showing, or the row clicked when none of those is
+            # ticked - ticks made before the filter went on stay as they are,
+            # as Select all leaves them. Worked out once, for every entry.
+            # Only Move to category used to follow the screen, so Exclude,
+            # Set newspaper, Merge and Delete in the same menu took ticks the
+            # filter hid while Rotate took the row clicked: one menu, two
+            # different clippings, and no label said which.
+            shown = {row.id for row in model.visible_rows()}
+            on_screen = [i for i in ticked if i in shown]
+            hidden = len(ticked) - len(on_screen)
+            ids = on_screen or [clip_id]
         many = len(ids) > 1
-        clip = self.model.by_id(ids[0])
+        clip = model.by_id(ids[0])
+        # Whom a category's entries act on, in their words. "The ticked one"
+        # when a single tick elsewhere is what they take rather than the row
+        # under the mouse, which Open full size, Split and Rotate still act on.
+        whom = ""
+        if on_board:
+            whom = (f" these {len(ids)}" if many
+                    else " the ticked one" if ids[0] != clip_id else "")
 
         menu = QMenu(self)
-        menu.addAction(QAction("Open full size", self,
+        # Every entry belongs to the menu, not the window, so it goes when the
+        # menu does: parented to the window, each right-click on a category's
+        # list left seven of them behind for good.
+        if hidden:
+            # Said once, over the lot, since nothing in the menu touches them.
+            note = QAction(
+                f"{hidden} more ticked {'are' if hidden != 1 else 'is'} hidden by "
+                f"the filter and left as {'they are' if hidden != 1 else 'it is'}",
+                menu)
+            note.setEnabled(False)
+            menu.addAction(note)
+            menu.addSeparator()
+        menu.addAction(QAction("Open full size", menu,
                                triggered=lambda: self.open_preview(clip_id)))
         menu.addSeparator()
-        # The two interfaces keep separate clippings, so there has to be a way
-        # to hand one over without importing it twice.
-        send = (f"Send these {len(ids)} to the sentiment board" if many
-                else "Send to the sentiment board")
-        menu.addAction(QAction(send, self,
-                               triggered=lambda: self._send_to_board(ids)))
-        menu.addSeparator()
-        # Apart from the send above it, so a slip of the mouse cannot take
-        # clippings out of the report when they were only meant to change file.
-        if len(self.model.file_runs()) > 1:
-            move = menu.addMenu("Move to")
-            move.setToolTipsVisible(True)
-            self._fill_move_menu(move, ids)
+        if on_board:
+            # A category's list has no press report to send to - its clippings
+            # are the board's. What it has instead is the other three
+            # categories, which dragging a card to another column reached, and
+            # the other columns are not on screen to drag to.
+            categories = menu.addMenu(f"Move{whom} to category")
+            categories.setToolTipsVisible(True)
+            self._fill_category_actions(categories, ids)
+            menu.addSeparator()
+            if len(model.file_runs()) > 1:
+                move = menu.addMenu("Move to")
+                move.setToolTipsVisible(True)
+                self._fill_move_menu(move, ids, pool=model, categories=False)
+        else:
+            # The two interfaces keep separate clippings, so there has to be a
+            # way to hand one over without importing it twice.
+            send = (f"Send these {len(ids)} to the sentiment board" if many
+                    else "Send to the sentiment board")
+            menu.addAction(QAction(send, menu,
+                                   triggered=lambda: self._send_to_board(ids)))
+            menu.addSeparator()
+            # Apart from the send above it, so a slip of the mouse cannot take
+            # clippings out of the report when they were only meant to change
+            # file.
+            if len(self.model.file_runs()) > 1:
+                move = menu.addMenu("Move to")
+                move.setToolTipsVisible(True)
+                self._fill_move_menu(move, ids)
         menu.addSeparator()
         # The same rule as the bar's button. This used to push "included" for
         # any group of clippings, so "Exclude these 3" put them back in.
-        back = self._all_excluded(ids)
+        back = self._all_excluded(ids, model)
         if many:
             label = (f"Include these {len(ids)} again" if back
                      else f"Exclude these {len(ids)}")
         else:
             label = "Include again" if back else "Exclude"
-        menu.addAction(QAction(label, self,
-                               triggered=lambda: self._toggle_included(ids)))
-        menu.addAction(QAction("Set newspaper…", self,
-                               triggered=lambda: self._bulk_field("newspaper")))
-        menu.addAction(QAction("Set edition…", self,
-                               triggered=lambda: self._bulk_field("edition")))
+        if whom == " the ticked one":
+            label = "Include the ticked one again" if back else "Exclude the ticked one"
+        menu.addAction(QAction(label, menu,
+                               triggered=lambda: self._toggle_included(ids, pool=pool)))
+        # In a category, for the clippings worked out above; the press
+        # report's reads its ticks, as ever.
+        menu.addAction(QAction(f"Set newspaper for{whom}…" if whom else "Set newspaper…",
+                               menu, triggered=lambda: self._bulk_field(
+                                   "newspaper", ids if on_board else None)))
+        menu.addAction(QAction(f"Set edition for{whom}…" if whom else "Set edition…",
+                               menu, triggered=lambda: self._bulk_field(
+                                   "edition", ids if on_board else None)))
         menu.addSeparator()
         if many:
-            menu.addAction(QAction(f"Merge these {len(ids)} into one", self,
-                                   triggered=self._merge_selected))
-        menu.addAction(QAction("Split in two", self,
-                               triggered=lambda: self._on_clip_action("split", clip_id)))
-        menu.addAction(QAction("Rotate 90°", self,
-                               triggered=lambda: self._on_clip_action("rotate", clip_id)))
+            merge = QAction(f"Merge these {len(ids)} into one", menu,
+                            triggered=self._merge_selected)
+            if on_board and model.lens.busy:
+                # Refused, as the row's merge pill is: under a filter or an
+                # arrangement the order on screen is not the order they would
+                # be joined in, and ticks the filter hides would go in too.
+                merge.setText(f"Merge these {len(ids)} into one "
+                              "(clear the filter first)")
+                merge.setEnabled(False)
+            menu.addAction(merge)
+        menu.addAction(QAction("Split in two", menu,
+                               triggered=lambda: self._on_clip_action(
+                                   "split", clip_id, pool=pool)))
+        menu.addAction(QAction("Rotate 90°", menu,
+                               triggered=lambda: self._on_clip_action(
+                                   "rotate", clip_id, pool=pool)))
         menu.addSeparator()
-        menu.addAction(QAction(f"Delete {len(ids)} clippings" if many
-                               else "Delete clipping", self,
-                               triggered=self._batch_delete if many
-                               else lambda: self._on_clip_action("delete", clip_id)))
+        if on_board:
+            # The same clippings as Exclude above it, never the ticks alone.
+            target = ids[0]
+            menu.addAction(QAction(
+                f"Delete {len(ids)} clippings" if many
+                else "Delete the ticked one" if target != clip_id
+                else "Delete clipping", menu,
+                triggered=(lambda: self._delete_many(ids, model)) if many
+                else lambda: self._on_clip_action("delete", target, pool=pool)))
+        else:
+            menu.addAction(QAction(f"Delete {len(ids)} clippings" if many
+                                   else "Delete clipping", menu,
+                                   triggered=self._batch_delete if many
+                                   else lambda: self._on_clip_action(
+                                       "delete", clip_id, pool=pool)))
+        if on_board:
+            # A popup, not exec(): nothing waits on the menu.
+            menu.setAttribute(Qt.WA_DeleteOnClose, True)
+            menu.popup(view.viewport().mapToGlobal(point))
+            return
         menu.exec(self.list.viewport().mapToGlobal(point))
 
     # -------------------------------------------------------------- chrome
@@ -3206,6 +4138,10 @@ class MainWindow(QMainWindow):
 
     def set_mode(self, mode: str) -> None:
         """Swap between the press report and the sentiment board."""
+        leaving_board = self.mode == "sentiment" and mode != "sentiment"
+        if leaving_board and getattr(self, "board", None) is not None:
+            # A headline half typed in a category's list is kept.
+            self.board.focus_list.commit_editor()
         self.mode = mode if mode in ("standard", "sentiment") else "standard"
         sentiment_mode = self.mode == "sentiment"
         self._hide_move_note()
@@ -3221,10 +4157,10 @@ class MainWindow(QMainWindow):
             button.setVisible(self.pool().clip_count > 0)
         self._place_floating()
         if sentiment_mode:
-            self.batch.hide()
             self._refresh_board()
-        else:
-            self._update_selection_ui()
+        # The navy bar follows the list on show: the report's ticks in the
+        # report, a category's in its list, and nothing over four columns.
+        self._update_selection_ui()
 
         self.mode_badge.setText(
             "Division sentiment" if sentiment_mode else "Daily newspad"
@@ -3243,6 +4179,7 @@ class MainWindow(QMainWindow):
     def _refresh_board(self) -> None:
         self.board.set_rows(self.board_model.rows)
         self.board.set_selection(self.board_model.selected)
+        self._sync_board_scope()
 
     def _on_board_title(self, clip_id: int, text: str) -> None:
         """A headline typed straight onto a card.
@@ -3290,23 +4227,44 @@ class MainWindow(QMainWindow):
             section = Section(section_value)
         except ValueError:
             return
-        moving = [i for i in clip_ids if self.board_model.by_id(i).section != section]
+        moving = [i for i in clip_ids if self.board_model.row_for(i) is not None
+                  and self.board_model.by_id(i).section != section]
         if not moving:
             return
-        self.board_undo.push(
-            commands.SetFieldOnMany(self.board_model, moving, "section", section)
-        )
+        style = theme.SENTIMENT_STYLES[section.value]
         # a clipping filed under a division stays with it; an unassigned one adopts
         # whichever division is being worked on
+        unassigned = []
         if self.board.active and self.board.active != "__all__":
             unassigned = [i for i in moving if not self.board_model.by_id(i).division]
+        # One Ctrl+Z for the move, whichever way it was made. As two steps, the
+        # first Ctrl+Z took the division back and left the clipping in the
+        # category it was sent to - out of the list it came from, with nothing
+        # on screen to say it had not come back.
+        stack = self.board_undo
+        if unassigned:
+            stack.beginMacro(f"Moved {len(moving)} into {style['label']}")
+        try:
+            stack.push(
+                commands.SetFieldOnMany(self.board_model, moving, "section", section)
+            )
             if unassigned:
-                self.board_undo.push(
+                stack.push(
                     commands.SetFieldOnMany(
                         self.board_model, unassigned, "division", self.board.active
                     )
                 )
-        style = theme.SENTIMENT_STYLES[section.value]
+        finally:
+            if unassigned:
+                stack.endMacro()
+        # Gone from a category's list: a tick or a fold made there is not
+        # theirs in the category they went to.
+        ticked = [i for i in moving if i in self.board_model.selected]
+        if ticked:
+            self.board_model.set_selected(ticked, False)
+        self.board_model.collapsed_row_ids -= set(moving)
+        # A paper whose last clipping here has gone is no longer a choice.
+        self._refresh_filter_choices()
         self._flash(
             f"Moved {len(moving)} clipping"
             + ("s" if len(moving) != 1 else "")
@@ -3343,8 +4301,13 @@ class MainWindow(QMainWindow):
             self._pending_section = None
 
     def _update_counts(self) -> None:
+        if getattr(self, "_scope_changing", False):
+            return      # _sync_board_scope counts again once the scope is set
+        if self._sync_board_scope():
+            return      # it has just counted everything, under the new scope
         self._sync_fold_buttons()
         self._sync_english_button()
+        self._say_filter_counts()
         total = self.model.clip_count
         included = self.model.included_count
         self.count_pill.setText(f"{total} clip" + ("s" if total != 1 else ""))
@@ -3376,13 +4339,21 @@ class MainWindow(QMainWindow):
     def _update_selection_ui(self) -> None:
         if getattr(self, "board", None) is not None:
             self.board.set_selection(self.board_model.selected)
-        count = len(self.model.selected)
-        self.batch_count.setText(str(count))
-        self.clear_selection_btn.setVisible(count > 0)
-        self.batch_merge.setVisible(count >= 2)
+        # The bar acts on the list on show (see _list_pool): the report's
+        # ticks in the report, a category's ticks in its list on the board.
+        listed = self._list_pool()
+        source = listed if listed is not None else self.model
+        ticked = len(source.selected)
+        self.batch_count.setText(str(ticked))
+        self.batch_merge.setVisible(ticked >= 2)
         self._sync_exclude_button()
-        # Somewhere else to go only when there is more than one file.
-        self.batch_move_to.setVisible(count > 0 and len(self.model.file_runs()) > 1)
+        # Somewhere else to go only when there is more than one file - or,
+        # for a board category, always: the other three categories.
+        self.batch_move_to.setVisible(ticked > 0 and (
+            source is self.board_model or len(source.file_runs()) > 1))
+        self._sync_board_list_bar()
+        count = len(self.model.selected)
+        self.clear_selection_btn.setVisible(count > 0)
         self.select_all_btn.setText(
             "Deselect all"
             if count and count == self.model.clip_count
@@ -3398,16 +4369,36 @@ class MainWindow(QMainWindow):
                 "Hold Ctrl to pick several, Shift for a run, or drag the handle to "
                 "move a block anywhere"
             )
-        # The bar acts on the press report's ticks, so it is shown only there.
-        # On the board it used to come back whenever anything recounted, with
-        # an Exclude that changed clippings nobody could see.
-        if count and self.mode == "standard":
+        # Shown only over the list its ticks belong to. On the board's four
+        # columns it used to come back whenever anything recounted, with an
+        # Exclude that changed clippings nobody could see.
+        if ticked and listed is not None:
             self.batch.adjustSize()
             self.batch.show()
             self.batch.raise_()
             self._place_floating()
         else:
             self.batch.hide()
+            board = getattr(self, "board", None)
+            if board is not None:
+                board.set_foot_room(0)
+
+    def _sync_board_list_bar(self) -> None:
+        """Select all and its hint over a board category's list, from the
+        category's own ticks."""
+        button = getattr(self, "board_select_all", None)
+        if button is None:
+            return
+        pool = self.board_model
+        ticked = len(pool.selected)
+        shown = len(pool.visible_rows()) if pool.scope is not None else 0
+        button.setText("Deselect all" if ticked and ticked == shown else "Select all")
+        self.board_clear_selection.setVisible(ticked > 0)
+        self.board_select_hint.setText(
+            f"{ticked} selected — use the bar below, or drag any one of them "
+            f"to move the block" if ticked else
+            "Hold Ctrl to pick several, Shift for a run, or drag the handle to "
+            "move a block anywhere")
 
     def _after_undo_change(self) -> None:
         text = self.undo_stack.undoText()
@@ -3642,11 +4633,25 @@ class MainWindow(QMainWindow):
                if row.clip is not None and row.clip.uid in wanted]
         if not ids:
             return
-        where = code if code and code != "ALL" else "the board"
+        # The board holds sentiment.ALL_DIVISIONS while every division is on
+        # show. This compared with "ALL", which it never holds, so the question
+        # named the division "__all__".
+        where = (code if code and code != sentiment.ALL_DIVISIONS
+                 else "the board")
+        words = f"Remove {len(ids)} clipping(s) from {where}?"
+        focused = self._focused_section()
+        if focused is not None:
+            # With a category opened out, its list is the only one on show,
+            # and a count several times the length of it reads as a mistake.
+            # The button clears the division, so the question says the other
+            # categories go too.
+            listed = sum(1 for clip in showing
+                         if sentiment.shows(clip, focused, code))
+            words += (f"\n\nThat is every category in it, not only the "
+                      f"{listed} in {focused.value} on show.")
         answer = QMessageBox.question(
             self, "Clear this division",
-            f"Remove {len(ids)} clipping(s) from {where}?"
-            + chr(10) + chr(10) + "Ctrl+Z brings them back.",
+            words + "\n\nCtrl+Z brings them back.",
             QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
@@ -3807,7 +4812,142 @@ class MainWindow(QMainWindow):
             BurnedReportDialog.open_file(made[0].path)
 
     # ------------------------------------------------------ the same twice
-    def recheck_duplicates(self, force: bool = False) -> None:
+    def _is_board(self, pool) -> bool:
+        """Whether a pool handed to the duplicate check is the board's."""
+        return pool is not None and pool is getattr(self, "board_model", None)
+
+    def _duplicate_clips(self, pool=None) -> list:
+        """The clippings a duplicate check compares: the press report's, or
+        the category of the board opened out as a list - its clippings in the
+        division on show, and nothing else. None over four columns.
+
+        The category rather than the whole board, because the review deletes:
+        a pair with one side in a category not on screen would take away a
+        clipping nobody could see, which the list's every other action was
+        changed not to do.
+        """
+        if self._is_board(pool):
+            if pool.scope is None:
+                return []
+            return [row.clip for row in pool.scoped_rows() if row.clip is not None]
+        return [row.clip for row in self.model.rows if row.clip is not None]
+
+    def _recheck_board_duplicates(self, force: bool = False) -> None:
+        """Ask for the check over the category opened out on the board.
+
+        Only while one is: over four columns of cards there is no list to
+        badge and no review to offer, so nothing is read for them. On the same
+        terms as the report's - Check automatically, or asked for - and run
+        once, a moment later, on a timer of its own, so neither list's request
+        restarts the other's wait.
+        """
+        if not self._auto_duplicates and not force:
+            return
+        if getattr(self.board_model, "scope", None) is None:
+            return
+        if self._board_duplicate_timer is None:
+            self._board_duplicate_timer = QTimer(self)
+            self._board_duplicate_timer.setSingleShot(True)
+            self._board_duplicate_timer.timeout.connect(
+                lambda: self._run_duplicate_check(pool=self.board_model))
+        self._board_duplicate_timer.start(DUPLICATE_SETTLE_MS)
+
+    def _forget_board_duplicates(self) -> None:
+        """The board's pairs, suggestions, file marks and button, gone: they
+        were worked out over a category that is no longer the one on show.
+        The badges stay on the clippings, as the report's do across a restore,
+        until the next check over that category looks again."""
+        self._board_duplicate_pairs = []
+        self._board_duplicate_hints = []
+        pool = getattr(self, "board_model", None)
+        if pool is not None:
+            pool.duplicate_files = {}
+        button = getattr(self, "board_duplicates_btn", None)
+        if button is not None:
+            button.setVisible(False)
+
+    def _offer_board_marks(self) -> None:
+        """The pairs the opened category's clippings are already marked as,
+        offered again - the review button and the file marks - with nothing
+        compared and nothing read.
+
+        Forgetting the pairs on a category change left the badges, which stay
+        on the clippings as the report's do. A copy's preview then said it was
+        flagged, and "Compare in the review" said nothing was, until Check for
+        Duplicates was pressed again. These are exactly the pairs the badge
+        and the preview name, so the three agree. Suggestions are not remade
+        here; the next check makes them.
+        """
+        pool = getattr(self, "board_model", None)
+        if pool is None or pool.scope is None:
+            return
+        clips = self._duplicate_clips(pool)
+        try:
+            pairs = duplicates.marked_pairs(clips)
+            self._mark_duplicate_files(clips, pool=pool)
+        except Exception:  # noqa: BLE001 - never let this break the list
+            pairs = []
+        self._board_duplicate_pairs = pairs
+        self._board_duplicate_hints = []
+        button = getattr(self, "board_duplicates_btn", None)
+        if button is not None:
+            button.setVisible(bool(pairs))
+            if pairs:
+                button.setText(f"Preview and Delete Duplicates ({len(pairs)})")
+
+    def _board_pairs_on_show(self) -> tuple:
+        """(pairs, suggestions) of the open category whose two clippings are
+        both in its list now.
+
+        They were worked out when the check ran, and a history step since - a
+        Sentiment set in the preview, a delete - can have taken one side out of
+        the category. Offered anyway, the review opened on a clipping nobody
+        could see, deleted nothing when told to, and said "Duplicates: deleted
+        1." (D3 review). Kept whole and looked at each time rather than pruned,
+        so a Ctrl+Z bringing the clipping back offers the pair again.
+        """
+        pool = getattr(self, "board_model", None)
+        if (pool is None or pool.scope is None
+                or not (self._board_duplicate_pairs or self._board_duplicate_hints)):
+            return [], []
+        held = {row.clip.uid for row in pool.scoped_rows() if row.clip is not None}
+
+        def both(pair) -> bool:
+            return (getattr(pair.primary, "uid", None) in held
+                    and getattr(pair.copy, "uid", None) in held)
+
+        return ([pair for pair in self._board_duplicate_pairs if both(pair)],
+                [pair for pair in self._board_duplicate_hints if both(pair)])
+
+    def _count_board_review(self) -> None:
+        """The category's review button, counting what _board_pairs_on_show
+        would offer. Asked after every step on the board's history, and does
+        nothing while there are no pairs, which is almost always."""
+        button = getattr(self, "board_duplicates_btn", None)
+        if button is None:
+            return
+        if not (self._board_duplicate_pairs or self._board_duplicate_hints):
+            return
+        pairs, hints = self._board_pairs_on_show()
+        found, hinted = len(pairs), len(hints)
+        button.setVisible(found > 0 or hinted > 0)
+        if found or hinted:
+            button.setText(
+                f"Preview and Delete Duplicates ({found})" if found
+                else f"Look at {hinted} possible duplicate(s)")
+
+    def _pass_over(self) -> None:
+        """A check has finished: the pass is nobody's, and a list that asked
+        while the other list's pass was running is asked for now."""
+        self._duplicate_pool = None
+        self._duplicate_scope = None
+        waiting, self._duplicates_waiting = self._duplicates_waiting, set()
+        if "report" in waiting:
+            self.recheck_duplicates(force=True)
+        if "board" in waiting:
+            self.recheck_duplicates(force=True, pool=self.board_model)
+
+    def recheck_duplicates(self, force: bool = False, pool=None) -> None:
         """Ask for the duplicate check. It runs once, shortly, not now.
 
         This is called from everywhere the list can change, and one of those
@@ -3820,8 +4960,15 @@ class MainWindow(QMainWindow):
 
         So the request is collected and answered once the user has stopped
         doing things. Ten edits in a row cost one check, not ten.
+
+        ``pool`` is the board's for a category opened out as a list, checked
+        over that category alone (see _duplicate_clips); None is the press
+        report, exactly as it always was.
         """
         if not hasattr(self, "duplicates_btn"):
+            return
+        if self._is_board(pool):
+            self._recheck_board_duplicates(force)
             return
         # force: a check that was already under way when this newspad was
         # switched away from. It was asked for, so it finishes, whether or not
@@ -3837,7 +4984,7 @@ class MainWindow(QMainWindow):
             self._duplicate_timer.timeout.connect(self._run_duplicate_check)
         self._duplicate_timer.start(DUPLICATE_SETTLE_MS)
 
-    def _run_duplicate_check(self) -> None:
+    def _run_duplicate_check(self, pool=None) -> None:
         """Look over the whole list for cuttings that repeat one another.
 
         The slow half - reading a headline off each picture, about half a
@@ -3846,24 +4993,51 @@ class MainWindow(QMainWindow):
         meant a minute of dead application immediately after an import, which
         is the moment somebody most wants to look at what they have just
         brought in.
+
+        ``pool`` is the board's for a category opened out as a list.
         """
+        board = self._is_board(pool)
         if self._switching:
             return          # the restore at the end of the switch asks again
         if self._still_winding_down():
             # A pass stopped by a switch has not let go of its thread yet. Two
             # at once raised the window's worst pause to 338ms, measured - so
             # wait for it, and try again in a moment.
-            if self._duplicate_timer is not None:
-                self._duplicate_timer.start(DUPLICATE_SETTLE_MS)
+            timer = self._board_duplicate_timer if board else self._duplicate_timer
+            if timer is not None:
+                timer.start(DUPLICATE_SETTLE_MS)
             return
         if self._duplicates_running:
+            if self._is_board(self._duplicate_pool) != board:
+                # The other list's pass is under way, and one pass serves
+                # both. Dropped here, this list would never be looked at: its
+                # turn comes when that pass ends (_pass_over).
+                self._duplicates_waiting.add("board" if board else "report")
             return
-        rows = [row for row in self.model.rows if row.clip is not None]
-        clips = [row.clip for row in rows]
-        if not clips:
-            self._duplicate_pairs = []
-            self.duplicates_btn.setVisible(False)
-            return
+        if board:
+            if self.board_model.scope is None:
+                return
+            clips = self._duplicate_clips(self.board_model)
+            # Only over the category it was pressed in; a category change
+            # lets the request go before this (_let_board_request_go).
+            fresh = (self._fresh_board is not None
+                     and self._fresh_board == self.board_model.scope)
+            self._fresh_board = None
+            if not clips:
+                self._forget_board_duplicates()
+                return
+            self._duplicate_scope = self.board_model.scope
+        else:
+            rows = [row for row in self.model.rows if row.clip is not None]
+            clips = [row.clip for row in rows]
+            fresh, self._fresh_report = self._fresh_report, False
+            if not clips:
+                self._duplicate_pairs = []
+                self.duplicates_btn.setVisible(False)
+                return
+        if fresh:
+            self._forget_readings(clips)
+        self._duplicate_pool = self.board_model if board else self.model
 
         # Two passes, cheap one first. Fingerprinting a picture takes a few
         # thousandths of a second and reading a headline off it takes about half
@@ -3877,10 +5051,46 @@ class MainWindow(QMainWindow):
                      and (not c.picture_hash or not c.picture_hash_lower)]
         if unprinted:
             self._duplicates_running = True
-            self._start_pass(unprinted, self._prints_taken,
+            self._start_pass(unprinted,
+                             functools.partial(self._prints_taken,
+                                               pool=self.board_model)
+                             if board else self._prints_taken,
                              read_headlines=False)
             return
-        self._read_the_shortlist()
+        if board:
+            self._read_the_shortlist(pool=self.board_model)
+        else:
+            self._read_the_shortlist()
+
+    @staticmethod
+    def _forget_readings(clips) -> None:
+        """Forget everything worked out before about these clippings, for a
+        check that looks again from scratch.
+
+        Every measurement, not only the two the comparison happens to use
+        today. Clearing just those two left the finer print, the ink profile
+        and the content box sitting at their pre-crop values for the rest of
+        the session, because _ensure_prints saw them filled in and skipped the
+        clipping. Silently, and against check_duplicates_now's own promise
+        that anything that still matters is read again.
+        """
+        for clip in clips:
+            clip.picture_hash = ""
+            clip.picture_hash_lower = ""
+            clip.picture_hash_fine = ""
+            clip.ink_profile = ""
+            clip.content_w = 0
+            clip.content_h = 0
+            clip.ocr_text = ""
+            clip.ocr_engine = ""
+            clip.headline_confidence = 0
+
+    def _quiet_board_pass_off_screen(self) -> bool:
+        """A category's automatic check running while the press report is on
+        show. _flash writes to the strip of the screen on show, so anything it
+        said would read as the report's."""
+        return (self._is_board(self._duplicate_pool) and not self._board_out_loud
+                and self.mode != "sentiment")
 
     def _start_pass(self, work, on_finished, **options) -> None:
         """Start a background pass whose answers are dropped if it is settled.
@@ -3925,7 +5135,13 @@ class MainWindow(QMainWindow):
         not an answer, and writing it over a clipping would wipe a reading
         taken earlier in the morning.
         """
-        by_uid = {row.clip.uid: row.clip for row in self.model.rows
+        # Both pools: a pass over a category of the board read the board's
+        # clippings. Every clipping's uid is its own, whichever pool holds it.
+        pools = [self.model]
+        board_pool = getattr(self, "board_model", None)
+        if board_pool is not None:
+            pools.append(board_pool)
+        by_uid = {row.clip.uid: row.clip for each in pools for row in each.rows
                   if row.clip is not None}
         for got in results or ():
             clip = by_uid.get(got.uid)
@@ -3957,7 +5173,7 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def _prints_taken(self, results) -> None:
+    def _prints_taken(self, results, pool=None) -> None:
         """Copy back the fingerprints, then go on to the reading.
 
         Only the fingerprints. This pass never opened a headline reader, so what
@@ -3968,30 +5184,47 @@ class MainWindow(QMainWindow):
             return
         self._copy_back(results, headlines=False)
         self._duplicates_running = False
-        self._read_the_shortlist()
+        if self._is_board(pool):
+            self._read_the_shortlist(pool=pool)
+        else:
+            self._read_the_shortlist()
 
-    def _read_the_shortlist(self) -> None:
+    def _read_the_shortlist(self, pool=None) -> None:
         """Read the headline off the few clippings that could be repeats."""
         if self._duplicates_running or self._gone():
             return
-        clips = [row.clip for row in self.model.rows if row.clip is not None]
+        board = self._is_board(pool)
+        if board and pool.scope != self._duplicate_scope:
+            # Another category was opened while the prints were taken: its
+            # clippings are not the ones measured. The finish says so.
+            self._finish_duplicate_check([], pool=pool)
+            return
+        clips = (self._duplicate_clips(pool) if board else
+                 [row.clip for row in self.model.rows if row.clip is not None])
         try:
             wanted = duplicates.to_read(clips)
         except Exception:  # noqa: BLE001 - never let this break the list
             wanted = []
         unread = [(c.uid, c.image_bytes) for c in wanted]
         if not unread or not ocr.available():
-            self._finish_duplicate_check([])
+            if board:
+                self._finish_duplicate_check([], pool=pool)
+            else:
+                self._finish_duplicate_check([])
             return
 
         self._duplicates_running = True
-        self._flash(f"Looking at {len(unread)} clipping(s) for duplicates…",
-                    "info")
+        if not self._quiet_board_pass_off_screen():
+            self._flash(f"Looking at {len(unread)} clipping(s) for duplicates…",
+                        "info")
         # measure=False: every one of these was measured by the pass that
         # picked them out, moments ago. Measuring them again cost a 767ms pause
         # the instant the reading began, because four threads decoded four
         # pictures at once.
-        self._start_pass(unread, self._duplicate_readings, measure=False)
+        self._start_pass(unread,
+                         functools.partial(self._duplicate_readings, pool=pool)
+                         if board else self._duplicate_readings,
+                         measure=False)
 
     def _work_begin(self, said: str, total: int) -> None:
         """Put the bar up for a job whose size is known."""
@@ -4029,13 +5262,15 @@ class MainWindow(QMainWindow):
         # to say the same sentence over and over.
         if done != total and done % 8:
             return
+        if self._quiet_board_pass_off_screen():
+            return
         said = f"Reading clippings… {done} of {total}"
         if said == getattr(self, "_last_progress", ""):
             return
         self._last_progress = said
         self._flash(said, "info")
 
-    def _duplicate_readings(self, results) -> None:
+    def _duplicate_readings(self, results, pool=None) -> None:
         """Copy what the reader worked out back onto the clippings.
 
         Done here, on the window's thread, because these objects are painted
@@ -4047,15 +5282,102 @@ class MainWindow(QMainWindow):
             return
         self._copy_back(results, headlines=True)
         self._duplicates_running = False
-        self._finish_duplicate_check(results)
+        if self._is_board(pool):
+            self._finish_duplicate_check(results, pool=pool)
+        else:
+            self._finish_duplicate_check(results)
 
-    def _finish_duplicate_check(self, results) -> None:
+    def _finish_duplicate_check(self, results, pool=None) -> None:
         """Compare everything and say what was found. Fast: no reading here."""
         # FIRST, before the guard below. A bar left up after the window has
         # started closing is a bar that never comes down.
         self._work_end()
         if self._gone():
             return
+        try:
+            if self._is_board(pool):
+                self._finish_board_check(results)
+            else:
+                self._finish_report_check(results)
+        finally:
+            self._pass_over()
+
+    def _finish_board_check(self, results) -> None:
+        """The report's finish, for a category of the board opened out as a
+        list: its own pairs, file marks and button, on its own pool."""
+        pool = self.board_model
+        if pool.scope is None or pool.scope != self._duplicate_scope:
+            # Another category, or none, is on show now. What was read stays
+            # on the clippings (_copy_back), so looking again costs little -
+            # but pairs worked out over the category that was left must never
+            # be offered over this one, where its review would delete them.
+            left = self._duplicate_scope
+            if self._board_out_loud and left is not None:
+                # Pressed, so answered: silence read as a check still going.
+                self._flash(f"{left.column.value}'s duplicate check was not "
+                            f"finished: {self._scope_change_words(left, pool.scope)}.",
+                            "info")
+            self._board_out_loud = False
+            if pool.scope is not None:
+                self.recheck_duplicates(pool=pool)
+            return
+        clips = self._duplicate_clips(pool)
+        try:
+            pairs = duplicates.apply(clips)
+            self._mark_duplicate_files(clips, pool=pool)
+        except Exception:  # noqa: BLE001 - never let this break the list
+            pairs = []
+        try:
+            hints = duplicates.suggestions(clips, pairs)
+        except Exception:  # noqa: BLE001 - a suggestion is never worth a crash
+            hints = []
+        self._board_duplicate_pairs, self._board_duplicate_hints = pairs, hints
+        found, hinted = len(pairs), len(hints)
+        button = getattr(self, "board_duplicates_btn", None)
+        if button is not None:
+            button.setVisible(found > 0 or hinted > 0)
+            if found or hinted:
+                button.setText(
+                    f"Preview and Delete Duplicates ({found})" if found
+                    else f"Look at {hinted} possible duplicate(s)")
+        pool.layoutChanged.emit()
+        self._update_counts()
+        self._preview_follow_duplicates(pool)
+        where = pool.scope.column.value
+        if self._board_out_loud:
+            # Answered at this finish whatever it read. The report waits for
+            # a pass that read something, because its button can find an
+            # automatic pass already under way; the board's refuses to start
+            # while any pass runs (check_duplicates_now), so the pass ending
+            # now is the one the button started.
+            self._board_out_loud = False
+            if found:
+                self._flash(
+                    f"Checked {len(clips)} clippings in {where} — {found} "
+                    f"{'look' if found != 1 else 'looks'} like a repeat. "
+                    f"Badged, and still in the dossier until you look at them.",
+                    "info")
+            else:
+                unread = sum(1 for c in clips if not duplicates.readable(c))
+                note = f"Checked {len(clips)} clippings in {where} — no duplicates found."
+                if unread:
+                    note += f" {unread} could not be read well enough to compare."
+                self._flash(note, "good")
+        elif results and self.mode == "sentiment":
+            # The quiet answer, said only while the board is the screen on
+            # show. _flash writes to the strip of whatever screen that is, and
+            # a bare "No duplicates found." on the press report's read as the
+            # report's answer to a check it never had (D3 review). The button
+            # on the category's bar stays for when the board is back.
+            if found:
+                self._flash(
+                    f"{found} clipping(s) in {where} look like repeats — badged, "
+                    f"and still in the dossier until you look at them.", "info")
+            else:
+                self._flash(f"No duplicates found in {where}.", "good")
+
+    def _finish_report_check(self, results) -> None:
+        """_finish_duplicate_check for the press report."""
         clips = [row.clip for row in self.model.rows if row.clip is not None]
         try:
             self._duplicate_pairs = duplicates.apply(clips)
@@ -4118,15 +5440,19 @@ class MainWindow(QMainWindow):
             else:
                 self._flash("No duplicates found.", "good")
 
-    def _preview_follow_duplicates(self) -> None:
+    def _preview_follow_duplicates(self, pool=None) -> None:
         """A check that just finished may have badged or cleared the clipping
         on the preview: show it again so the column beside it is right. Never
-        while a trim is being drawn - showing the row again would drop it."""
+        while a trim is being drawn - showing the row again would drop it.
+        Only the preview of the list that was checked: ``pool`` is the board's
+        after a check over a category opened out as a list."""
         preview = getattr(self, "preview", None)
         if preview is None or not preview.isVisible() or preview.row is None:
             return
-        if preview.canvas.trimming or preview.for_board:
+        if preview.canvas.trimming or bool(preview.for_board) != self._is_board(pool):
             return
+        if preview.for_board and self.board_model.scope is None:
+            return          # a card's preview over four columns has no twin
         try:
             self._refresh_preview(preview.row.id)
         except Exception:  # noqa: BLE001 - a courtesy, never a crash
@@ -4143,10 +5469,15 @@ class MainWindow(QMainWindow):
             pass
 
     def _source_of(self, clip) -> str:
-        """Which file a clipping came in from, for the review screen."""
-        for row in self.model.rows:
-            if row.clip is clip:
-                return row.source_name or clip.source_file or ""
+        """Which file a clipping came in from, for the review screen - the
+        press report's clippings first, then the board's."""
+        board_pool = getattr(self, "board_model", None)
+        for pool in (self.model, board_pool):
+            if pool is None:
+                continue
+            for row in pool.rows:
+                if row.clip is clip:
+                    return row.source_name or clip.source_file or ""
         return clip.source_file or ""
 
     def recheck_after_restore(self) -> None:
@@ -4158,7 +5489,7 @@ class MainWindow(QMainWindow):
         """
         self.recheck_duplicates()
 
-    def _mark_duplicate_files(self, clips: list) -> None:
+    def _mark_duplicate_files(self, clips: list, pool=None) -> None:
         """Notice when a whole file repeats another whole file.
 
         The same division's report can arrive twice - once as the Word file and
@@ -4174,7 +5505,11 @@ class MainWindow(QMainWindow):
         # that clipping with them - the same reason the loose bracket is never
         # marked, below.
         foreign = set()
-        for row in self.model.rows:
+        # A category of the board opened out as a list marks its own brackets,
+        # from its own clippings: a file's bracket there holds only them.
+        model = pool if self._is_board(pool) else self.model
+        rows = model.scoped_rows() if self._is_board(pool) else self.model.rows
+        for row in rows:
             if row.clip is None:
                 continue
             where[row.clip.uid] = row.group_key
@@ -4188,7 +5523,7 @@ class MainWindow(QMainWindow):
                 clips, lambda clip: where.get(clip.uid, ""))
         except Exception:  # noqa: BLE001 - never let this break the list
             repeats = {}
-        self.model.duplicate_files = {
+        model.duplicate_files = {
             key: titles.get(other, "another file")
             # Never the loose bracket. Clippings dragged in from WhatsApp all
             # share one heading, but that heading is not a FILE - it is a pile
@@ -4203,18 +5538,27 @@ class MainWindow(QMainWindow):
 
     def _auto_duplicates_toggled(self, on: bool) -> None:
         self._auto_duplicates = bool(on)
+        # One setting and two boxes - the press report's bar and the bar over
+        # a board category - so the one not clicked follows the one that was.
+        for box in (getattr(self, "auto_dupes", None),
+                    getattr(self, "board_auto_dupes", None)):
+            if box is not None and box.isChecked() != self._auto_duplicates:
+                was = box.blockSignals(True)
+                box.setChecked(self._auto_duplicates)
+                box.blockSignals(was)
         settings = export_dialog.load_settings()
         settings["auto_duplicates"] = self._auto_duplicates
         export_dialog.save_settings(settings)
         if on:
             self._flash("Imports will be checked for duplicates.", "info")
             self.recheck_duplicates()
+            self.recheck_duplicates(pool=self.board_model)
         else:
             self._flash(
                 "Automatic duplicate checking is off — use Check for "
                 "Duplicates when you want it.", "info")
 
-    def check_duplicates_now(self) -> None:
+    def check_duplicates_now(self, pool=None) -> None:
         """Look again, now, and say plainly what was found.
 
         The automatic check is quiet on purpose: it puts a button up when there
@@ -4236,42 +5580,80 @@ class MainWindow(QMainWindow):
         ui/reader.py exists to prevent, and this path had simply never been
         moved onto it. Now it is: one measurement per picture, four readers at
         once, on threads that stand aside for the window.
+
+        ``pool`` is the board's from the bar over a category opened out as a
+        list: that category's clippings, looked at again from scratch.
         """
         from ..core import ocr
 
-        if self._duplicates_running or self._still_winding_down():
+        board = self._is_board(pool)
+        if board and pool.scope is None:
+            return          # only a category opened out has this button
+        # One pass serves both lists. Under way for THIS list, it is already
+        # looking. Under way for the other list, this one takes its turn when
+        # that pass ends: "Already looking" said then meant the list whose
+        # button was pressed was never looked at, and never answered.
+        others = (self._duplicates_running
+                  and self._is_board(self._duplicate_pool) != board)
+        if (self._duplicates_running and not others) or self._still_winding_down():
             self._flash("Already looking — one moment.", "info")
             return
-        clips = [row.clip for row in self.model.rows if row.clip is not None]
+        clips = (self._duplicate_clips(pool) if board else
+                 [row.clip for row in self.model.rows if row.clip is not None])
         if not clips:
             self._flash("There are no clippings to check.", "info")
             return
         if not ocr.available():
-            QMessageBox.warning(
-                self, "Cannot check for duplicates",
-                "The headline reader is not available on this machine, so "
-                "clippings cannot be compared by what they say.\n\n"
-                + (ocr.why_not() or "It was not installed with the app."))
+            words = ("The headline reader is not available on this machine, so "
+                     "clippings cannot be compared by what they say.\n\n"
+                     + (ocr.why_not() or "It was not installed with the app."))
+            if board:
+                # open(), never exec(): nothing the board shows holds up the
+                # window. The press report's box below waits, as it always has.
+                box = QMessageBox(QMessageBox.Warning, "Cannot check for duplicates",
+                                  words, QMessageBox.Ok, self)
+                box.setAttribute(Qt.WA_DeleteOnClose, True)
+                box.open()
+                return
+            QMessageBox.warning(self, "Cannot check for duplicates", words)
             return
 
-        # Forget everything worked out before - every measurement, not only the
-        # two the comparison happens to use today. Clearing just those two left
-        # the finer print, the ink profile and the content box sitting at their
-        # pre-crop values for the rest of the session, because _ensure_prints
-        # saw them filled in and skipped the clipping. Silently, and against
-        # this function's own promise that anything that still matters is read
-        # again.
-        for clip in clips:
-            clip.picture_hash = ""
-            clip.picture_hash_lower = ""
-            clip.picture_hash_fine = ""
-            clip.ink_profile = ""
-            clip.content_w = 0
-            clip.content_h = 0
-            clip.ocr_text = ""
-            clip.ocr_engine = ""
-            clip.headline_confidence = 0
+        # From scratch: everything worked out before is forgotten
+        # (_forget_readings) - when this list's own pass starts, not here.
+        # Forgotten at the press, a request waiting for the other list's pass
+        # and then let go by a category change left its clippings unread and
+        # still paired, the hover saying nothing could be read (D3 review).
+        if board:
+            self._fresh_board = pool.scope
+        else:
+            self._fresh_report = True
 
+        if others:
+            # Kept in _duplicates_waiting, asked for by _pass_over when the
+            # other list's pass ends, and answered out loud at its own finish.
+            self._duplicates_waiting.add("board" if board else "report")
+            if board:
+                self._board_out_loud = True
+                self._flash(f"Checking the press report first — "
+                            f"{pool.scope.column.value} is next.", "info")
+            else:
+                running = getattr(self._duplicate_scope, "column", None)
+                self._recheck_out_loud = True
+                # Answered whatever its pass reads. The report's button waits
+                # for a pass that read something because an automatic pass of
+                # its own may already be under way; none can be while the
+                # board's runs, so the pass that serves this is this one.
+                self._answer_even_if_nothing_read = True
+                self._flash(
+                    f"Checking {running.value if running is not None else 'the board'}"
+                    f" first — the press report is next.", "info")
+            return
+        if board:
+            self._board_out_loud = True
+            self._flash(f"Looking at all {len(clips)} clippings in "
+                        f"{pool.scope.column.value} again…", "info")
+            self._run_duplicate_check(pool=pool)
+            return
         self._recheck_out_loud = True
         self._flash(f"Looking at all {len(clips)} clippings again…", "info")
         self._run_duplicate_check()
@@ -4329,7 +5711,23 @@ class MainWindow(QMainWindow):
         button.setText(collect.LABEL_ON if on else collect.LABEL_OFF)
         button.setEnabled(not self._read_only)
         button.setToolTip(collect.TIP_READ_ONLY if self._read_only
-                          else collect.TIP_ON if on else collect.TIP_OFF)
+                          else (collect.TIP_ON if on else collect.TIP_OFF)
+                          + collector.options_tip())
+        # An amber edge while Collect's options differ from the defaults. The
+        # edge's colour only, so the header's floor stays where it is.
+        tuned = bool(collector.changed_options())
+        if bool(button.property("tuned")) != tuned:
+            button.setProperty("tuned", tuned)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def _collect_menu(self, point: QPoint) -> None:
+        """Right-click on Collect from WhatsApp: its options for the session."""
+        collector = getattr(self, "collector", None)
+        button = getattr(self, "collect_btn", None)
+        if collector is None or button is None or self._read_only:
+            return
+        collector.show_menu(button, button.mapToGlobal(point))
 
     def _sync_newspad_button(self) -> None:
         button = getattr(self, "newspad_btn", None)
@@ -4822,8 +6220,28 @@ class MainWindow(QMainWindow):
         if timer is not None and timer.isActive():
             timer.stop()
             pending = "quiet"
-        if self._duplicates_running:
+        # A board category's check is not carried across: it is asked again
+        # when a category is opened out in the newspad that comes back.
+        board_timer = self._board_duplicate_timer
+        if board_timer is not None and board_timer.isActive():
+            board_timer.stop()
+        board_pass = self._is_board(self._duplicate_pool)
+        if "report" in self._duplicates_waiting:
             pending = "quiet"
+        self._duplicates_waiting = set()
+        self._board_out_loud = False
+        self._fresh_board = None
+        if self._fresh_report:
+            # The report's Check for Duplicates pressed, its pass not started.
+            # It is carried across as "loud", which does not forget again, so
+            # what the press would have forgotten is forgotten now, before
+            # these clippings are saved - as it was when the press did it.
+            self._fresh_report = False
+            self._forget_readings(
+                [row.clip for row in self.model.rows if row.clip is not None])
+        if self._duplicates_running:
+            if not board_pass:
+                pending = "quiet"
             self._pass_gen += 1
             worker, thread = self._reader, self._reader_thread
             headlines = bool(getattr(worker, "_read_headlines", False))
@@ -4841,6 +6259,8 @@ class MainWindow(QMainWindow):
             elif thread is not None:
                 self._winding_down.append(thread)
             self._duplicates_running = False
+        self._duplicate_pool = None
+        self._duplicate_scope = None
         if getattr(self, "_recheck_out_loud", False):
             pending = "loud"
             self._recheck_out_loud = False
@@ -4858,12 +6278,22 @@ class MainWindow(QMainWindow):
         self.undo_stack.clear()
         self.board_undo.clear()
         bar = getattr(self, "filter_bar", None)
-        if bar is not None:
-            was = bar.blockSignals(True)
+        board_bar = getattr(self, "board_filter_bar", None)
+        for each in (bar, board_bar):
+            if each is None:
+                continue
+            was = each.blockSignals(True)
             try:
-                bar.clear()
+                each.clear()
             finally:
-                bar.blockSignals(was)
+                each.blockSignals(was)
+        if board_bar is not None:
+            board_bar.hide()
+            button = self.board_filter_btn
+            was = button.blockSignals(True)
+            button.setChecked(False)
+            button.blockSignals(was)
+        self._board_last_clicked_id = None
         for pool in (self.model, self.board_model):
             pool.reset_view()
             pool.replace_all([])
@@ -4871,10 +6301,14 @@ class MainWindow(QMainWindow):
         self._duplicate_hints = []
         self.model.duplicate_files = {}
         self.duplicates_btn.setVisible(False)
+        self._forget_board_duplicates()
         # After the stacks are cleared: clearing them stirs _after_undo_change,
-        # which re-arms this very timer.
+        # which re-arms this very timer - and the board's history re-arms the
+        # board's.
         if self._duplicate_timer is not None:
             self._duplicate_timer.stop()
+        if self._board_duplicate_timer is not None:
+            self._board_duplicate_timer.stop()
         self.board.reset_view()
         if getattr(self.board, "divisions", None):
             self.board.select_division(self.board.divisions[0].code)
@@ -5143,38 +6577,77 @@ class MainWindow(QMainWindow):
                 f"Saved on this machine; use Save to a file to keep or send it.",
                 "good")
 
-    def review_duplicates(self) -> None:
-        """Show each suspected repeat beside the one it repeats."""
+    def review_duplicates(self, pool=None) -> None:
+        """Show each suspected repeat beside the one it repeats.
+
+        ``pool`` is the board's from a category opened out as a list: its own
+        pairs, deleted on the board's history. That review opens with open(),
+        never exec() - nothing the board shows may hold up the window - and is
+        acted on when it closes. The press report's waits, as it always has.
+        """
         from .duplicates_dialog import DuplicatesDialog
 
-        pairs = list(getattr(self, "_duplicate_pairs", []))
-        # The suggestions come along for the ride, at the end, where they read
-        # as "and these might be worth a look" rather than as more of the same.
-        hints = list(getattr(self, "_duplicate_hints", []))
+        board = self._is_board(pool)
+        if board:
+            # Only pairs with both clippings in the category's list now.
+            pairs, hints = self._board_pairs_on_show()
+        else:
+            pairs = list(getattr(self, "_duplicate_pairs", []))
+            # The suggestions come along for the ride, at the end, where they
+            # read as "and these might be worth a look" rather than as more of
+            # the same.
+            hints = list(getattr(self, "_duplicate_hints", []))
         if not pairs and not hints:
+            if board:
+                self._count_board_review()
             self._flash("Nothing is flagged as a duplicate.", "info")
             return
         pairs = pairs + hints
 
         screen = DuplicatesDialog(pairs, self._source_of, self)
+        if board:
+            screen.setAttribute(Qt.WA_DeleteOnClose, True)
+            screen.finished.connect(
+                lambda result: self._duplicates_reviewed(screen, pairs, pool)
+                if result == QDialog.Accepted else None)
+            screen.open()
+            return
         if screen.exec() != QDialog.Accepted:
             return
+        self._duplicates_reviewed(screen, pairs, self.model)
 
+    def _duplicates_reviewed(self, screen, pairs, pool) -> None:
+        """What the review decided, acted on - for the list it was opened
+        over. The verdicts, "not a duplicate", and one undoable delete."""
+        board = self._is_board(pool)
         # Every judgement is written down before anything is acted on. It is
         # the only labelled data that describes THIS department's papers, and
         # it is what makes the check better at finding the repeats it misses -
         # see core/verdicts.
         from ..core import verdicts
 
-        by_uid = {row.clip.uid: row.clip for row in self.model.rows
+        # On the board, only the category the review was opened over: every
+        # pair came from it, and nothing out of sight is ever deleted.
+        rows = (pool.scoped_rows() if board and pool.scope is not None
+                else pool.rows if board else self.model.rows)
+        by_uid = {row.clip.uid: row.clip for row in rows
                   if row.clip is not None}
         kept = {clip.uid for clip in screen.to_keep()}
         removed = {clip.uid for clip in screen.to_delete()}
         how = verdicts.BULK if getattr(screen, "swept", lambda: False)() \
             else verdicts.ONE_BY_ONE
+
+        def on_show(clip) -> bool:
+            # On the board, a clipping that has left the category since the
+            # review opened is neither judged, spared nor deleted: nothing out
+            # of sight is acted on. The press report's list holds them all.
+            return not board or getattr(clip, "uid", None) in by_uid
+
         # The dialog's own pairs, not the list handed in: a pair the person
         # turned round is judged the way round they judged it.
         for pair in getattr(screen, "pairs", pairs):
+            if not (on_show(pair.primary) and on_show(pair.copy)):
+                continue
             copy_uid = getattr(pair.copy, "uid", None)
             if copy_uid in kept:
                 verdicts.record(pair.primary, pair.copy, False, how)
@@ -5185,6 +6658,8 @@ class MainWindow(QMainWindow):
         # does not simply flag it again the moment anything else changes. For
         # a pair the person turned round, on both of them - see to_spare.
         for clip in getattr(screen, "to_spare", screen.to_keep)():
+            if not on_show(clip):
+                continue
             clip.not_duplicate = True
             clip.duplicate_of = None
             clip.include = True
@@ -5194,22 +6669,44 @@ class MainWindow(QMainWindow):
         # somebody a thing cannot be undone when it can is its own kind of bug.
         doomed = {clip.uid for clip in screen.to_delete()}
         if doomed:
-            ids = [row.id for row in self.model.rows
+            ids = [row.id for row in rows
                    if row.clip is not None and row.clip.uid in doomed]
             if ids:
-                self.undo_stack.push(commands.RemoveClips(
-                    self.model, ids,
-                    f"{len(ids)} duplicate(s) deleted" if len(ids) > 1
-                    else "Duplicate deleted"))
+                (self.board_undo if board else self.undo_stack).push(
+                    commands.RemoveClips(
+                        pool if board else self.model, ids,
+                        f"{len(ids)} duplicate(s) deleted" if len(ids) > 1
+                        else "Duplicate deleted"))
 
-        self.recheck_duplicates()
+        if board:
+            self.recheck_duplicates(pool=pool)
+        else:
+            self.recheck_duplicates()
         said = []
-        if doomed:
-            said.append(f"deleted {len(doomed)}")
-        if screen.to_keep():
-            said.append(f"kept {len(screen.to_keep())}")
+        if board:
+            # What was done, not what was asked: a copy that had left the
+            # category was said to be deleted when nothing was (D3 review).
+            deleted = len(ids) if doomed else 0
+            kept_now = sum(1 for clip in screen.to_keep() if on_show(clip))
+        else:
+            deleted, kept_now = len(doomed), len(screen.to_keep())
+        if deleted:
+            said.append(f"deleted {deleted}")
+        if kept_now:
+            said.append(f"kept {kept_now}")
         self._flash("Duplicates: " + (", ".join(said) if said
                                       else "nothing changed") + ".", "good")
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt name
+        super().changeEvent(event)
+        # Only activation is looked at, and only while a link from Collect is
+        # waiting, so every other change passes straight through. Shown once
+        # the activation is over: shown inside it, on the real window platform
+        # the links window took the activation from this window.
+        if (event.type() == QEvent.ActivationChange
+                and getattr(self, "_links_waiting", False) and self.isActiveWindow()):
+            self._links_waiting = False
+            QTimer.singleShot(0, self._show_waiting_links)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt name
         """Flush everything deferred: settings, and the session itself."""
@@ -5290,10 +6787,19 @@ class MainWindow(QMainWindow):
         inner = page.widget() if page is not None else None
         shape = inner.layout() if inner is not None else None
         if shape is not None:
-            wanted = (self.batch.height() + 26) if self.batch.isVisible() else 0
+            wanted = ((self.batch.height() + 26)
+                      if self.batch.isVisible() and self.mode == "standard" else 0)
             left, top, right, bottom = shape.getContentsMargins()
             if bottom != wanted:
                 shape.setContentsMargins(left, top, right, wanted)
+        # The same room on the board's page, while the bar floats over a
+        # category's list.
+        board = getattr(self, "board", None)
+        if board is not None and hasattr(board, "set_foot_room"):
+            board.set_foot_room(
+                (self.batch.height() + 26)
+                if self.batch.isVisible() and self._list_pool() is self.board_model
+                else 0)
 
         if self.batch.isVisible():
             # The bar is positioned by hand, not by a layout, so nothing else

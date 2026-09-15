@@ -316,7 +316,11 @@ class PreviewDialog(QDialog):
     def _partner_of(self, row):
         """(the row this one repeats or is repeated by, how, how many more)."""
         clip = row.clip
-        rows = [r for r in self.model.rows if r.clip is not None and r is not row]
+        # The list on show: a category of the board opened out holds only its
+        # own clippings, and a partner outside it is not beside it there.
+        scoped = getattr(self.model, "scoped_rows", None)
+        source = scoped() if callable(scoped) else self.model.rows
+        rows = [r for r in source if r.clip is not None and r is not row]
         if clip.duplicate_of:
             for other in rows:
                 if other.clip.uid == clip.duplicate_of:
@@ -341,7 +345,9 @@ class PreviewDialog(QDialog):
     def _show_twin(self, row) -> None:
         """The clipping this one repeats (or is repeated by), or nothing."""
         self._twin_id = None
-        if self.for_board:
+        if self.for_board and getattr(self.model, "scope", None) is None:
+            # A board card over four columns: the check and its review belong
+            # to a category opened out as a list, not to the cards.
             self.twin.hide()
             return
         try:
@@ -352,16 +358,22 @@ class PreviewDialog(QDialog):
             self.twin.hide()
             return
         self._twin_id = partner.id
-        mine = self.model.position_of(row.id) + 1
-        theirs = self.model.position_of(partner.id) + 1
+        # Called by the numbers the list shows - in a category, its own.
+        number_of = getattr(self.model, "number_of", None)
+        if callable(number_of):
+            mine, theirs = number_of(row.id), number_of(partner.id)
+        else:
+            mine = self.model.position_of(row.id) + 1
+            theirs = self.model.position_of(partner.id) + 1
+        keeps = "dossier" if self.for_board else "report"
         if how == "repeat of":
             words = (f"No. {mine} is flagged as a repeat of No. {theirs}, shown "
-                     f"here. The report keeps No. {theirs} unless you decide "
+                     f"here. The {keeps} keeps No. {theirs} unless you decide "
                      "otherwise in the review.")
         else:
             words = (f"No. {theirs}, shown here, is flagged as a repeat of this "
                      "one" + (f" \u2014 and {more} more" if more else "")
-                     + ". This one is the one the report keeps.")
+                     + f". This one is the one the {keeps} keeps.")
         self.twin_words.setText(words)
         self.twin_files.setText(
             f"This one came from: {self._file_of(row) or 'unknown'}\n"

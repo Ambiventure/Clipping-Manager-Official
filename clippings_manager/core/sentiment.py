@@ -85,6 +85,30 @@ def column_for(section: Section) -> Section:
     return Section.NEUTRAL
 
 
+#: What the board's division picker holds while every division is on show.
+ALL_DIVISIONS = "__all__"
+
+
+def shows(clip: Clip, column: Optional[Section], division: str) -> bool:
+    """Whether the board shows this clipping in this column, for this division.
+
+    The board's one rule, for the four card columns and for a category opened
+    out as a list alike, so a card and a list row can never disagree about
+    where a clipping is. ``division`` is a division's code, ALL_DIVISIONS for
+    every division, or an empty string. The board holds the empty string only
+    when no divisions are set up, and it matches only the clippings with no
+    division - it is never another spelling of ALL_DIVISIONS, so a caller
+    passes the board's own ``active`` as it is rather than respelling it. A
+    clipping with no division is shown under every division, or nothing on
+    the board could reach it. ``column`` None asks about the division alone;
+    Digital takes Social, Electronic and advertisements, as column_for says.
+    """
+    if not (division == ALL_DIVISIONS or not clip.division
+            or clip.division == division):
+        return False
+    return column is None or column_for(clip.section) is column
+
+
 def detect_sentiment(filename: str, config: Optional[dict] = None) -> Optional[Section]:
     """Guess a category from a file name, or None if it says nothing.
 

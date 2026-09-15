@@ -116,6 +116,40 @@ def save_settings(data: dict) -> None:
         pass
 
 
+def _select_in_explorer(path: Path) -> bool:
+    """Open an Explorer window on the file's folder with the file selected,
+    through SHOpenFolderAndSelectItems. False when the shell cannot find the
+    file or refuses, so the caller can open the folder plainly."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        shell32 = ctypes.windll.shell32
+        ole32 = ctypes.windll.ole32
+        shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+        shell32.ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
+        shell32.ILFree.argtypes = [ctypes.c_void_p]
+        shell32.SHOpenFolderAndSelectItems.restype = ctypes.c_long
+        shell32.SHOpenFolderAndSelectItems.argtypes = [
+            ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p, wintypes.DWORD]
+        ole32.CoInitializeEx.restype = ctypes.c_long
+    except Exception:  # noqa: BLE001 - not Windows after all
+        return False
+    # The window's thread already has COM; this only balances what it adds.
+    started = ole32.CoInitializeEx(None, 0x2)          # COINIT_APARTMENTTHREADED
+    try:
+        item = shell32.ILCreateFromPathW(str(path))
+        if not item:
+            return False
+        try:
+            return shell32.SHOpenFolderAndSelectItems(item, 0, None, 0) == 0
+        finally:
+            shell32.ILFree(item)
+    finally:
+        if started in (0, 1):                          # S_OK, S_FALSE
+            ole32.CoUninitialize()
+
+
 class ExportDialog(QDialog):
     """Choose what to build, then build it."""
 
@@ -538,10 +572,22 @@ class ExportDialog(QDialog):
 
     @staticmethod
     def _show_in_folder(path: Path) -> None:
-        """The folder, with the file selected in it."""
+        """The folder the file was saved into, with the file selected in it.
+
+        Not "explorer /select,<path>" through subprocess: given a list, Python
+        quotes the whole "/select,C:\\...\\PRESS MEDIA COVERAGE 12.09.2026.pdf"
+        argument because the name has spaces in it, Explorer does not read a
+        quoted switch, and it opens Documents instead - which is what the
+        office saw, whatever folder the report had gone to. The shell's own
+        call takes the path as a path, spaces, commas and all.
+        """
+        path = Path(path).resolve()
         try:
             if sys.platform == "win32":
-                subprocess.Popen(["explorer", f"/select,{path}"])
+                if _select_in_explorer(path):
+                    return
+                # The shell could not select it: the folder itself, never Documents.
+                os.startfile(str(path.parent if path.parent.is_dir() else path))  # noqa: S606
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", "-R", str(path)])
             else:

@@ -39,11 +39,44 @@ _FURNITURE = re.compile(
       | \[\d{1,2}[:.]\d{2}(?:\s?[ap]\.?m\.?)?,\s*\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\]
     )\s*""")
 
+#: Where a second link may start inside a first one it is glued to:
+#: "https://a.in/xhttps://b.in/y". Whether it does is _carried's question.
+#: copied.py keeps a twin of these five and of _carried, because it may not
+#: import this module; test_copied holds the two to the same answers.
+_SECOND_LINK = re.compile(r"(?i)https?://")
+#: What stands straight before an address carried inside another as a value:
+#: "search?q=cache:https://..", "v3/__https://..", "&https://..",
+#: "#https://..", "?next=%2Fhttps://..", "%20https://..". An "=" is not in
+#: it, because an "=" carries only as _KEY_EQUALS says.
+_CARRIER_MARK = re.compile(r"(?i)(?:[:_&#?]|%[0-9a-f]{2})$")
+#: An "=", or its escape "%3D", that closes a key's name in the query or the
+#: fragment: "?url=https://..", "&u=https://..", ";jsessionid=https://..",
+#: "#url=https://..", "%3Furl%3Dhttps://..". An "=" that ends a value does
+#: not carry: "?igsh=MWQ1ZGUxMzBkMA==" is the base64 padding an Instagram
+#: share link ends in, and a link straight after it is the next link.
+_KEY_EQUALS = re.compile(r"(?i)(?:[?&;#]|%3F|%26|%3B|%23)(?:(?!%3D)[^=&?#/])*(?:=|%3D)$")
+#: What a glued link's end looks like: a letter or digit, or a sentence's
+#: punctuation left on it - "…/story-101https://..", "…/x.https://..".
+_GLUED_END = re.compile(r"[^\W_]$|[.,;!)\]}>»”’'\"…।]$")
+#: A site's front page and nothing more: "https://12ft.io/".
+_SITE_ONLY = re.compile(r"(?i)(?:https?://|www\.)[^/?#\s]+/")
+
 #: Trailing punctuation that belongs to the sentence, not to the address.
 _TAIL = "’'\".,;:!?)]}>»”…।"
 
 #: Links that are never a story to capture.
 _NOT_A_STORY = ("wa.me", "whatsapp.com", "chat.whatsapp.com", "api.whatsapp.com")
+
+#: A web address that is a picture rather than a story: "…/photo.jpg",
+#: "…/media/X?format=jpg". Dragged, it keeps the "copy the image" advice.
+PICTURE_ADDRESS = re.compile(
+    r"(?i)(?:\.(?:jpe?g|png|gif|webp|avif|bmp|svg)(?:[?#]|$)"
+    r"|[?&]format=(?:jpe?g|png|gif|webp|avif)\b)")
+
+#: An address that only names something inside a browser - a picture being
+#: dragged out of WhatsApp Web is "blob:https://web.whatsapp.com/…" - and
+#: carries a real-looking address inside it that is not a page to open.
+_IN_BROWSER_ONLY = re.compile(r"(?i)(?<![\w.-])(?:blob|filesystem|data):\S*")
 
 
 @dataclass(frozen=True)
@@ -72,6 +105,66 @@ def tidy(address: str) -> str:
     if address.lower().startswith("www."):
         address = "https://" + address
     return address
+
+
+def _carried(before: str) -> bool:
+    """Whether a "https://" coming straight after this much of an address is
+    part of it - another address carried inside it - rather than the next
+    link glued on.
+
+    Carried: straight after an "=" that closes a key's name ("?url=https://..",
+    "&u=https://.."); straight after ":", "_", "&", "#", "?" or a
+    percent-escape; anywhere in the query or the fragment, unless straight
+    after a letter, a digit, "-", "_", "~" or a sentence's punctuation
+    ("?next=/https://.." is carried, "?utm_source=whatsapphttps://.." is
+    glued); and straight after a site's front page, which is never a story
+    ("https://12ft.io/https://..").
+
+    Glued: straight after an "=" that ends a value, which is how a share link
+    copied from Instagram or Facebook ends ("?igsh=MWQ1ZGUxMzBkMA==", base64
+    padding, or "%3D%3D" escaped), and anything else in the path, a "/"
+    included - "…/12345/https://..", the way an Indian Express link ends and
+    the next begins. A share code such as YouTube's "?si=…" can end in "-" or
+    "_", which is why those end a value in the query. The costs are an
+    archive's own address, "…/web/2024…/https://..", and an address carried
+    after an "=" in the path rather than the query, "…/RU=https://..": both
+    are cut in two.
+    """
+    if before.endswith("=") or before[-3:].upper() == "%3D":
+        return bool(_KEY_EQUALS.search(before))
+    in_query = "?" in before or "#" in before
+    if in_query and before.endswith(("-", "_", "~")):
+        return False
+    if _CARRIER_MARK.search(before):
+        return True
+    if in_query:
+        return not _GLUED_END.search(before)
+    return bool(_SITE_ONLY.fullmatch(before))
+
+
+def _unglued(address: str) -> list[str]:
+    """One matched address, cut where another link starts inside it.
+
+    Links pasted one straight after another, with no space or new line
+    between them, match as one long address that goes nowhere - typed that
+    way, pasted before the list learnt to add the new line, or copied out of
+    WhatsApp that way. A "https://" inside an address is where the next link
+    begins, unless it is carried inside the address it stands in. Each is
+    judged against the piece it is in, not the whole run. A piece that is
+    only "https://" is nothing and is dropped.
+    """
+    starts, piece_start = [], 0
+    for found in _SECOND_LINK.finditer(address):
+        at = found.start()
+        if at > piece_start and not _carried(address[piece_start:at]):
+            starts.append(at)
+            piece_start = at
+    if not starts:
+        return [address]
+    cuts = [0, *starts, len(address)]
+    pieces = [address[a:b] for a, b in zip(cuts, cuts[1:])]
+    return [piece for piece in pieces
+            if piece and not re.fullmatch(r"(?i)https?://", piece.strip(_TAIL))]
 
 
 def _clean_label(line: str) -> str:
@@ -109,8 +202,10 @@ def find(text: str) -> list[Found]:
             if label:
                 waiting_label, waiting_number = label, number
             continue
-        for match in addresses:
-            url = tidy(match.group(0))
+        # Two links glued together are two links, each its own story.
+        pieces = [piece for match in addresses for piece in _unglued(match.group(0))]
+        for piece in pieces:
+            url = tidy(piece)
             if not url or url.lower() in seen:
                 continue
             host = url.split("://", 1)[-1].split("/", 1)[0].lower()
@@ -124,6 +219,18 @@ def find(text: str) -> list[Found]:
             label, waiting_label, waiting_number = "", "", 0
         waiting_label, waiting_number = "", 0
     return found
+
+
+def story_links(text: str) -> list[Found]:
+    """The links in some words that are stories to capture: not a picture's
+    address, and not a blob:, data: or filesystem: one.
+
+    A drag from WhatsApp Web that lost its picture still carries the picture's
+    blob: address. Read as a link, the drop did nothing and its advice to copy
+    the image was lost (review of step B)."""
+    plain = _IN_BROWSER_ONLY.sub(" ", text or "")
+    return [row for row in find(plain)
+            if not PICTURE_ADDRESS.search(row.url.split("://", 1)[-1])]
 
 
 def numbered(found: list[Found]) -> bool:

@@ -23,8 +23,8 @@ from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
-from ..core.models import Clip
-from ..core import arrange, imageops
+from ..core.models import Clip, Section
+from ..core import arrange, imageops, sentiment
 from ..core.profiles import NameIndex, apply_to_clip
 
 # Big enough for the sentiment card's picture box, which shows the clipping at
@@ -108,6 +108,65 @@ def heading_over(rows: list, openers: dict, row_id: int) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class Scope:
+    """One category of the sentiment board in one division: the part of the
+    board's clippings a category's list shows while it is opened out.
+
+    A view state, like the lens: never saved, never undoable, never read by an
+    exporter, and set only on the board's pool. Nothing is copied - the list
+    shows the pool's own rows and every command still works on the whole
+    pool, so undo does not depend on which category is open when it runs.
+    ``division`` is what the board's own picker holds: a division's code,
+    sentiment.ALL_DIVISIONS (or None) for every division, or an empty string,
+    which the board holds when no divisions are set up and which means the
+    clippings with no division, exactly as sentiment.shows reads it. Pass the
+    board's ``active`` as it is.
+    """
+
+    column: Section
+    division: str = sentiment.ALL_DIVISIONS
+
+    def __post_init__(self):
+        # Two scopes meaning the same thing have to compare equal however
+        # they were spelt. The board asks for its scope on every change, and a
+        # scope that looked new each time would throw the ticks away.
+        object.__setattr__(self, "column",
+                           sentiment.column_for(Section(self.column)))
+        # Only None is another spelling of every division. An empty division
+        # is not: the board with no divisions set up holds "" and shows only
+        # the unassigned clippings, and a list reading it as all of them
+        # listed rows its own column had no card for.
+        if self.division is None:
+            object.__setattr__(self, "division", sentiment.ALL_DIVISIONS)
+
+    @classmethod
+    def of_ident(cls, ident: str) -> Optional["Scope"]:
+        """The scope a bracket identity was made under, or None for one made
+        with no scope. Group keys are file paths and the loose key, which
+        never start with a column's name and a bar, and a division's code
+        holds no bar, so the tag reads back exactly."""
+        column, bar, rest = ident.partition("|")
+        division, bar2, _ = rest.partition("|")
+        if not (bar and bar2):
+            return None
+        try:
+            section = Section(column)
+        except ValueError:
+            return None
+        if section not in sentiment.COLUMNS:
+            return None
+        return cls(section, division)
+
+    def holds(self, clip) -> bool:
+        return sentiment.shows(clip, self.column, self.division)
+
+    @property
+    def tag(self) -> str:
+        """What every bracket's identity starts with under this scope."""
+        return f"{self.column.value}|{self.division}|"
+
+
 @dataclass
 class Row:
     """A clip plus the view-only state that hangs off it."""
@@ -157,6 +216,11 @@ class Group:
     # some of them. The header then says "3 of 12" rather than claiming 3, which
     # is the same mistake the board made once: a filtered count read as a total.
     total: int = 0
+    # The scope's tag, when the list is showing one category of the board.
+    # One Word file's clippings sit in all four categories, so without it the
+    # file's first bracket in Positive and in Negative would share an identity,
+    # and folding one would fold the other.
+    prefix: str = ""
 
     @property
     def count(self) -> int:
@@ -164,7 +228,7 @@ class Group:
 
     @property
     def ident(self) -> str:
-        return f"{self.key}#run{self.occurrence}"
+        return f"{self.prefix}{self.key}#run{self.occurrence}"
 
     @property
     def row_ids(self) -> list[int]:
@@ -247,6 +311,15 @@ class ClipModel(QAbstractListModel):
         # Folding while a lens is on is kept apart from the real fold state, so
         # closing the lens gives back exactly the brackets that were open.
         self._lens_collapsed: set = set()
+        # Which part of the pool the list shows: None for all of it, or one
+        # category of the board in one division (see Scope). Set only on the
+        # board's pool, and only while a category is opened out.
+        self.scope: Optional[Scope] = None
+        self._scoped_ids: Optional[frozenset] = None
+        # Whether this pool prints the press report's section headings. The
+        # dossier never does, so the board's pool turns this off, and with it
+        # the red heading chip and the heading checks on a move into a file.
+        self.headings_print = True
         self._entries: list[Entry] = []
         self._ids = ids if ids is not None else itertools.count(1)
         self._undo_stack = None
@@ -282,17 +355,81 @@ class ClipModel(QAbstractListModel):
     def clear_lens(self) -> None:
         self.set_lens(arrange.Lens())
 
+    # ---------------------------------------------------------------- scope
+    def set_scope(self, scope: Optional[Scope]) -> None:
+        """Show one category of the board, or the whole pool again.
+
+        Asking for the scope already on is nothing at all: the board asks on
+        every change, and a rebuild from here would announce new counts, which
+        ask again. A real change starts the list afresh - no filter chosen for
+        another category's papers, no ticks on clippings no longer shown.
+        """
+        if scope == self.scope:
+            return
+        self.scope = scope
+        self.lens = arrange.Lens()
+        self._lens_collapsed.clear()
+        self.selected = set()
+        self.rebuild()
+        self.selectionChanged.emit()
+
+    def in_scope(self, row) -> bool:
+        return self.scope is None or self.scope.holds(row.clip)
+
+    def scoped_rows(self, rows: Optional[list] = None) -> list:
+        """The rows the scope holds, in pool order - all of them without one."""
+        source = self.rows if rows is None else rows
+        if self.scope is None:
+            return list(source)
+        return [row for row in source if self.scope.holds(row.clip)]
+
+    def number_of(self, clip_id: int) -> int:
+        """A clipping's No. as the list shows it, or 0 when it is not there.
+
+        Its place in the pool, or under a scope its place in the category -
+        which is the card's badge and the order the dossier prints it in.
+        """
+        if self.scope is None:
+            return self.position_of(clip_id) + 1
+        for index, row in enumerate(self.scoped_rows()):
+            if row.id == clip_id:
+                return index + 1
+        return 0
+
+    def neighbour_below(self, clip_id: int) -> Optional[int]:
+        """The clipping the list shows under this one, or None.
+
+        Under a scope that is the next clipping in the category. The next one
+        in the pool is as likely to belong to another category altogether, and
+        stitching those two together is not what anybody pressed Merge for.
+        """
+        rows = self.scoped_rows()
+        for index, row in enumerate(rows):
+            if row.id == clip_id:
+                return rows[index + 1].id if index + 1 < len(rows) else None
+        return None
+
+    def _scope_stale(self) -> bool:
+        """Whether clippings have come into or gone out of the scope since the
+        list was drawn - a category or division changed underneath it."""
+        if self.scope is None:
+            return False
+        held = frozenset(r.id for r in self.rows if self.scope.holds(r.clip))
+        return held != self._scoped_ids
+
     def visible_rows(self) -> list:
         """The rows on screen, in the order they are on screen.
 
         The same list rebuild() draws from, so anything that has to agree with
         what somebody can actually see - selecting a span, counting what is
-        shown - asks here rather than working it out again.
+        shown - asks here rather than working it out again. Under a scope the
+        lens is over the scope's rows.
         """
+        base = self.rows if self.scope is None else self.scoped_rows()
         if not self.lens.busy:
-            return list(self.rows)
-        order = arrange.shown([r.clip for r in self.rows], self.lens, self.book)
-        return [self.rows[index] for index in order]
+            return list(base)
+        order = arrange.shown([r.clip for r in base], self.lens, self.book)
+        return [base[index] for index in order]
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._entries)
@@ -348,15 +485,22 @@ class ClipModel(QAbstractListModel):
         stored heading instead, which showed nothing at all for a clipping that
         came out of a session saved before the field existed, even though the
         report would still have headed its section.
+
+        A pool that prints no headings - the board's, because the dossier
+        prints none - has none to show.
         """
-        self.section_openers = openers_of(self.rows)
+        self.section_openers = openers_of(self.rows) if self.headings_print else {}
 
     def opener_for(self, row_id: int) -> str:
         """The section heading this row will print, or nothing."""
         return getattr(self, "section_openers", {}).get(row_id, "")
 
     # ------------------------------------------------------------- grouping
-    def _file_groups(self, rows: Optional[list] = None) -> list:
+    #: What _file_groups and file_runs take ``scope`` to be when not given: the
+    #: scope on show. Not None, which asks for the brackets with no scope.
+    SCOPE_ON_SHOW = object()
+
+    def _file_groups(self, rows: Optional[list] = None, scope=SCOPE_ON_SHOW) -> list:
         """The brackets: each maximal run of consecutive rows from one file.
 
         Worked out over the WHOLE list, before any filter, and that is
@@ -365,10 +509,24 @@ class ClipModel(QAbstractListModel):
         order of first appearance. Working it out over the visible rows instead
         would renumber every bracket the moment something was hidden, and a
         gesture aimed at one file would land on another.
+
+        Under a scope they are worked out over the scope's rows, still before
+        any filter: a file's clippings in one category are its bracket there,
+        whatever of the file sits between them in other categories. Every
+        caller - the list, "Move to", the fold sets a move works out - asks
+        here, so they all number the same brackets. ``scope`` asks for another
+        category's brackets than the one on show, as a move's undo does.
         """
         groups: list = []
         seen_keys: dict[str, int] = {}
-        for row in (self.rows if rows is None else rows):
+        source = self.rows if rows is None else rows
+        if scope is ClipModel.SCOPE_ON_SHOW:
+            scope = self.scope
+        prefix = ""
+        if scope is not None:
+            source = [row for row in source if scope.holds(row.clip)]
+            prefix = scope.tag
+        for row in source:
             if groups and groups[-1].key == row.group_key:
                 groups[-1].rows.append(row)
             else:
@@ -381,17 +539,19 @@ class ClipModel(QAbstractListModel):
                         source_kind=row.home_kind or row.source_kind,
                         rows=[row],
                         occurrence=occurrence,
+                        prefix=prefix,
                     )
                 )
         for group in groups:
             group.total = group.count
         return groups
 
-    def file_runs(self, rows: Optional[list] = None) -> list:
-        """Every file's bracket, in list order, over the whole list - never a
-        filtered view. What "Move to" offers. ``rows`` works them out for an
-        order that has not happened yet."""
-        return self._file_groups(rows)
+    def file_runs(self, rows: Optional[list] = None, scope=SCOPE_ON_SHOW) -> list:
+        """Every file's bracket, in list order, over the whole list - or the
+        whole of the scope - never a filtered view. What "Move to" offers.
+        ``rows`` works them out for an order that has not happened yet, and
+        ``scope`` under a category other than the one on show."""
+        return self._file_groups(rows, scope)
 
     def run_folded(self, run) -> bool:
         """Whether this bracket is folded - rebuild's own rule, in one place."""
@@ -407,6 +567,7 @@ class ClipModel(QAbstractListModel):
         """
         groups: list = []
         seen: dict = {}
+        prefix = self.scope.tag if self.scope is not None else ""
         for row in rows:
             title = arrange.heading_for(row.clip, self.lens, self.book) or "Everything else"
             if groups and groups[-1].title == title:
@@ -416,7 +577,7 @@ class ClipModel(QAbstractListModel):
             seen[title] = occurrence + 1
             groups.append(Group(key=f"arranged:{title}", title=title,
                                 source_kind="arranged", rows=[row],
-                                occurrence=occurrence))
+                                occurrence=occurrence, prefix=prefix))
         for group in groups:
             group.total = group.count
         return groups
@@ -427,6 +588,8 @@ class ClipModel(QAbstractListModel):
         The order it draws from may be a lens over self.rows, but the numbers it
         writes on the cards are always true positions in self.rows: card 37 has
         to mean page 37 of the report whether or not something is being hidden.
+        Under a scope they are true positions in the category, which is the
+        card's badge on the board and its place in the dossier.
         """
         self.recompute_openers()
         self.beginResetModel()
@@ -434,7 +597,18 @@ class ClipModel(QAbstractListModel):
 
         # The true export position of every row, worked out once, before any
         # filtering. This is what goes on the card.
-        place = {row.id: index + 1 for index, row in enumerate(self.rows)}
+        place = {row.id: index + 1 for index, row in enumerate(self.scoped_rows())}
+        pruned = False
+        if self.scope is None:
+            self._scoped_ids = None
+        else:
+            self._scoped_ids = frozenset(place)
+            # A tick on a clipping the list no longer shows would let a
+            # delete or a move aimed at what is on screen reach it as well.
+            kept = self.selected & self._scoped_ids
+            if kept != self.selected:
+                self.selected = kept
+                pruned = True
 
         if self.lens.arranging:
             groups = self._arranged_groups(self.visible_rows())
@@ -473,6 +647,8 @@ class ClipModel(QAbstractListModel):
         self._entries = entries
         self.endResetModel()
         self.countsChanged.emit()
+        if pruned:
+            self.selectionChanged.emit()
 
     def group_by_ident(self, ident: str) -> Optional[Group]:
         """The one contiguous run with this identity, or None if it is gone."""
@@ -497,10 +673,38 @@ class ClipModel(QAbstractListModel):
         if ident in self.collapsed_groups or (ids & self.collapsed_row_ids):
             self.collapsed_groups.discard(ident)
             self.collapsed_row_ids -= ids
+            self._open_elsewhere(ids)
         else:
             self.collapsed_groups.add(ident)
             self.collapsed_row_ids |= ids
         self.rebuild()
+
+    def _open_elsewhere(self, ids: set) -> None:
+        """Open, under every other division of the category on show, the
+        brackets holding any of these clippings.
+
+        A fold is kept by the clippings as well as by the bracket, so a file
+        folded under All divisions is drawn folded under Delhi, where it holds
+        some of the same clippings, and one folded under Delhi is drawn folded
+        under All divisions. Opening has to reach as far as folding does. Left
+        alone, the All divisions bracket's identity and its Ambala clipping
+        kept it folded, and going back showed the file shut again. Another
+        category never shares a clipping, so its folds are not touched.
+        """
+        if self.scope is None or not ids:
+            return
+        runs: dict = {}
+        for ident in list(self.collapsed_groups):
+            other = Scope.of_ident(ident)
+            if (other is None or other == self.scope
+                    or other.column is not self.scope.column):
+                continue
+            if other not in runs:
+                runs[other] = {g.ident: g for g in self._file_groups(scope=other)}
+            run = runs[other].get(ident)
+            if run is not None and ids & set(run.row_ids):
+                self.collapsed_groups.discard(ident)
+                self.collapsed_row_ids -= set(run.row_ids)
 
     def set_all_collapsed(self, collapsed: bool) -> None:
         """Fold every bracket, or open every one.
@@ -526,6 +730,18 @@ class ClipModel(QAbstractListModel):
                 self.collapsed_groups.add(ident)
                 if group:
                     self.collapsed_row_ids |= set(group.row_ids)
+        elif self.scope is not None:
+            # Only this category's brackets, every clipping of them including
+            # any a filter is hiding: opening everything in Positive must not
+            # open what was folded in Negative. The same clippings' brackets
+            # under the category's other divisions open with them, as one
+            # bracket's do (see _open_elsewhere).
+            opened: set = set()
+            for run in self._file_groups():
+                self.collapsed_groups.discard(run.ident)
+                opened |= set(run.row_ids)
+            self.collapsed_row_ids -= opened
+            self._open_elsewhere(opened)
         else:
             self.collapsed_groups.clear()
             self.collapsed_row_ids.clear()
@@ -686,8 +902,34 @@ class ClipModel(QAbstractListModel):
                 last = i
         return last + 1
 
+    def scoped_insert_point(self) -> int:
+        """Where a clipping added into the scope goes, as a place in the pool.
+
+        After the last loose clipping in the category, as the press report
+        puts them; at the top of the category when it has none; and in an
+        empty category wherever the pool's own rule says - which is where a
+        clipping collected into an empty column has always gone. Without a
+        scope it is loose_insert_point.
+        """
+        if self.scope is None:
+            return self.loose_insert_point()
+        first = last = -1
+        for index, row in enumerate(self.rows):
+            if not self.scope.holds(row.clip):
+                continue
+            if first < 0:
+                first = index
+            if row.group_key == LOOSE_KEY:
+                last = index
+        if last >= 0:
+            return last + 1
+        if first >= 0:
+            return first
+        return self.loose_insert_point()
+
     def reset_view(self) -> None:
-        """Forget how the list was being looked at: lens, selection, folds.
+        """Forget how the list was being looked at: lens, selection, folds,
+        and the category it was showing.
 
         None of it is saved and none of it belongs to the next newspad. Kept
         separate from replace_all, which keeps whatever selection still makes
@@ -698,6 +940,8 @@ class ClipModel(QAbstractListModel):
         self.collapsed_groups = set()
         self.collapsed_row_ids = set()
         self._lens_collapsed = set()
+        self.scope = None
+        self._scoped_ids = None
 
     def replace_all(self, rows: list[Row]) -> None:
         self.rows = list(rows)
@@ -710,6 +954,12 @@ class ClipModel(QAbstractListModel):
         # onto a different row, so the whole map is worked out again and the
         # whole list repainted. It is one pass over the rows on an edit, which
         # is not something a person can type fast enough to notice.
+        #
+        # Under a scope, a clipping whose category or division changed has
+        # left the list (or joined it), and a repaint would leave it showing.
+        if self._scope_stale():
+            self.rebuild()
+            return
         before = dict(getattr(self, "section_openers", {}))
         self.recompute_openers()
         if before != self.section_openers:
@@ -722,6 +972,9 @@ class ClipModel(QAbstractListModel):
         self.countsChanged.emit()
 
     def refresh_all(self) -> None:
+        if self._scope_stale():         # see refresh_clip
+            self.rebuild()
+            return
         self.recompute_openers()
         if self._entries:
             self.dataChanged.emit(

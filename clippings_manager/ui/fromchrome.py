@@ -21,7 +21,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout)
 
-from ..core import chromewin, webshot
+from ..core import chromewin, sentiment, webshot
 from . import theme
 
 #: Stand-ins the suites replace: the finder, the opener and the picture.
@@ -32,12 +32,29 @@ open_link = chromewin.open_link
 #: repaint what was under it before the screen is read.
 OUT_OF_THE_WAY_MS = 260
 
+#: Said wherever this way is explained. The picture is of the person's own
+#: Chrome, blocker and all: the program cannot clear a box in it (it has no
+#: way into that Chrome, and never looks for one), so the person is told.
+AD_BLOCKER_TIP = ("If your Chrome shows an \"Ad-Blocker Detected\" box, close it or "
+                  "pause the blocker for that site before pressing Take it - or use "
+                  "Browser inside the app, which has no blocker and clears such "
+                  "boxes itself.")
 TAKE_TIP = ("Opens each ticked link in your own Chrome, signed in as you "
             "already are, and takes the picture from the screen when you say "
             "the post is showing. The program only asks Chrome to open the "
-            "link — you do the scrolling.")
+            "link — you do the scrolling. " + AD_BLOCKER_TIP)
 NO_CHROME = "No Chrome window is open to take the picture from."
 NO_BROWSER = "Chrome was not found on this computer."
+
+#: Sites known to put up an "Ad-Blocker Detected" wall in a Chrome that has a
+#: blocker (Economic Times, in the person's own Chrome, September 2026).
+AD_BLOCKER_WALLS = ("economictimes.indiatimes.com", "timesofindia.indiatimes.com")
+
+
+def walls_ad_blockers(site: str) -> bool:
+    host = (site or "").lower().lstrip(".")
+    host = host[4:] if host.startswith("www.") else host
+    return any(host == wall or host.endswith("." + wall) for wall in AD_BLOCKER_WALLS)
 
 
 def picture(window: chromewin.Window) -> bytes:
@@ -64,12 +81,16 @@ class TakeItDialog(QDialog):
 
     taken = Signal(str, int)      # url, the clipping's id
     skipped = Signal(str)
+    showing = Signal(str)         # the link just opened in Chrome
     done = Signal(int)            # how many were taken
 
-    def __init__(self, window, wanted: list, parent=None):
+    def __init__(self, window, wanted: list, parent=None, trim_after: bool = True):
         super().__init__(parent or window)
         self.window = window
         self.wanted = list(wanted)
+        #: Open the preview with the trim started after each picture - the
+        #: picture is the whole Chrome window. Off, the clipping is only added.
+        self.trim_after = bool(trim_after)
         self.at = -1
         self.count = 0
         self.stage = "waiting"
@@ -142,6 +163,11 @@ class TakeItDialog(QDialog):
         else:
             self.say.setText(NO_BROWSER + " Open the link yourself, then press "
                              "Take it with the post on the screen.")
+        if walls_ad_blockers(found.site):
+            self.say.setText(self.say.text() + " This site puts up an \"Ad-Blocker "
+                             "Detected\" box in a Chrome with a blocker: close it, or "
+                             "pause the blocker for this site, before Take it.")
+        self.showing.emit(found.url)
         self._buttons()
 
     def _buttons(self) -> None:
@@ -187,8 +213,24 @@ class TakeItDialog(QDialog):
             self.stage = "taken"
             taken = True
             self.taken.emit(found.url, clip_id)
-            position = self.window.pool().position_of(clip_id) + 1
-            self.say.setText(f"Taken as No. {position}. In the preview, drag the "
+            # The number the list shows it by - in a category of the board
+            # opened out, its place there. A post filed in a category not on
+            # show has no number in view, so it is named by its column.
+            pool = self.window.pool()
+            position = pool.number_of(clip_id)
+            if position:
+                taken_as = f"Taken as No. {position}."
+            else:
+                row = pool.row_for(clip_id)
+                column = (sentiment.column_for(row.clip.section).value
+                          if row is not None else "the board")
+                taken_as = f"Taken into {column}."
+            if not self.trim_after:
+                self.say.setText(taken_as)
+                self._buttons()
+                self.next.setFocus()
+                return
+            self.say.setText(f"{taken_as} In the preview, drag the "
                              "edges in around the post and press Keep this — "
                              "then come back here for the next one.")
             self._buttons()
@@ -201,7 +243,7 @@ class TakeItDialog(QDialog):
             # when there is a trim to do, so the next thing pressed is its
             # edge and not this panel.
             self.show()
-            if not taken:
+            if not taken or not self.trim_after:
                 self.raise_()
                 self.activateWindow()
 
