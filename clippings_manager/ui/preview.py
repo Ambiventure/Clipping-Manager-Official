@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 
 from ..core import sections as section_list
 from ..core import imageops
-from ..core.models import CropRect, Section
+from ..core.models import (NORMAL_PRIORITY, PRIORITIES, CropRect, Section,
+                           priority_of)
 from . import theme
 from .trimming import TrimCanvas
 from .fluid import ElidedLabel
@@ -77,6 +78,23 @@ QPushButton:hover { background: rgba(153,27,27,0.6); color: #FEE2E2; }
 TWIN_WIDTH = 340
 TWIN_PICTURE_TALL = 420
 
+#: The five priority bubbles at the top of the window. One press files the
+#: clipping under that level and moves it there in the list - priority 1 at the
+#: top of the report, then 2, and so on - so the whole of setting a morning's
+#: order is five buttons and the arrow to the next clipping.
+BUBBLE = 30
+#: The same five colours the card's own badge uses, so a bubble pressed here
+#: and the badge that appears on the card are plainly the same thing.
+BUBBLE_COLOURS = theme.PRIORITY_COLOURS
+BUBBLE_STYLE = """
+QPushButton {{
+    background: {rest}; border: 1px solid {edge}; border-radius: {radius}px;
+    min-width: {size}px; max-width: {size}px; min-height: {size}px;
+    max-height: {size}px; color: {ink}; font-size: 13px; font-weight: 700;
+}}
+QPushButton:hover {{ background: {hover}; color: #FFFFFF; }}
+"""
+
 
 class _ClickLabel(QLabel):
     """A picture that can be pressed."""
@@ -110,6 +128,9 @@ class PreviewDialog(QDialog):
     labelChanged = Signal(int, str)
     #: (clip id, CropRect) - a trim applied, or put back.
     cropChanged = Signal(int, object)
+    #: (row id, level 1-5) - a priority bubble was pressed. The window moves
+    #: the clipping into that level; this window only asks.
+    priorityPicked = Signal(int, int)
     navigate = Signal(int)
     #: Show this clipping instead (a row id) - the one a badged clipping
     #: repeats, or the one that repeats it.
@@ -177,6 +198,8 @@ class PreviewDialog(QDialog):
         row.addWidget(self.prev_btn)
         row.addWidget(self.position)
         row.addWidget(self.next_btn)
+        row.addSpacing(10)
+        row.addWidget(self._build_bubbles())
 
         titles = QVBoxLayout()
         titles.setSpacing(1)
@@ -218,6 +241,58 @@ class PreviewDialog(QDialog):
         self.delete_btn.clicked.connect(self._delete)
         close.clicked.connect(self.close)
         return bar
+
+    def _build_bubbles(self) -> QWidget:
+        """The five priority bubbles, 1 to 5, with 1 first.
+
+        Beside the walk arrows, because they are used together: look at the
+        clipping, press a number, press the arrow for the next one. The one in
+        force is filled in and the others are outlines, so the level a clipping
+        is at can be read at a glance without a word of explanation.
+        """
+        holder = QWidget()
+        line = QHBoxLayout(holder)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(5)
+        self.bubbles = {}
+        for level in PRIORITIES:
+            bubble = QPushButton(str(level))
+            bubble.setCursor(Qt.PointingHandCursor)
+            bubble.setToolTip(
+                f"Priority {level}" + (
+                    " - first in the report" if level == 1 else
+                    " - last in the report" if level == 5 else
+                    " - the middle, where every clipping starts" if level == NORMAL_PRIORITY
+                    else "") + ". The list is kept in priority order, and "
+                "clippings at the same priority stay in the order you put them.")
+            bubble.clicked.connect(lambda _checked=False, want=level: self._pick(want))
+            self.bubbles[level] = bubble
+            line.addWidget(bubble)
+        self._paint_bubbles(NORMAL_PRIORITY)
+        return holder
+
+    def _paint_bubbles(self, level: int) -> None:
+        """Fill the one in force; leave the rest as outlines."""
+        for number, bubble in getattr(self, "bubbles", {}).items():
+            colour = BUBBLE_COLOURS[number]
+            here = number == level
+            bubble.setStyleSheet(BUBBLE_STYLE.format(
+                rest=colour if here else "#1E293B",
+                hover=colour,
+                edge=colour if here else "#33415A",
+                ink="#FFFFFF" if here else "#94A3B8",
+                size=BUBBLE, radius=BUBBLE // 2))
+            bubble.setDown(False)
+
+    def _pick(self, level: int) -> None:
+        if self.row is None or self._loading:
+            return
+        if priority_of(self.row.clip) == level:
+            return          # already there; nothing to move and nothing to undo
+        # Painted at once. The window will send the row back through show_row
+        # when it has moved it, but the press has to look answered now.
+        self._paint_bubbles(level)
+        self.priorityPicked.emit(self.row.id, level)
 
     def _build_viewport(self) -> QWidget:
         self.scroll = QScrollArea()
@@ -704,6 +779,7 @@ class PreviewDialog(QDialog):
         bits.append(row.source_name or clip.source_ref)
         self.provenance.setText("  ·  ".join(str(b) for b in bits if b))
         self._show_twin(row)
+        self._paint_bubbles(priority_of(clip))
         if total:
             self.position.setText(f"{position} / {total}")
             self.prev_btn.setEnabled(position > 1)

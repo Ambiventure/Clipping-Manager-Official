@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import glyphmap
+from . import glyphmap, ourfiles
 from .models import Clip, CropRect, Section
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -46,6 +46,7 @@ class Event:
     url: str = ""
     page: int = 0                   # 1-based page number, PDFs only
     furniture: bool = False         # section artwork, not a clipping
+    furniture_note: str = ""        # and what it is, when we know (ourfiles)
 
 
 # --------------------------------------------------------------------- config
@@ -371,6 +372,34 @@ def build_clips(
     ignores = _ignore_patterns(config)
     default_section = Section(config["sections"].get("default", "Neutral"))
 
+    # One of our own reports coming back. Its cover, its page numbers and its
+    # coverage summary are marked before a single line is read off it: they are
+    # not captions, not section headers, and the cover picture is not a
+    # clipping. See core/ourfiles for what went wrong without this.
+    own = bool(own) or ourfiles.looks_like_ours(events)
+    if own:
+        ourfiles.mark_furniture(events)
+
+    image_positions = [i for i, e in enumerate(events) if e.kind == "image"]
+    last_image = image_positions[-1] if image_positions else -1
+
+    # A HEADER WITH NOTHING UNDER IT IS NOT A HEADER.
+    #
+    # A section header announces the clippings that follow it, so a line that
+    # matches one but has no picture after it anywhere is a line that happens
+    # to use the word - "Digital  29" on a coverage summary page, a word in a
+    # sign-off, a stray footer. Taking it for the document's first header made
+    # every picture in the document "above the first section header", which is
+    # how a whole report came in flagged. Costs nothing on a division's file,
+    # where every header has its run underneath it.
+    header_positions = [
+        i for i, e in enumerate(events)
+        if e.kind == "text" and not e.furniture
+        and match_section(e.text, config) is not None
+        and i < last_image
+    ]
+    headers = set(header_positions)
+
     # Which section is in force at each point in the stream, and the words the
     # document used to announce it. The words are kept as well as the enum
     # because the report is expected to read the way the source reads: the 360
@@ -380,24 +409,22 @@ def build_clips(
     headings: list[str] = []
     current = default_section
     current_heading = ""
-    for event in events:
-        if event.kind == "text":
-            found = match_section(event.text, config)
-            if found:
-                current = found
-                current_heading = " ".join(event.text.split())
+    for index, event in enumerate(events):
+        if index in headers:
+            current = match_section(event.text, config)
+            current_heading = " ".join(event.text.split())
         sections.append(current)
         headings.append(current_heading)
 
-    header_positions = [
-        i for i, e in enumerate(events)
-        if e.kind == "text" and match_section(e.text, config) is not None
-    ]
     first_header = header_positions[0] if header_positions else None
-    image_positions = [i for i, e in enumerate(events) if e.kind == "image"]
 
     def usable(event: Event) -> bool:
         if event.kind != "text" or not event.text.strip():
+            return False
+        # Our own cover, page numbers and summary page (ourfiles). None of it
+        # is a caption, and the page number at the foot of the sheet above is
+        # what used to arrive glued to the front of the next caption.
+        if event.furniture:
             return False
         if match_section(event.text, config) is not None:
             return False
@@ -502,14 +529,18 @@ def build_clips(
             title_in_image=(position == "burned"),
         )
         # The first real clipping of a titled run opens it, and keeps the words.
+        # In one of our own reports every heading on the page was put there by
+        # the person who exported it, so all of them come back the same way and
+        # print again if the report is rebuilt.
         section = sections[stream_index]
-        if (section in titled and section not in opened and not event.furniture
-                and headings[stream_index]):
+        if ((own or section in titled) and section not in opened
+                and not event.furniture and headings[stream_index]):
             opened.add(section)
             clip.section_title = headings[stream_index]
         if event.furniture:
             clip.probable_junk = True
-            clip.junk_reason = "decorative section artwork, not a clipping"
+            clip.junk_reason = (event.furniture_note
+                                or "decorative section artwork, not a clipping")
         elif first_header is not None and stream_index < first_header:
             clip.probable_junk = True
             clip.junk_reason = "appears above the first section header"

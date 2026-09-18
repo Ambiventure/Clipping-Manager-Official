@@ -64,6 +64,18 @@ DANGER = "#DC2626"
 FLAG = "#B8730A"
 FLAG_WASH = "#FBF3E7"
 
+# The five priorities, from first to last. Warm at the top and cool at the
+# bottom, so a glance down a list reads as an order rather than as five
+# unrelated badges - and the middle one, where every clipping starts, is the
+# slate that says nothing has been decided about this clipping yet.
+PRIORITY_COLOURS = {
+    1: "#B91C1C",
+    2: "#C2410C",
+    3: "#475569",
+    4: "#0E7490",
+    5: "#1D4ED8",
+}
+
 # --- the crown ---------------------------------------------------------------
 # One dark band, and only one. The top bar is the window frame - it never
 # scrolls, it names the organisation, it belongs to the application rather than

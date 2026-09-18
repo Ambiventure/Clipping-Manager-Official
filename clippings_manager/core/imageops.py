@@ -15,6 +15,7 @@ stay on the clips they came from until the undo stack drops them.
 from __future__ import annotations
 
 import io
+from functools import lru_cache
 from typing import Iterable, Literal
 
 from PIL import Image
@@ -540,6 +541,22 @@ def _print_of(data: bytes, lower: bool) -> str:
     return found["lower"] if lower else found["whole"]
 
 
+@lru_cache(maxsize=4096)
+def _as_number(print_: str) -> int:
+    """One print as a number, remembered. -1 when it is not a print at all.
+
+    Every clipping's print is parsed once a morning instead of once a pair.
+    Each is compared against every other, so a morning of two hundred is twenty
+    thousand pairs and up to three prints a pair: the parsing was sixty
+    thousand reads of the same two hundred strings. The cache holds four
+    thousand, which is twenty mornings' worth.
+    """
+    try:
+        return int(print_, 16)
+    except ValueError:
+        return -1
+
+
 def pictures_apart(first: str, second: str) -> int:
     """How many of the sixty-four differ. -1 when either has no print.
 
@@ -550,10 +567,10 @@ def pictures_apart(first: str, second: str) -> int:
     """
     if not first or not second:
         return -1
-    try:
-        return (int(first, 16) ^ int(second, 16)).bit_count()
-    except ValueError:
+    left, right = _as_number(first), _as_number(second)
+    if left < 0 or right < 0:
         return -1
+    return (left ^ right).bit_count()
 
 
 # --------------------------------------------------------------------- trim

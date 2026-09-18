@@ -267,6 +267,9 @@ class MainWindow(QMainWindow):
         # to show on a row or to refuse a move for (see ClipModel.headings_print).
         self.board_model.headings_print = False
         self.preview: PreviewDialog | None = None
+        # The clipping to walk to next, when a priority has just moved
+        # the one on show out from under the place in the list.
+        self._preview_next_id: int | None = None
         self._group_serial = itertools.count(1)
         self._last_clicked_id: int | None = None
         # The other end of a shift-click run in a board category's list. Its
@@ -3191,13 +3194,23 @@ class MainWindow(QMainWindow):
         # ``target`` is a place in the whole pool, as the list works it out;
         # in a category the helper turns it into a place in the category.
         rows = commands.move_to(model, ids, target)
-        self.stack_for(model).push(
-            commands.Reorder(
-                model, rows,
-                f"{len(ids)} clippings reordered" if len(ids) > 1
-                else "Clipping reordered",
-            )
-        )
+        many = f"{len(ids)} clippings reordered" if len(ids) > 1 else "Clipping reordered"
+        # A drop says "put it here", and here has a priority. Dropped among the
+        # 1s it becomes a 1 - otherwise the list would come out of level order
+        # the moment anybody dragged a card past a level boundary, and the
+        # order is the whole meaning of the five levels. Dropped among its own
+        # level, which is every drop until somebody sets a priority, nothing
+        # about it changes.
+        landed = commands.level_at(rows, ids)
+        levels = {commands.priority_of(model.by_id(i)) for i in ids
+                  if model.by_id(i) is not None}
+        if landed is not None and levels != {landed}:
+            self.stack_for(model).push(
+                commands.SetPriority(model, ids, landed, rows=rows,
+                                     text=f"{many}, priority {landed}"))
+            self._flash(f"Moved into priority {landed} — Ctrl+Z puts it back.", "info")
+            return
+        self.stack_for(model).push(commands.Reorder(model, rows, many))
         self._flash("Moved — Ctrl+Z puts it back.", "info")
 
     def _on_selection_toggled(self, clip_id: int, additive: bool, ranged: bool,
@@ -3733,6 +3746,7 @@ class MainWindow(QMainWindow):
             self.preview.rotateRequested.connect(self._preview_rotate)
             self.preview.splitRequested.connect(self._preview_split)
             self.preview.cropChanged.connect(self._preview_crop)
+            self.preview.priorityPicked.connect(self._preview_priority)
             self.preview.navigate.connect(self._preview_navigate)
             # A badged clipping shows the one it repeats beside it, named by
             # the file each came from; either can be opened, or the pair
@@ -3751,6 +3765,9 @@ class MainWindow(QMainWindow):
         # the two are called by - are looked up in this one.
         self.preview.model = model
         at, walk = self._preview_place(clip_id)
+        # Opening on a clipping is a new place in the list, so any clipping
+        # left waiting from a priority press belongs to the walk before it.
+        self._preview_next_id = None
         # The counter must count what is on screen. With a filter on it used to
         # read "3 / 40" while the list showed nine.
         position = (at + 1) if at is not None else 0
@@ -3937,9 +3954,47 @@ class MainWindow(QMainWindow):
                 return index, walk
         return None, walk
 
+    def _preview_priority(self, row_id: int, level: int) -> None:
+        """A priority bubble was pressed in the preview.
+
+        Two things happen and they are one step: the clipping is given the
+        level, and it moves to where that level sits in the list.
+
+        The walk does NOT follow it. Somebody going down a morning setting
+        priorities is at a place in the list, not on a clipping: send them back
+        up to wherever the clipping landed and the next press of the arrow
+        walks the same clippings all over again. So the one that WAS below it
+        is remembered here, before anything moves, and the next arrow goes
+        there - which is the clipping they had not seen yet.
+        """
+        pool = self._preview_pool()
+        if pool.row_for(row_id) is None:
+            return
+        at, walk = self._preview_place(row_id)
+        after = walk[at + 1].id if at is not None and at + 1 < len(walk) else None
+        self.stack_for(pool).push(commands.SetPriority(pool, [row_id], level))
+        self._preview_next_id = after
+        # A trim half drawn over the picture is not thrown away for this. The
+        # clipping has moved in the list; the picture on screen and the box
+        # being dragged over it have not changed, and showing the row again
+        # would stop the trim (see PreviewDialog.show_row).
+        preview = self.preview
+        if preview is None or not getattr(preview.canvas, "trimming", False):
+            self._refresh_preview(row_id)
+        self._update_counts()
+
     def _preview_navigate(self, step: int) -> None:
         if self.preview is None or self.preview.row is None:
             return
+        # The clipping that was below this one before a priority moved it. It
+        # is used once and only forwards; anything else - a step back, a second
+        # step on - walks the list as it now stands.
+        waiting, self._preview_next_id = self._preview_next_id, None
+        if step > 0 and waiting is not None:
+            at, _walk = self._preview_place(waiting)
+            if at is not None:
+                self._refresh_preview(waiting)
+                return
         at, walk = self._preview_place(self.preview.row.id)
         if at is None:
             # Opened on a clipping the filter hides - from the board, or because

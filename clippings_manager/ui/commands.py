@@ -8,11 +8,12 @@ reorder, the batch delete and the merge are all commands like everything else.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from PySide6.QtGui import QUndoCommand
 
 from ..core import imageops
+from ..core.models import priority_of
 
 if TYPE_CHECKING:  # pragma: no cover
     from .model import ClipModel, Row
@@ -464,6 +465,138 @@ def _weave(model: "ClipModel", scoped_new: list) -> list:
     return woven
 
 
+# ------------------------------------------------------------------ priority
+#
+# Five levels, and the list is kept in them: every priority 1 above every 2,
+# and so on down to 5. Inside a level the order is whatever the person
+# arranged - ten clippings at priority 1 can be put in any order they like,
+# and nudging one of them up or down moves it inside its own ten and no
+# further. Crossing a level is what the bubbles in the preview are for.
+#
+# A BAND IS A SCOPE. The helpers below reorder one level's clippings and lay
+# them back into the slots that level already holds, which is exactly what
+# _weave does for a category of the board. Everything else - the other levels,
+# the file brackets, the headings - keeps its place, so setting a priority can
+# never disturb a part of the list the person was not working on.
+#
+# NORMAL_PRIORITY (3) is where every clipping starts, so a list nobody has set
+# a priority on is one band, the whole list, and every one of these helpers
+# does exactly what it did before priorities existed.
+
+
+def band_of(row) -> int:
+    """Which of the five levels this row's clipping is at."""
+    return priority_of(getattr(row, "clip", None))
+
+
+def banded(rows: list) -> list:
+    """The same rows in level order, each level keeping its own order.
+
+    Stable, so it is the identity on a list that is already in level order -
+    which is every list until somebody presses a bubble.
+    """
+    return sorted(rows, key=band_of)
+
+
+def in_levels(source: list, clip_ids: Iterable[int], within) -> list:
+    """Reorder each level the selection touches, leaving every other row put.
+
+    ``within`` is handed one level's rows and returns them in a new order.
+    """
+    ids = set(clip_ids)
+    out = list(source)
+    levels = sorted({band_of(row) for row in source if row.id in ids})
+    for level in levels:
+        slots = [i for i, row in enumerate(source) if band_of(row) == level]
+        arranged = within([source[i] for i in slots])
+        if sorted(map(id, arranged)) != sorted(id(source[i]) for i in slots):
+            continue        # a helper that lost or gained a row changes nothing
+        for index, row in zip(slots, arranged):
+            out[index] = row
+    return out
+
+
+def placed_in_band(model: "ClipModel", clip_ids: Iterable[int], level: int,
+                   rows: list | None = None) -> list:
+    """Row order with these clippings moved to the end of ``level``.
+
+    The end rather than the start: a clipping given a priority joins the ones
+    already at that priority, under them, the way a new arrival joins the list.
+    """
+    if rows is None and _in_scope(model):
+        return _weave(model, placed_in_band(model, clip_ids, level,
+                                            rows=model.scoped_rows()))
+    source = model.rows if rows is None else rows
+    ids = set(clip_ids)
+    moving = [row for row in source if row.id in ids]
+    rest = [row for row in source if row.id not in ids]
+    at = len(rest)
+    for index, row in enumerate(rest):
+        if band_of(row) > level:
+            at = index
+            break
+    return rest[:at] + moving + rest[at:]
+
+
+def level_at(rows: list, clip_ids: Iterable[int]) -> Optional[int]:
+    """The level a block of rows has landed among, or None if it is alone.
+
+    What a drag and drop means: put here. Here has a priority - the clippings
+    around the place it was dropped - and the dropped clipping takes it, which
+    is the only reading that keeps the list in level order after a drop. The
+    row ABOVE decides when the block straddles a boundary, because a clipping
+    is dropped underneath the one it was dragged past.
+    """
+    ids = set(clip_ids)
+    places = [index for index, row in enumerate(rows) if row.id in ids]
+    if not places:
+        return None
+    above = next((band_of(rows[i]) for i in range(places[0] - 1, -1, -1)
+                  if rows[i].id not in ids), None)
+    below = next((band_of(rows[i]) for i in range(places[-1] + 1, len(rows))
+                  if rows[i].id not in ids), None)
+    if above is None and below is None:
+        return None
+    if above is None:
+        return below
+    return above
+
+
+class SetPriority(Reorder):
+    """Give clippings a priority level, and move them into it.
+
+    One step in the history: the level and the place go together, because a
+    clipping at priority 1 sitting among the 3s is the one thing this feature
+    must never produce.
+    """
+
+    def __init__(self, model: "ClipModel", clip_ids: Iterable[int], level: int,
+                 rows: list | None = None, text: str = ""):
+        ids = [i for i in clip_ids if model.row_for(i) is not None]
+        if rows is None:
+            rows = placed_in_band(model, ids, level)
+        super().__init__(model, rows,
+                         text or (f"Priority {level}" if len(ids) == 1
+                                  else f"Priority {level} for {len(ids)} clippings"))
+        self.ids = ids
+        self.level = level
+        self.was = {i: priority_of(model.by_id(i)) for i in ids}
+
+    def _put(self, levels: dict) -> None:
+        for clip_id, level in levels.items():
+            clip = self.model.by_id(clip_id)
+            if clip is not None:
+                clip.priority = level
+
+    def redo(self) -> None:
+        self._put({i: self.level for i in self.ids})
+        super().redo()
+
+    def undo(self) -> None:
+        self._put(self.was)
+        super().undo()
+
+
 def move_to(model: "ClipModel", clip_ids: Iterable[int], target: int,
             rows: list | None = None) -> list:
     """Row order with the given clippings lifted out and dropped at ``target``.
@@ -766,6 +899,15 @@ def move_relative(model: "ClipModel", clip_ids: Iterable[int], where: str,
         return _weave(model, move_relative(model, clip_ids, where,
                                            rows=model.scoped_rows()))
     source = model.rows if rows is None else rows
+    # Inside its own priority, and no further: the top of the list is the top
+    # of the clipping's own level. A list nobody has set a priority on is one
+    # level from end to end, so this is the whole list, as it always was.
+    return in_levels(source, clip_ids,
+                     lambda band: _nudged(band, clip_ids, where))
+
+
+def _nudged(source: list, clip_ids: Iterable[int], where: str) -> list:
+    """One run of rows with the selection stepped to the top, up, down or the end."""
     ids = set(clip_ids)
     moving = [r for r in source if r.id in ids]
     rest = [r for r in source if r.id not in ids]
@@ -816,13 +958,28 @@ def move_group_relative(model: "ClipModel", clip_ids: Iterable[int],
     if rows is None and _in_scope(model):
         return _weave(model, move_group_relative(model, clip_ids, where,
                                                  rows=model.scoped_rows()))
-    ids = set(clip_ids)
     source = list(model.rows if rows is None else rows)
+    # Level by level, each part of the file past the file beside it inside
+    # that level - the same rule the single-clipping arrows follow, so no
+    # arrow can take a clipping out of the priority somebody gave it. A file
+    # whose clippings are all at one priority - which is every file until
+    # somebody presses a bubble - is moved exactly as it was before.
+    return in_levels(source, clip_ids,
+                     lambda band: _grouped(band, clip_ids, where))
+
+
+def _grouped(source: list, clip_ids: Iterable[int], where: str) -> list:
+    """One run of rows with a whole file's bracket stepped past its neighbour.
+
+    Anything that is not exactly one whole bracket is nudged instead, which is
+    right for a hand-picked selection.
+    """
+    ids = {row.id for row in source} & set(clip_ids)
     runs = _runs(source)
     here = next((i for i, run in enumerate(runs)
                  if {r.id for r in run} == ids), None)
     if here is None:
-        return move_relative(model, clip_ids, where, rows=rows)
+        return _nudged(source, ids, where)
 
     order = list(runs)
     run = order.pop(here)
@@ -848,14 +1005,29 @@ class AddClips(_Base):
         )
         self.new_rows = rows
         self.at = at
+        self.before = None
 
     def redo(self) -> None:
+        # The list exactly as it was, so undo puts back the order and not
+        # merely the rows: the sort below can move what was already there.
+        self.before = list(self.model.rows)
         if self.at >= 0:
             self.model.insert(self.new_rows, self.at)
         else:
             self.model.append(self.new_rows)
+        # Arrivals start at the middle priority, so on a list where somebody
+        # has set priorities they belong above the 4s and 5s rather than at the
+        # very bottom. A stable sort, so where they land among the clippings of
+        # their own level is exactly where they were just put - and on a list
+        # with no priorities set it is the list unchanged.
+        order = banded(self.model.rows)
+        if [row.id for row in order] != [row.id for row in self.model.rows]:
+            self.model.replace_all(order)
 
     def undo(self) -> None:
+        if self.before is not None:
+            self.model.replace_all(list(self.before))
+            return
         ids = {r.id for r in self.new_rows}
         self.model.replace_all([r for r in self.model.rows if r.id not in ids])
 

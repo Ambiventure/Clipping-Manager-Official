@@ -330,6 +330,35 @@ def run(sample: str | None = None) -> tuple[bool, str]:
         passed = False
         lines.append(_line(False, "Word export", f"{type(exc).__name__}: {exc}"))
 
+    # --- and the same two files read back in -------------------------------
+    #
+    # A finished report comes back in often - yesterday's file reopened to lift
+    # clippings out of it - and for a while it came back with every clipping
+    # flagged "probably not a clipping" and outside the export. Checked on the
+    # machine it will be used on, against the files this program has just
+    # written, rather than on files made here.
+    try:
+        from .core.extract_docx import extract_docx
+        from .core.extract_pdf import extract_pdf
+
+        told, ok = [], True
+        for suffix, reader in ((".pdf", extract_pdf), (".docx", extract_docx)):
+            file = Path(tempfile.gettempdir()) / f"clippings-manager-selfcheck{suffix}"
+            back, _warnings = reader(file)
+            clippings = [c for c in back if not c.probable_junk]
+            told.append(f"{suffix}: {len(clippings)} of {len(back)} a clipping")
+            here = len(clippings) == 1 and bool(clippings[0].caption_raw)
+            ok &= here
+            if not here:
+                told[-1] += (" - " + "; ".join(c.junk_reason for c in back
+                                               if c.probable_junk))
+        passed &= ok
+        lines.append(_line(ok, "our own report, imported again", ", ".join(told)))
+    except Exception as exc:  # noqa: BLE001
+        passed = False
+        lines.append(_line(False, "our own report, imported again",
+                           f"{type(exc).__name__}: {exc}"))
+
     # --- the cover page --------------------------------------------------
     try:
         from .core import cover_render

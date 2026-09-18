@@ -25,7 +25,7 @@ from typing import Callable, Optional, Sequence
 import pymupdf
 
 from .. import version
-from ..core import imageops
+from ..core import assemble, imageops, ourfiles
 from ..core.models import Clip
 from . import layout
 
@@ -314,7 +314,7 @@ def _summary_pages(new_page, typeface: "Typeface", style, summary, report_date,
     foot = height - layout.MARGIN_BOTTOM - layout.PAGE_NUMBER_BAND - 8.0
     sheet = new_page()
     y = layout.MARGIN_TOP + 40.0
-    _draw_line(sheet, typeface, "Coverage summary",
+    _draw_line(sheet, typeface, ourfiles.SUMMARY_TITLE,
                pymupdf.Rect(left, y, right, y + SUMMARY_TITLE_SIZE * 1.5),
                SUMMARY_TITLE_SIZE, align="left", bold=True, family=style.family)
     y += SUMMARY_TITLE_SIZE * 1.6
@@ -467,12 +467,12 @@ def build(
         )
     if draw_cover_text:
         _draw_line(
-            cover, typeface, f"NUMBER OF CLIPPINGS: {len(clips)}",
+            cover, typeface, f"{ourfiles.COVER_COUNT} {len(clips)}",
             pymupdf.Rect(0, first_y, page_width, first_y + line_height),
             layout.COVER_TEXT_SIZE,
         )
         _draw_line(
-            cover, typeface, f"DATE : {report_date.strftime('%d.%m.%Y')}",
+            cover, typeface, f"{ourfiles.COVER_DATE} {report_date.strftime('%d.%m.%Y')}",
             pymupdf.Rect(0, second_y, page_width, second_y + line_height),
             layout.COVER_TEXT_SIZE,
         )
@@ -587,6 +587,11 @@ def build(
         "author": "Northern Railway",
         "creator": f"Clippings Manager {version.describe()}",
         "producer": f"Clippings Manager {version.describe()}",
+        # A third place to look. A PDF that has been through another program -
+        # printed to PDF again, or run through a shrinker - often keeps the
+        # keywords while the producer becomes that program's name, and the
+        # importer has to be able to tell that this was ours (core/ourfiles).
+        "keywords": assemble.MADE_HERE,
     })
 
     # Each text box embeds its own font reference, so a 165-page run ends up with

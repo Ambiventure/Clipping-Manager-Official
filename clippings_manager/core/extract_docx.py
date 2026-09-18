@@ -180,15 +180,21 @@ def _made_here(archive: zipfile.ZipFile) -> bool:
     """Whether this Word file is one of the program's own reports.
 
     The exporter writes its name into the document's comments, which Word
-    keeps in docProps/core.xml as dc:description. Read as text, not parsed:
-    a missing or odd core.xml is simply not ours.
+    keeps in docProps/core.xml as dc:description, and into the keywords beside
+    it - two places, because a file that has been opened and saved again by
+    another program keeps one or the other. Read as text, not parsed: a
+    missing or odd core.xml is simply not ours.
     """
     try:
         core = archive.read("docProps/core.xml").decode("utf-8", "replace")
     except (KeyError, OSError, ValueError):
         return False
-    found = re.search(r"<dc:description[^>]*>([^<]*)</dc:description>", core)
-    return bool(found) and made_here(html.unescape(found.group(1)))
+    stamps = []
+    for tag in ("dc:description", "cp:keywords"):
+        found = re.search(rf"<{tag}[^>]*>([^<]*)</{tag}>", core)
+        if found:
+            stamps.append(html.unescape(found.group(1)))
+    return made_here(*stamps)
 
 
 def _read_relationships(archive: zipfile.ZipFile) -> dict[str, dict]:

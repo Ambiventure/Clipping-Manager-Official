@@ -375,7 +375,8 @@ def extract_pdf(
             stamps = document.metadata or {}
         except Exception:  # noqa: BLE001 - metadata is a courtesy
             stamps = {}
-        own = made_here(stamps.get("creator"), stamps.get("producer"))
+        own = made_here(stamps.get("creator"), stamps.get("producer"),
+                        stamps.get("keywords"))
         clips = build_clips(events, str(path), code, config, warnings, own=own)
 
     return clips, warnings

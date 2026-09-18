@@ -21,6 +21,32 @@ their first six words. Ninety is the gap between those two populations.
 Nothing is ever deleted here. A clipping is marked as suspected, and the person
 compiling the report decides - which matters, because the pair at 88 and the
 pair at 90 look much the same from here.
+
+WHAT THE OFFICE'S OWN VERDICTS CHANGED (2.0.33)
+-----------------------------------------------
+
+The duplicates trainer (core/training.py) exists so that pairs near the rule's
+boundary can be labelled by the people who compile the report. Two mornings of
+labelling came back - 117 pairs, 12 of them the same cutting twice - and
+replaying them through the rule as it stood gave 7 of the 12 found and 9 pairs
+wrongly flagged.
+
+Every single one of those 9 was two cuttings out of ONE division's own
+document, and every one of the 12 real repeats crossed documents. That is not a
+coincidence and it is not about pictures: a division that pastes two cuttings
+into its file has already decided both belong in the report - the same story in
+two papers, or one paper's two editions - while the repeat this module exists
+for is the same story arriving in two divisions' files, or pasted in by hand
+against a file. So the words rule now runs across documents only, and inside
+one document nothing but an all-but-identical picture counts.
+
+Three of the 12 have no readable words at all: the same photograph pasted in
+from WhatsApp and scanned into a file, with a headline Tesseract cannot make
+out. Their pictures are 0, 2 and 2 apart out of 64 while the nearest pair that
+is NOT a repeat sits at 12 - so a picture that close is now called a repeat
+without reading anything, which is also the quickest answer there is.
+
+Scored on all 117: 12 of 12 found, none wrongly flagged.
 """
 
 from __future__ import annotations
@@ -71,6 +97,61 @@ OVERALL = 70.0
 # are 41 apart out of 64, while the same cutting scanned twice is 0 or 1.
 MATCH_PICTURES = True
 
+# How far apart two pictures may be and still be one cutting, when the words
+# already agree and the two came from different documents.
+#
+# Wider than imageops' own PICTURE_APART (28) and LOWER_APART (31), which are
+# what this module used for both jobs before the labelled pairs arrived. Two
+# of the 12 known repeats sit at 30 and at 33 - the same cutting, one copy
+# scanned with a masthead band added and cropped tighter - and were missed. The
+# nearest labelled pair that is NOT a repeat and also crosses documents sits at
+# 34, so 32 is the gap between the two populations and the lower half is given
+# the same 1-point margin.
+#
+# These are only reached across documents. Inside one document the words are
+# not consulted at all, which is what made the widening affordable: the pairs
+# these numbers used to protect against were all same-document pairs.
+PICTURES_APART = 32
+LOWER_APART = 34
+
+# And when the picture alone settles it, whatever the words say.
+#
+# The same photograph, pasted in from WhatsApp and also scanned into a
+# division's file: 0, 2 and 2 apart out of 64 on the whole picture, and 2, 7
+# and 10 apart out of 256 on the fine print. The nearest labelled pair that is
+# not a repeat is 12 and 71. Set midway, at 8 and 40.
+#
+# This is the one test that does not need a headline, so it catches the repeats
+# whose words could not be read - three of the 12 - and it catches them without
+# reading anything, before the OCR pass has started.
+SURE_WHOLE = 8
+SURE_FINE = 40
+
+# And the ink has to agree as well, which is what keeps this honest on a
+# picture that has nothing in it.
+#
+# A difference hash of a cutting is a description of where its columns and its
+# photograph sit. A picture with no such structure - a photograph of a
+# platform, a scan that came out nearly blank, an even grey field - has almost
+# nothing to describe, so two unrelated ones land within a few bits of each
+# other: a pair of them measures 6 apart on the whole picture and 36 on the
+# fine print, which is inside both numbers above.
+#
+# ink_apart describes something else entirely: how the darkness is laid out
+# down the picture and across it. On the four labelled repeats this rule
+# settles it is 0.000, 0.013, 0.041 and 0.075; on that pair of empty pictures
+# it is 0.217. Set at 0.12, between the two, and it costs none of the 12.
+#
+# A clipping with no ink profile scores 0.0 - no objection - so a clipping
+# from an older saved session is never refused for want of one.
+SURE_INK = 0.12
+
+# What counts as a document, for "the two came out of one file". A pasted
+# picture (source_file "clipboard"), a captured link ("link") and a card put on
+# the board are not documents and never share one: each stands on its own, and
+# two pastes of one photograph are exactly the repeat this catches.
+DOCUMENTS = (".docx", ".doc", ".docm", ".pdf", ".rtf")
+
 
 @dataclass
 class Pair:
@@ -84,9 +165,16 @@ class Pair:
     # excluded from the report - see core/verdicts for why that asymmetry is
     # the whole design.
     suggested: bool = False
+    # Matched on the picture alone, the headline never consulted - which is
+    # what the review screen has to say, because "100% of the same headline"
+    # over two cuttings whose headlines nobody could read is a lie about how
+    # the pair was found, and the person is being asked to trust it.
+    by_picture: bool = False
 
     @property
     def why(self) -> str:
+        if self.by_picture:
+            return "the same picture, to within a few dots"
         return f"{self.score:.0f}% of the same headline"
 
 
@@ -102,6 +190,42 @@ def _score(first: str, second: str) -> tuple:
     return (exact, exact)
 
 
+def one_document(first, second) -> bool:
+    """Did these two come out of the same imported file?
+
+    Then a division put both of them in, and they are two cuttings rather than
+    one cutting twice - see the note at the top of this file. Only a real
+    document counts: "clipboard", "link" and a card made on the board are not
+    files anybody assembled, so two of them are compared like any other pair.
+    """
+    left = str(getattr(first, "source_file", "") or "").strip().lower()
+    right = str(getattr(second, "source_file", "") or "").strip().lower()
+    if not left or left != right:
+        return False
+    return left.endswith(DOCUMENTS)
+
+
+def certainly_same(first, second) -> bool:
+    """Is this the same picture, so plainly that the words need not be read?
+
+    All three measurements have to say so. The whole picture on its own calls
+    two cuttings from one paper close, because the masthead band is a quarter
+    of it; the fine print is 256 bits over the picture as it sits; and the ink
+    is the one that refuses two pictures with nothing in them, which the prints
+    cannot tell apart at all.
+    """
+    apart = imageops.pictures_apart(getattr(first, "picture_hash", ""),
+                                    getattr(second, "picture_hash", ""))
+    if not 0 <= apart <= SURE_WHOLE:
+        return False
+    fine = imageops.pictures_apart(getattr(first, "picture_hash_fine", ""),
+                                   getattr(second, "picture_hash_fine", ""))
+    if not 0 <= fine <= SURE_FINE:
+        return False
+    return imageops.ink_apart(getattr(first, "ink_profile", ""),
+                              getattr(second, "ink_profile", "")) <= SURE_INK
+
+
 def _same_picture(first, second) -> bool:
     """Do the two cuttings look alike, not merely read alike?
 
@@ -113,7 +237,7 @@ def _same_picture(first, second) -> bool:
                                     getattr(second, "picture_hash", ""))
     if apart < 0:
         return True
-    if apart > imageops.PICTURE_APART:
+    if apart > PICTURES_APART:
         return False
     # And below the masthead banner, where two stories from one paper stop
     # having anything in common. Without this, two different reports in the
@@ -123,7 +247,7 @@ def _same_picture(first, second) -> bool:
                                     getattr(second, "picture_hash_lower", ""))
     if below < 0:
         return True
-    return below <= imageops.LOWER_APART
+    return below <= LOWER_APART
 
 
 # WHY THE SHAPE AND INK MEASUREMENTS ARE NOT USED HERE.
@@ -163,6 +287,41 @@ def readable(clip) -> bool:
     reading = ocr.Headline(getattr(clip, "ocr_text", "") or "",
                            getattr(clip, "headline_confidence", 0) or 0)
     return reading.usable
+
+
+# WHEN A READING BELOW THE CONFIDENCE LINE MAY STILL BE COMPARED.
+#
+# ocr.Headline calls a reading usable at 60 confidence and above, because a
+# masthead read at 45 - the paper's name and the date, no headline in the band
+# at all - matched a completely different cutting from the same paper at 98.
+# The line is right and it stays.
+#
+# One labelled repeat sits underneath it: the same cutting in a WhatsApp photo
+# and in Delhi's file, 111 characters of headline read off each, one at 79 and
+# one at 57, agreeing at 99.1. Two readings that long do not agree by accident
+# - the masthead that caused the line is 31 characters and agreement at that
+# length is exactly the accident being guarded against. So a reading may be
+# below the line when it is long, not garbage, and the other reading all but
+# repeats it word for word. Of the 117 labelled pairs this admits precisely
+# that one, and it is the twelfth repeat.
+LONG_READING = 60
+ALL_BUT_IDENTICAL = 95.0
+LEAST_CONFIDENCE = 45
+
+
+def _worth_the_words(first, second) -> bool:
+    """May these two be compared on their headlines at all?"""
+    if readable(first) and readable(second):
+        return True
+    left = str(getattr(first, "ocr_text", "") or "")
+    right = str(getattr(second, "ocr_text", "") or "")
+    if min(len(left), len(right)) < LONG_READING:
+        return False
+    if min(getattr(first, "headline_confidence", 0) or 0,
+           getattr(second, "headline_confidence", 0) or 0) < LEAST_CONFIDENCE:
+        return False
+    _forgiving, overall = _score(ocr.normalise(left), ocr.normalise(right))
+    return overall >= ALL_BUT_IDENTICAL
 
 
 def spared(clip) -> bool:
@@ -208,25 +367,30 @@ def _ensure_prints(clips: list) -> None:
             clip.content_h = found["height"]
 
 
-def _looks_like_anything(clips: list) -> set:
-    """Which clippings resemble at least one other, by picture alone.
+def _neighbours(clips: list) -> tuple:
+    """(worth comparing at all, worth READING a headline for), by uid.
 
-    This is the cheap half of the test and it runs first, which matters more
-    than it looks. Reading a headline costs about half a second; taking a
-    picture's fingerprint costs a few thousandths. On a morning of ninety
-    clippings, checking the pictures first turns "read all ninety" into "read
-    the four that could possibly be repeats" - three quarters of a minute off
-    every import, for the same answer.
+    One pass, because both answers come out of the same pair of prints. The
+    second set is the smaller and the one that costs: reading a headline is
+    about half a second, and a clipping is in it only when some pair it is in
+    can still be settled by words - not a pair inside one document, where the
+    words are not consulted, and not a pair whose pictures already settle it.
     """
-    if not MATCH_PICTURES:
-        return {clip.uid for clip in clips}
-    close = set()
+    close, reading = set(), set()
     for index, first in enumerate(clips):
         for second in clips[index + 1:]:
+            if certainly_same(first, second):
+                close.add(first.uid)
+                close.add(second.uid)
+                continue
+            if one_document(first, second):
+                continue
             if _same_picture(first, second):
                 close.add(first.uid)
                 close.add(second.uid)
-    return close
+                reading.add(first.uid)
+                reading.add(second.uid)
+    return close, reading
 
 
 def to_read(clips: Iterable) -> list:
@@ -234,24 +398,32 @@ def to_read(clips: Iterable) -> list:
 
     Reading a headline costs about half a second; a picture fingerprint costs a
     few thousandths. So the pictures are compared first, and only a clipping
-    that already LOOKS like another one is worth the half second.
+    whose headline can still decide something is worth the half second.
 
-    **How much that saves in practice: on a real morning, nothing.** Measured on
-    142 clippings, 10,011 pairs: 36% of pairs pass the picture gate, and since a
-    clipping needs only ONE partner to be worth reading, all 142 are shortlisted.
-    The saving was real when the gate was 12 (20 of 142) - and at 12 the check
-    missed five of the seven repeats it now finds. The sweep:
+    **This used to save nothing.** Measured on 142 clippings, 10,011 pairs: 36%
+    of pairs passed the picture gate, and since a clipping needed only ONE
+    partner to be worth reading, all 142 were shortlisted. Tightening the gate
+    was not available either - at 12 apart the shortlist fell to 20 of 142 and
+    the check missed five of the seven repeats it found at 28.
 
-        gate  pairs   shortlist   real repeats lost
-          12     14      20/142        5 of 7
-          20    286     118/142        3 of 7
-          24   1257     142/142        2 of 7
-          28   3162     142/142        0 of 7   <- shipped
+    It saves where the saving is, now, and not by comparing pictures any
+    harder. Two cuttings out of one document are not decided by their words
+    (see the top of this file), and a pair whose pictures are all but identical
+    is decided without them - so a clipping is read only when it resembles
+    something in ANOTHER document, closely enough to be a repeat but not so
+    closely that the answer is already in. Measured:
 
-    So the gate cannot be tightened to shortlist fewer without losing repeats,
-    and every clipping is read. This still costs nothing and is still the right
-    shape - on a morning where half the clippings ARE distinctive it would save
-    half the reading - but nobody should plan around a saving it does not make.
+        what is imported                     read before   read now
+        one division's file, on its own        39 of 39      0 of 39
+        the same, Moradabad's                  36 of 36      0 of 36
+        the same, Lucknow's                    34 of 34      0 of 34
+        all six divisions, one morning        175 of 175   175 of 175
+
+    A file on its own is the commonest import there is and it now reads
+    nothing - about twenty seconds of Tesseract a file - because a repeat
+    inside one file is not a repeat. A whole morning still reads everything:
+    with six files in the list, nearly every clipping resembles something in
+    somebody else's file, which is exactly the population worth reading.
 
     :func:`find` does this internally through its ``read`` callback, which is
     right when the reading happens there and then. It cannot be used when the
@@ -260,9 +432,9 @@ def to_read(clips: Iterable) -> list:
     """
     clips = list(clips)
     _ensure_prints(clips)
-    close = _looks_like_anything(clips)
+    _close, reading = _neighbours(clips)
     return [clip for clip in clips
-            if clip.uid in close
+            if clip.uid in reading
             and not getattr(clip, "ocr_engine", "")
             and getattr(clip, "image_bytes", b"")]
 
@@ -296,22 +468,39 @@ def find(clips: Iterable, threshold: float = SIMILARITY,
     # older saved session in exactly that state.
     _ensure_prints(clips)
 
-    close = _looks_like_anything(clips)
+    close, reading = _neighbours(clips)
     if read is not None:
         for clip in clips:
-            if clip.uid in close:
+            if clip.uid in reading:
                 read(clip)
 
     groups: list = []          # [(primary, normalised headline)]
     pairs: list[Pair] = []
     for clip in clips:
-        if clip.uid not in close or not readable(clip):
+        if clip.uid not in close:
             continue
+        # An unreadable clipping takes part now. It cannot be matched on words
+        # and never is - but the same photograph pasted in and also scanned
+        # into a file is a repeat whose headline neither copy can give up, and
+        # before this those three were the ones that got through.
         text = ocr.normalise(getattr(clip, "ocr_text", ""))
-        best, best_score = None, 0.0
+        best, best_score, by_picture = None, 0.0, False
         for primary, head in groups:
+            if certainly_same(clip, primary):
+                # The picture settles it, whatever either one says.
+                best, best_score, by_picture = primary, 100.0, True
+                break
+            if one_document(clip, primary):
+                continue        # both put in by one division, on purpose
+            if not (text and head):
+                continue        # silence is not agreement
             forgiving, whole = _score(text, head)
             if not (forgiving >= threshold and whole >= overall):
+                continue
+            # Asked only of a pair whose words already agree, because it is
+            # the dearer question of the two and the answer changes nothing
+            # for a pair that has already failed.
+            if not _worth_the_words(clip, primary):
                 continue
             if MATCH_PICTURES and not _same_picture(clip, primary):
                 continue
@@ -324,7 +513,7 @@ def find(clips: Iterable, threshold: float = SIMILARITY,
             groups.append((clip, text))
         else:
             clip.duplicate_of = best.uid
-            pairs.append(Pair(best, clip, best_score))
+            pairs.append(Pair(best, clip, best_score, by_picture=by_picture))
     return pairs
 
 
@@ -349,7 +538,11 @@ def marked_pairs(clips: Iterable) -> list:
         forgiving, _whole = _score(
             ocr.normalise(getattr(clip, "ocr_text", "") or ""),
             ocr.normalise(getattr(primary, "ocr_text", "") or ""))
-        pairs.append(Pair(primary, clip, forgiving))
+        # Asked again the same way find asked it, so a pair found on the
+        # picture is still described as one when its category is opened again.
+        settled = certainly_same(clip, primary)
+        pairs.append(Pair(primary, clip, 100.0 if settled else forgiving,
+                          by_picture=settled))
     return pairs
 
 

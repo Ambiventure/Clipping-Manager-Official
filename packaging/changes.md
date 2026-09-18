@@ -16,6 +16,51 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.33
+
+Added
+
+  * **Five priority buttons at the top of the preview window.** Press 1 to 5
+    and the clipping moves to that priority in the list - every 1 above every
+    2, and so on down to 5 - so a morning can be put in order of importance
+    without dragging anything.
+  * **Clippings at the same priority keep the order you gave them,** and the
+    arrows, the move pad and a drag move a clipping inside its own priority
+    rather than out of it. Dragging a clipping into another priority's run
+    gives it that priority, in one step that Ctrl+Z takes back.
+  * **The next arrow goes on down the list after a priority is set,** to the
+    clipping that was under the one just moved, not back up to where it
+    landed. Setting a whole morning is a number and an arrow, a number and an
+    arrow.
+  * **The priority shows on the card,** as a small number on the corner of
+    the picture - and nothing at all on a clipping still at the middle
+    priority, which is where every clipping starts.
+
+Fixed
+
+  * **A report this program made can be imported again.** Every clipping came
+    back flagged "probably not a clipping" and outside the export, in the Word
+    report and in the PDF alike. The coverage summary's last page was being
+    read as the document's first section heading, which made every picture in
+    the report sit above it.
+  * **A re-imported report comes back named and under its own headings** -
+    newspaper, city and page from the caption printed above each clipping, and
+    the sections from the headings printed over them. The cover is the only
+    thing that is not a clipping, and it says so.
+  * **The page number at the foot of the sheet is no longer read as part of
+    the next caption** ("1 Hindustan Times, Lucknow, Page 2").
+  * **The same cutting in two divisions' files is found more often, and more
+    quickly.** Two mornings of verdicts from the Duplicates Trainer were
+    measured against the check: it now finds every repeat those verdicts name,
+    including three whose headlines could not be read at all, and flags none of
+    the pairs they say are not repeats.
+  * **Two cuttings inside one division's own document are no longer called
+    repeats of each other** on their headlines. The division put both of them
+    in; that was nine of every nine wrong flags in the labelled verdicts.
+  * **Importing one division's file no longer reads a headline off every
+    clipping in it** - about twenty seconds a file - because a repeat inside
+    one file is not a repeat.
+
 ## 2.0.32
 
 Added

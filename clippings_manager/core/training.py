@@ -420,15 +420,19 @@ def _readable(clip) -> bool:
 
 def stratum_of(first, second, seen: dict, flagged: bool) -> Optional[str]:
     """Which kind of question this pair is, or None if it is not worth asking."""
-    from . import duplicates, imageops
+    from . import duplicates
 
     if flagged:
         return FLAGGED
     tsr, ratio = seen.get("tsr", 0.0), seen.get("ratio", 0.0)
     whole, lower, fine = seen.get("whole", -1), seen.get("lower", -1), seen.get("fine", -1)
     words_agree = tsr >= duplicates.SIMILARITY and ratio >= duplicates.OVERALL
-    pictures_agree = (0 <= whole <= imageops.PICTURE_APART
-                      and 0 <= lower <= imageops.LOWER_APART)
+    # The rule's own gate, not a copy of it. The two were the same numbers
+    # until the labelled pairs moved the rule's; a trainer that kept the old
+    # ones would have gone on asking about the middle of the rule instead of
+    # its edge, which is the one thing it is for.
+    pictures_agree = (0 <= whole <= duplicates.PICTURES_APART
+                      and 0 <= lower <= duplicates.LOWER_APART)
     could_read = _readable(first) and _readable(second)
 
     if could_read and not words_agree and (

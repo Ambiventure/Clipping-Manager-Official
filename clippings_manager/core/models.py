@@ -106,6 +106,29 @@ SECTION_NAMES = {
 _PAGE_ALREADY = re.compile(r"\bp(?:age|g)?\b\s*[-.:]?\s*\d", re.I)
 
 
+# The five levels of priority, and the one everything starts at. Five because
+# that is what the department asked for and because five is as many as anybody
+# can hold in their head while going down a morning's list; the middle one is
+# the resting place, so that setting a clipping to 1 lifts it above the
+# untouched ones and setting it to 5 drops it below them.
+PRIORITIES = (1, 2, 3, 4, 5)
+NORMAL_PRIORITY = 3
+
+
+def priority_of(clip) -> int:
+    """One clipping's level, always one of PRIORITIES.
+
+    Read through this rather than off the field: a session written before
+    priorities existed has no such field, and a level typed into a saved file
+    by hand could be anything.
+    """
+    try:
+        level = int(getattr(clip, "priority", NORMAL_PRIORITY))
+    except (TypeError, ValueError):
+        return NORMAL_PRIORITY
+    return level if level in PRIORITIES else NORMAL_PRIORITY
+
+
 @dataclass
 class Clip:
     """One clipping, from import through review to export."""
@@ -195,6 +218,12 @@ class Clip:
     # reappeared the moment focus left - so a title could not be got rid of.
     no_title: bool = False
     include: bool = True
+    # How important this clipping is, 1 (first) to 5 (last). The report is kept
+    # in priority order: every 1 above every 2, and so on, with the order
+    # inside a level whatever the person arranged it to be. NORMAL is the
+    # middle, and it is where everything starts, so a list nobody has set a
+    # priority on is in exactly the order it was in before this existed.
+    priority: int = NORMAL_PRIORITY
     sort_position: int = 0        # user-set order; authoritative at export time
     probable_junk: bool = False
     junk_reason: str = ""

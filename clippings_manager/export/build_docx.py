@@ -22,7 +22,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from .. import version
-from ..core import imageops
+from ..core import assemble, imageops, ourfiles
 from ..core.models import Clip
 
 from . import layout, word_cover
@@ -209,7 +209,7 @@ def _summary_paragraphs(document, summary, style, report_date, page_width: float
         _set_faces(run, face)
         return made
 
-    title = paragraph("Coverage summary", 20.0, bold=True)
+    title = paragraph(ourfiles.SUMMARY_TITLE, 20.0, bold=True)
     title.paragraph_format.page_break_before = True
     plural = "s" if summary.total != 1 else ""
     paragraph(f"Press media coverage {report_date.strftime('%d.%m.%Y')} \u2014 "
@@ -309,8 +309,8 @@ def build(
         if cover_title.strip():
             cover_lines.append(cover_title.strip())
         cover_lines += [
-            f"NUMBER OF CLIPPINGS: {len(clips)}",
-            f"DATE : {report_date.strftime('%d.%m.%Y')}",
+            f"{ourfiles.COVER_COUNT} {len(clips)}",
+            f"{ourfiles.COVER_DATE} {report_date.strftime('%d.%m.%Y')}",
         ]
     for text in cover_lines:
         paragraph = document.add_paragraph()
@@ -436,6 +436,9 @@ def build(
     properties.title = f"Press media coverage {report_date.strftime('%d.%m.%Y')}"
     properties.author = "Northern Railway"
     properties.comments = f"Clippings Manager {version.describe()}"
+    # The second stamp, as the PDF carries: Word keeps the keywords through a
+    # save that rewrites everything else about the file.
+    properties.keywords = assemble.MADE_HERE
 
     document.save(str(output))
     # A word list that quietly edits a report is the dangerous version of this

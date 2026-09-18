@@ -4609,3 +4609,177 @@ Documents. COM is already initialised on the window's thread; the call only
 balances what it adds. test_summary pins the file chosen, the relative path,
 the fallback, and that the shell finds a report whose folder and name both
 have spaces - without opening an Explorer window on the person's screen.
+
+
+## What the office's own verdicts changed about duplicates (2.0.33)
+
+The Duplicates Trainer (2.0.22) exists so pairs near the rule's boundary can be
+labelled by the people who compile the report. Two mornings of labelling came
+back - `ClippingsManager-training-471539c9-20260911.json` and
+`...-7a258095-20260913.json`, 117 pairs, 12 of them the same cutting twice.
+Replayed through the rule as it stood: **7 of the 12 found, and 9 pairs wrongly
+flagged.**
+
+Every one of those 9 wrong flags was two cuttings out of ONE division's own
+document. Every one of the 12 real repeats crossed documents. Not a coincidence:
+a division that pastes two cuttings into its file has already decided both
+belong in the report - the same story in two papers, or one paper's two
+editions - while the repeat this check exists for is the same story arriving in
+two divisions' files, or pasted in by hand against a file.
+
+So the rule is now in three parts (`core/duplicates.py`):
+
+  * `one_document(a, b)` - the same real file (`.docx`, `.doc`, `.docm`,
+    `.pdf`, `.rtf`). The words are not consulted for such a pair at all.
+    "clipboard", "link" and "board" are NOT documents: two pastes of one
+    photograph are the repeat the collect screen makes most often, and a naive
+    "same source name" rule would have thrown that away.
+  * `certainly_same(a, b)` - 8 apart out of 64 on the whole picture AND 40 out
+    of 256 on the fine print AND the ink within 0.12. The three labelled
+    repeats with no readable words sit at (0, 2), (2, 7) and (2, 10); the
+    nearest labelled non-repeat is (12, 71). This needs no headline, so those
+    three are found, and found before the OCR pass has started.
+
+    The ink gate was not in the first cut of this and the OLD duplicates suite
+    caught what was missing, which is the case for keeping suites that were
+    written for a rule that has since changed. A difference hash describes
+    where a cutting's columns and photograph sit; a picture with no structure
+    in it - a photograph of a platform, a scan that came out nearly blank - has
+    nothing to describe, so two unrelated ones land 6 apart on the whole
+    picture and 36 on the fine print, inside both numbers above. Their ink is
+    0.217, while the four labelled repeats this rule settles measure 0.000,
+    0.013, 0.041 and 0.075. Set at 0.12, and it costs none of the 12.
+  * the words, across documents only, with the picture gate widened from
+    28/31 to `PICTURES_APART` 32 / `LOWER_APART` 34. Two known repeats sit at
+    30 and 33; the nearest cross-document non-repeat is 34. The widening was
+    only affordable because the pairs the old numbers protected against were
+    all same-document pairs.
+
+Scored on all 117: **12 of 12 found, none wrongly flagged.**
+
+One repeat needed a fourth thing. Its two copies read 111 characters of
+headline each, at confidence 79 and 57, agreeing at 99.1 - and `ocr.Headline`
+calls anything under 60 unusable, because a masthead read at 45 once matched a
+different cutting from the same paper at 98. The line is right and it stays;
+`_worth_the_words` admits a reading below it only when both readings are at
+least 60 characters, neither is under 45 confidence, and the plain ratio is 95
+or better. Of the 117 pairs that admits exactly that one.
+
+`Pair.by_picture` says how a pair was found, because "100% of the same
+headline" over two cuttings whose headlines nobody could read is a lie about
+the evidence - and the review screen is asking somebody to trust it.
+
+**Quickness.** The reading list (`to_read`) is now the clippings that resemble
+something in ANOTHER document, closely but not certainly. Measured:
+
+    what is imported                     read before   read now
+    one division's file, on its own        39 of 39      0 of 39
+    the same, Moradabad's                  36 of 36      0 of 36
+    the same, Lucknow's                    34 of 34      0 of 34
+    all six divisions, one morning        175 of 175   175 of 175
+
+A file on its own is the commonest import there is and now reads nothing -
+about twenty seconds of Tesseract a file. A whole morning still reads
+everything, which is honest: with six files in the list nearly every clipping
+resembles something in somebody else's file. And on the 6 September corpus,
+where every division exists as both .docx and .pdf, 86 repeats are now flagged
+with no headline read at all. `imageops.pictures_apart` parses each print once
+a morning instead of once a pair (`_as_number`, an lru_cache).
+
+`core/training.py` reads the rule's own gates rather than a copy of them, so
+the trainer keeps asking about the edge of the rule that ships.
+
+## Importing the program's own report: it was the summary page (2.0.33)
+
+A report exported by this program and imported again came in with all 180
+clippings flagged "probably not a clipping" and every tick cleared
+(`ui/model.make_rows` clears the tick of anything flagged). 2.0.27 had already
+taught the importer to know its own files by their metadata stamp and to drop
+the size and shape rules for them, and it made no difference.
+
+The cause was one line on the last page:
+
+    Coverage summary
+    By kind
+    Print     146
+    Digital    29        <- read as a section header
+
+"Digital" is a section name, so `build_clips` took that line for the document's
+first section header - and a picture above the first section header is a
+letterhead, not a clipping. Every picture in the report is above the last page.
+The coverage summary page went in at 2.0.31, which is exactly when this
+started, and it happened in the Word report too, word for word.
+
+Three changes:
+
+  * **A header with nothing under it is not a header.** `build_clips` only
+    counts a section header that has a picture after it somewhere. General,
+    and nothing to do with our own files: a stray word in a sign-off could
+    always have done this.
+  * **`core/ourfiles.py`** knows the three things our reports print that are
+    not clippings - the cover, the page numbers, the coverage summary - and
+    marks those events as furniture before anything is read. Furniture is not a
+    caption, not a section header, and its pictures are not clippings. The
+    words it looks for are imported by `build_pdf` and `build_docx` from the
+    same module, so the two halves cannot drift.
+  * **The file is recognised by its own pages as well as its stamp**
+    (`looks_like_ours`), so a report made before the stamp existed, or one
+    that has been through a tool that rewrote the metadata, is still known.
+    Both exporters now write a second stamp into the keywords as well.
+
+The cover is not "page 1". The sentiment dossier opens on its first category,
+headed "Positive News", with the first clipping under it - taking that page for
+a cover threw a clipping away and lost the heading with it. A cover page says
+what it is: it prints the count and the date, or it is one picture and no words
+at all (a cover with its words baked in).
+
+Two more things the round trip needed. The page number at the foot of a sheet
+was being read as the front of the next caption ("1 Hindustan Times, Lucknow,
+Page 2"); it is furniture now. And every heading printed in one of our reports
+comes back on the clipping it headed - `build_clips` treats our own files as
+"titled", where a division's document only carries the headings the config
+names - so a re-imported report can be rebuilt with its sections intact.
+
+Measured, on a report of 8 clippings exported both ways, with a cover picture,
+printed headings, page numbers and a summary page, and again with the stamps
+stripped off: 9 pictures in, one flagged and it is the cover, 8 of 8 named with
+their page, sections and heading words restored. The sentiment dossier: 8 of 8,
+each under its own category, nothing flagged. A division's own document is
+untouched by all of it.
+
+## Five priorities, and why a band is a scope (2.0.33)
+
+The department asked for five bubbles in the preview window that move a
+clipping up and down the list, with every 1 above every 2 and so on, strictly.
+
+`Clip.priority` is 1 to 5 and starts at 3. That matters more than it looks: a
+list nobody has set a priority on is ONE band, the whole list, so every helper
+below does exactly what it did before this existed, and `banded()` - a stable
+sort by level - is the identity on it.
+
+The ordering helpers treat a band the way they already treat a category of the
+board: `in_levels` reorders one level's rows and lays them back in the slots
+that level already holds, which is `_weave` for priorities. So the arrows, the
+move pad, "move to top" and a file's own arrows all move a clipping inside its
+own level and no further - the department asked for ten clippings at priority 1
+that can still be put in any order - and no other row, bracket or heading is
+disturbed.
+
+A drag and drop is the one gesture that changes a level, because a drop says
+"put it here" and here has a priority (`level_at`, where the row ABOVE decides,
+since a clipping is dropped underneath the one it was dragged past). Without
+that the list would come out of level order the moment anybody dragged a card
+past a boundary. It is one undo step: `SetPriority` is a `Reorder` that also
+carries the levels, because a clipping at priority 1 sitting among the 3s is
+the one thing this feature must never produce.
+
+Arrivals: `AddClips` re-bands after inserting, stably, so a new clipping keeps
+the place it was given among its own level and sits above the 4s and 5s rather
+than at the very bottom.
+
+**The walk does not follow the clipping.** Somebody going down a morning
+setting priorities is at a place in the list, not on a clipping: sending them
+back up to wherever it landed means the next arrow walks the same clippings
+again. So `_preview_priority` remembers the row that was BELOW before anything
+moved, and the next forward arrow goes there - once, and only forwards. A step
+back, or opening another clipping, walks the list as it now stands.
