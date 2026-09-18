@@ -16,6 +16,33 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.34
+
+Changed
+
+  * **The priority bubbles are round, flat and quiet** - an outline until you
+    choose one, filled in its own colour when you do. They sat on a white
+    block before.
+  * **Priority now starts at none.** A clipping has no priority until you give
+    it one, and everything with no priority sits under all five, in the order
+    it came in. Nothing moves until you press a bubble.
+  * **Press the lit bubble again to take the priority off.** The clipping drops
+    back exactly where it came in.
+  * **The list is always in priority order**: 1 first, then 2, down to 5, then
+    everything unassigned - and inside each one, the order the clippings
+    arrived in, or the order you dragged them into.
+  * **The priority shows on the card** as a small number in its own colour, and
+    only on the clippings you have given one to. It is never printed in the
+    report.
+
+Fixed
+
+  * **Two different cuttings that happen to look alike are no longer called the
+    same one.** A cutting with little in it but a masthead band and a few lines
+    of type, or a picture with nothing in it at all, could be read as a repeat
+    of another; the check now asks for far more agreement before the picture
+    alone may decide, and refuses a picture that carries no detail whatever.
+
 ## 2.0.33
 
 Added

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication
 
 from ..core.models import Clip, Section
 from ..core import arrange, imageops, sentiment
+from ..core.models import arrival_of
 from ..core.profiles import NameIndex, apply_to_clip
 
 # Big enough for the sentiment card's picture box, which shows the clipping at
@@ -845,8 +846,17 @@ class ClipModel(QAbstractListModel):
     ) -> list[Row]:
         """Wrap raw clips as rows, parse their captions and build thumbnails."""
         rows = []
+        arriving = max((arrival_of(row.clip) for row in self.rows
+                        if row.clip is not None), default=0.0) + 1.0
         for clip in clips:
             apply_to_clip(clip, self.config, self.name_index)
+            # Where it came in, which is how the list breaks a tie inside a
+            # priority (core/models.arrival_of). Given once and never again:
+            # a clipping that comes back from a saved session, or crosses to
+            # the other interface, keeps the number it has always had.
+            if not arrival_of(clip):
+                clip.order_seq = arriving
+                arriving += 1.0
             # No fingerprints here any more. They are cheap each - about
             # thirteen thousandths - but a morning is a hundred and twenty
             # clippings, and taking two of them per clipping put three seconds

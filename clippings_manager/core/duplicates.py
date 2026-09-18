@@ -124,8 +124,17 @@ LOWER_APART = 34
 # This is the one test that does not need a headline, so it catches the repeats
 # whose words could not be read - three of the 12 - and it catches them without
 # reading anything, before the OCR pass has started.
-SURE_WHOLE = 8
-SURE_FINE = 40
+#
+# Tighter than the labelled pairs alone would ask for, and deliberately. Every
+# gate from 8/40 down to 2/10 scores the same on those 117 - 12 of 12, none
+# wrong - so the labelled evidence cannot choose between them, and what has to
+# choose is the material the prints are worst on: a cutting with little in it
+# but a masthead band and a few lines of type. Two DIFFERENT ones of those
+# measure 7 apart on the whole picture and 19 on the fine print. The three
+# repeats this rule exists for sit at (0, 2), (2, 7) and (2, 10). Set between
+# them, with room on both sides.
+SURE_WHOLE = 4
+SURE_FINE = 16
 
 # And the ink has to agree as well, which is what keeps this honest on a
 # picture that has nothing in it.
@@ -145,6 +154,24 @@ SURE_FINE = 40
 # A clipping with no ink profile scores 0.0 - no objection - so a clipping
 # from an older saved session is never refused for want of one.
 SURE_INK = 0.12
+
+# And the picture has to say something in the first place.
+#
+# A difference hash records, bit by bit, where one part of a picture is darker
+# than the part beside it. A picture with no variation at all - a flat block of
+# colour, a screenshot of an empty page - has nothing darker than anything, so
+# its print is all zeros, and EVERY such picture carries the same all-zero
+# print. Two of them are then 0 apart on all three measurements and the ink
+# agrees as well, because there is nothing in either for the ink to disagree
+# about. Nothing in the rule below could tell them apart, because nothing in
+# the pictures can.
+#
+# Measured on real cuttings: 105 to 132 of the 256 bits are set, and a
+# photograph with nothing but gentle gradients still sets 112. A flat block
+# sets none. The floor is set at 24 - a fifteenth of the picture - which no
+# real cutting has ever come near and which only a picture with nothing in it
+# can fail.
+LEAST_DETAIL = 24
 
 # What counts as a document, for "the two came out of one file". A pasted
 # picture (source_file "clipboard"), a captured link ("link") and a card put on
@@ -205,15 +232,34 @@ def one_document(first, second) -> bool:
     return left.endswith(DOCUMENTS)
 
 
+def says_something(clip) -> bool:
+    """Is there enough in this picture for its print to mean anything?
+
+    A clipping with no print at all has not been measured yet, and that is not
+    the same as having nothing in it: it is let through here and refused by the
+    comparison itself, which cannot read a print that is not there.
+    """
+    fine = str(getattr(clip, "picture_hash_fine", "") or "")
+    if not fine:
+        return True
+    try:
+        return int(fine, 16).bit_count() >= LEAST_DETAIL
+    except ValueError:
+        return True
+
+
 def certainly_same(first, second) -> bool:
     """Is this the same picture, so plainly that the words need not be read?
 
-    All three measurements have to say so. The whole picture on its own calls
-    two cuttings from one paper close, because the masthead band is a quarter
-    of it; the fine print is 256 bits over the picture as it sits; and the ink
-    is the one that refuses two pictures with nothing in them, which the prints
-    cannot tell apart at all.
+    All three measurements have to say so, and both pictures have to have
+    something in them to measure. The whole picture on its own calls two
+    cuttings from one paper close, because the masthead band is a quarter of
+    it; the fine print is 256 bits over the picture as it sits; the ink catches
+    a pair the prints put near each other by accident; and the detail test
+    refuses a picture that carries no information whatever - see LEAST_DETAIL.
     """
+    if not (says_something(first) and says_something(second)):
+        return False
     apart = imageops.pictures_apart(getattr(first, "picture_hash", ""),
                                     getattr(second, "picture_hash", ""))
     if not 0 <= apart <= SURE_WHOLE:

@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QStyledItemDelegate
 
 from ..core import copied
-from ..core.models import NORMAL_PRIORITY, priority_of
+from ..core.models import priority_of
 from . import icons, rowlayout, theme
 from .model import ENTRY_CLIP, ENTRY_GROUP, Entry
 
@@ -381,12 +381,12 @@ class EntryDelegate(QStyledItemDelegate):
             self._paint_duplicate_badge(painter, rect)
 
         # And the priority it was given, in the corner of the picture. Only
-        # when it is not the middle one: a list nobody has set a priority on
-        # shows no bubbles at all, and the ones that have been set stand out
-        # for it. Drawn over the thumbnail rather than beside it, so no
-        # measurement of the card changes and nothing else moves.
+        # when one has been set: a list nobody has touched shows no badges at
+        # all, and the ones that have been given a priority stand out for it.
+        # Drawn over the thumbnail rather than beside it, so no measurement of
+        # the card changes and nothing else moves.
         level = priority_of(row.clip)
-        if level != NORMAL_PRIORITY:
+        if level:
             self._paint_priority_badge(painter, rect, level)
 
     def _paint_priority_badge(self, painter, rect: QRect, level: int) -> None:

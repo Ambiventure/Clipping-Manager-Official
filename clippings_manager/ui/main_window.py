@@ -3084,7 +3084,8 @@ class MainWindow(QMainWindow):
             # Within the category, in a category's list: the helper works the
             # order out over its clippings and leaves every other one in place.
             rows = commands.move_relative(model, [clip_id], where)
-            stack.push(commands.Reorder(model, rows, "Clipping reordered"))
+            stack.push(commands.Arrange(model, rows, "Clipping reordered",
+                                        moved_ids=[clip_id]))
 
     def _on_group_action(self, name: str, ident: str, pool=None) -> None:
         """Act on the one run of clippings under the header that was clicked.
@@ -3122,7 +3123,8 @@ class MainWindow(QMainWindow):
                 return
             rows = commands.move_group_relative(
                 model, ids, name.replace("group_", ""))
-            stack.push(commands.Reorder(model, rows, "File reordered"))
+            stack.push(commands.Arrange(model, rows, "File reordered",
+                                        moved_ids=ids))
 
     def _on_label_edited(self, clip_id: int, text: str, pool=None) -> None:
         """The headline, which prints above the picture.
@@ -3196,21 +3198,24 @@ class MainWindow(QMainWindow):
         rows = commands.move_to(model, ids, target)
         many = f"{len(ids)} clippings reordered" if len(ids) > 1 else "Clipping reordered"
         # A drop says "put it here", and here has a priority. Dropped among the
-        # 1s it becomes a 1 - otherwise the list would come out of level order
-        # the moment anybody dragged a card past a level boundary, and the
-        # order is the whole meaning of the five levels. Dropped among its own
-        # level, which is every drop until somebody sets a priority, nothing
-        # about it changes.
+        # 1s it becomes a 1 - otherwise the list would come straight back out
+        # of order, because the list IS the sort. Dropped among its own
+        # priority, which is every drop until somebody sets one, only the place
+        # changes.
         landed = commands.level_at(rows, ids)
         levels = {commands.priority_of(model.by_id(i)) for i in ids
                   if model.by_id(i) is not None}
-        if landed is not None and levels != {landed}:
-            self.stack_for(model).push(
-                commands.SetPriority(model, ids, landed, rows=rows,
-                                     text=f"{many}, priority {landed}"))
-            self._flash(f"Moved into priority {landed} — Ctrl+Z puts it back.", "info")
+        moved = landed is not None and levels != {landed}
+        self.stack_for(model).push(commands.Arrange(
+            model, rows,
+            f"{many}, priority {landed}" if moved and landed else
+            (f"{many}, priority cleared" if moved else many),
+            moved_ids=ids, level=landed if moved else None))
+        if moved:
+            self._flash(
+                (f"Moved into priority {landed} — Ctrl+Z puts it back." if landed
+                 else "Moved, and its priority cleared — Ctrl+Z puts it back."), "info")
             return
-        self.stack_for(model).push(commands.Reorder(model, rows, many))
         self._flash("Moved — Ctrl+Z puts it back.", "info")
 
     def _on_selection_toggled(self, clip_id: int, additive: bool, ranged: bool,
@@ -3328,8 +3333,9 @@ class MainWindow(QMainWindow):
             return
         rows = commands.move_relative(pool, ids, where)
         self.stack_for(pool).push(
-            commands.Reorder(pool, rows, f"{len(ids)} clippings moved"
-                             if len(ids) != 1 else "Clipping moved")
+            commands.Arrange(pool, rows, f"{len(ids)} clippings moved"
+                             if len(ids) != 1 else "Clipping moved",
+                             moved_ids=ids)
         )
 
     def _all_excluded(self, ids: list, pool=None) -> bool:

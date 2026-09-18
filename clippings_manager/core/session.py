@@ -109,6 +109,13 @@ def decode_clip(data: dict, image_bytes: bytes) -> Clip:
         else:
             setattr(clip, name, value)
     clip.image_bytes = image_bytes
+    # 2.0.33 had five levels with the MIDDLE one as the resting place, so every
+    # clipping in a session it wrote carries priority 3 and means nothing by
+    # it. 2.0.34 made 0 the resting place and 3 a priority somebody chose, and
+    # a whole morning of cards badged "3" is not what they chose. A session
+    # from that one build has no arrival number, which is how it is known.
+    if "order_seq" not in data and clip.priority == 3:
+        clip.priority = 0
     return clip
 
 

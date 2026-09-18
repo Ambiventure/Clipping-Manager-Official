@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from ..core import sections as section_list
 from ..core import imageops
-from ..core.models import (NORMAL_PRIORITY, PRIORITIES, CropRect, Section,
+from ..core.models import (PRIORITIES, UNASSIGNED, CropRect, Section,
                            priority_of)
 from . import theme
 from .trimming import TrimCanvas
@@ -79,20 +79,24 @@ TWIN_WIDTH = 340
 TWIN_PICTURE_TALL = 420
 
 #: The five priority bubbles at the top of the window. One press files the
-#: clipping under that level and moves it there in the list - priority 1 at the
-#: top of the report, then 2, and so on - so the whole of setting a morning's
-#: order is five buttons and the arrow to the next clipping.
-BUBBLE = 30
+#: clipping at that level and the list re-sorts around it - priority 1 first,
+#: down to 5, everything with no priority under them - so the whole of setting
+#: a morning's order is a number and the arrow to the next clipping.
+#:
+#: Round, and drawn as nothing until they are chosen: an unset bubble is the
+#: dark bar it sits on with a hairline round it, and the one in force is filled
+#: with its own colour. Nothing else on this bar is a circle, so five circles
+#: read as one control without a label or a box round them.
+BUBBLE = 24
 #: The same five colours the card's own badge uses, so a bubble pressed here
 #: and the badge that appears on the card are plainly the same thing.
 BUBBLE_COLOURS = theme.PRIORITY_COLOURS
 BUBBLE_STYLE = """
 QPushButton {{
     background: {rest}; border: 1px solid {edge}; border-radius: {radius}px;
-    min-width: {size}px; max-width: {size}px; min-height: {size}px;
-    max-height: {size}px; color: {ink}; font-size: 13px; font-weight: 700;
+    padding: 0px; margin: 0px; color: {ink}; font-size: 11px; font-weight: 600;
 }}
-QPushButton:hover {{ background: {hover}; color: #FFFFFF; }}
+QPushButton:hover {{ border-color: {accent}; color: #FFFFFF; }}
 """
 
 
@@ -251,48 +255,60 @@ class PreviewDialog(QDialog):
         is at can be read at a glance without a word of explanation.
         """
         holder = QWidget()
+        # The bar behind it is dark and the application's own sheet paints
+        # every plain widget the page colour, which put a white block under
+        # the five circles.
+        holder.setStyleSheet("background: transparent;")
         line = QHBoxLayout(holder)
         line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(5)
+        line.setSpacing(6)
         self.bubbles = {}
         for level in PRIORITIES:
             bubble = QPushButton(str(level))
             bubble.setCursor(Qt.PointingHandCursor)
+            bubble.setFixedSize(BUBBLE, BUBBLE)
+            bubble.setFlat(True)
             bubble.setToolTip(
                 f"Priority {level}" + (
                     " - first in the report" if level == 1 else
-                    " - last in the report" if level == 5 else
-                    " - the middle, where every clipping starts" if level == NORMAL_PRIORITY
-                    else "") + ". The list is kept in priority order, and "
-                "clippings at the same priority stay in the order you put them.")
+                    " - last in the report" if level == 5 else "")
+                + ". Press it again to take the priority off, and the clipping "
+                "goes back where it came in. Clippings with no priority sit "
+                "under all five, in the order they arrived.")
             bubble.clicked.connect(lambda _checked=False, want=level: self._pick(want))
             self.bubbles[level] = bubble
             line.addWidget(bubble)
-        self._paint_bubbles(NORMAL_PRIORITY)
+        self._paint_bubbles(UNASSIGNED)
         return holder
 
     def _paint_bubbles(self, level: int) -> None:
-        """Fill the one in force; leave the rest as outlines."""
+        """Fill the one in force; the rest are the bar with a hairline round it."""
         for number, bubble in getattr(self, "bubbles", {}).items():
             colour = BUBBLE_COLOURS[number]
             here = number == level
+            # The widget's own size is the circle's size (setFixedSize): a
+            # min-width in the sheet is the CONTENT box, so the border made it
+            # two pixels wider than the radius it was given and the circle came
+            # out very slightly square.
             bubble.setStyleSheet(BUBBLE_STYLE.format(
-                rest=colour if here else "#1E293B",
-                hover=colour,
-                edge=colour if here else "#33415A",
-                ink="#FFFFFF" if here else "#94A3B8",
-                size=BUBBLE, radius=BUBBLE // 2))
+                rest=colour if here else "transparent",
+                accent=colour,
+                edge=colour if here else "#39465F",
+                ink="#FFFFFF" if here else "#8A97AC",
+                radius=BUBBLE // 2))
             bubble.setDown(False)
 
     def _pick(self, level: int) -> None:
+        """A bubble was pressed: that level, or none if it was already lit."""
         if self.row is None or self._loading:
             return
-        if priority_of(self.row.clip) == level:
-            return          # already there; nothing to move and nothing to undo
+        # Pressing the lit one takes the priority off. It is the only way back
+        # to "no priority", and it is where somebody's hand already is.
+        wanted = UNASSIGNED if priority_of(self.row.clip) == level else level
         # Painted at once. The window will send the row back through show_row
         # when it has moved it, but the press has to look answered now.
-        self._paint_bubbles(level)
-        self.priorityPicked.emit(self.row.id, level)
+        self._paint_bubbles(wanted)
+        self.priorityPicked.emit(self.row.id, wanted)
 
     def _build_viewport(self) -> QWidget:
         self.scroll = QScrollArea()

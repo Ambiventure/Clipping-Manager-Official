@@ -106,27 +106,57 @@ SECTION_NAMES = {
 _PAGE_ALREADY = re.compile(r"\bp(?:age|g)?\b\s*[-.:]?\s*\d", re.I)
 
 
-# The five levels of priority, and the one everything starts at. Five because
-# that is what the department asked for and because five is as many as anybody
-# can hold in their head while going down a morning's list; the middle one is
-# the resting place, so that setting a clipping to 1 lifts it above the
-# untouched ones and setting it to 5 drops it below them.
+# The five levels of priority, and the nothing that every clipping starts at.
+#
+# 1 is first in the report and 5 is last. 0 is UNASSIGNED: no priority has been
+# set, and those clippings sit under all five, in the order they arrived.
+#
+# THE LIST IS A SORT, NOT AN ARRANGEMENT OF ITS OWN. What is on screen - and
+# therefore what is exported - is always the clippings in order of
+# (priority, arrival), with the unassigned last. That is the whole of the rule:
+# nothing else decides where a clipping sits.
 PRIORITIES = (1, 2, 3, 4, 5)
-NORMAL_PRIORITY = 3
+UNASSIGNED = 0
+
+#: Where the unassigned sort: after every level there is.
+LAST_BAND = 6
 
 
 def priority_of(clip) -> int:
-    """One clipping's level, always one of PRIORITIES.
+    """One clipping's level: 1 to 5, or 0 for no priority set.
 
     Read through this rather than off the field: a session written before
     priorities existed has no such field, and a level typed into a saved file
     by hand could be anything.
     """
     try:
-        level = int(getattr(clip, "priority", NORMAL_PRIORITY))
+        level = int(getattr(clip, "priority", UNASSIGNED))
     except (TypeError, ValueError):
-        return NORMAL_PRIORITY
-    return level if level in PRIORITIES else NORMAL_PRIORITY
+        return UNASSIGNED
+    return level if level in PRIORITIES else UNASSIGNED
+
+
+def sort_band(clip) -> int:
+    """Which block of the list this clipping belongs to: 1 to 5, then 6."""
+    return priority_of(clip) or LAST_BAND
+
+
+def arrival_of(clip) -> float:
+    """Where this clipping came in, which is how the list breaks a tie.
+
+    It is set once, when the clipping arrives, and changed only when somebody
+    moves the clipping by hand. A priority NEVER touches it - which is what
+    makes clearing a priority put the clipping back exactly where it came in.
+    """
+    try:
+        return float(getattr(clip, "order_seq", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def list_key(clip) -> tuple:
+    """The order the list is in, and the report with it."""
+    return (sort_band(clip), arrival_of(clip))
 
 
 @dataclass
@@ -218,12 +248,15 @@ class Clip:
     # reappeared the moment focus left - so a title could not be got rid of.
     no_title: bool = False
     include: bool = True
-    # How important this clipping is, 1 (first) to 5 (last). The report is kept
-    # in priority order: every 1 above every 2, and so on, with the order
-    # inside a level whatever the person arranged it to be. NORMAL is the
-    # middle, and it is where everything starts, so a list nobody has set a
+    # How important this clipping is: 1 (first) to 5 (last), or 0 for no
+    # priority set, which is where every clipping starts. The list is kept in
+    # priority order with the unassigned last, so a list nobody has set a
     # priority on is in exactly the order it was in before this existed.
-    priority: int = NORMAL_PRIORITY
+    priority: int = UNASSIGNED
+    # Where it came in, and the tie-breaker inside a priority. Set once on
+    # arrival and rewritten only by a move somebody makes by hand; a number
+    # between two others puts the clipping between them. See arrival_of.
+    order_seq: float = 0.0
     sort_position: int = 0        # user-set order; authoritative at export time
     probable_junk: bool = False
     junk_reason: str = ""

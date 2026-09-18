@@ -4783,3 +4783,78 @@ back up to wherever it landed means the next arrow walks the same clippings
 again. So `_preview_priority` remembers the row that was BELOW before anything
 moved, and the next forward arrow goes there - once, and only forwards. A step
 back, or opening another clipping, walks the list as it now stands.
+
+
+## The list is a sort (2.0.34)
+
+2.0.33 gave the five priorities a middle resting place (3) and let each level
+keep whatever order the person arranged inside it. The department asked for
+something simpler and stricter, in their words:
+
+    The visible list is always produced by sorting -
+    Priority (highest first), ImportOrder (original import order as a stable
+    tie-breaker). 0 = Unassigned (meaning import order). Show all Priority 1..5
+    items first, then keep Unassigned items at the bottom, in pure import
+    order. Clicking the already-selected bubble can reset to Unassigned.
+
+So `Clip.priority` is 0 to 5 with 0 meaning none set, `Clip.order_seq` is the
+arrival number, and `core/models.list_key` is `(priority or 6, order_seq)`.
+`ClipModel.rows` is kept sorted on that key at all times - it is not an
+arrangement of its own any more - and every gesture that moves a clipping goes
+through one command, `commands.Arrange`, which writes the priority, the arrival
+numbers and the order together.
+
+**Two numbers, two jobs.** A priority never touches the arrival number, which
+is what makes "press the lit bubble again" put a clipping back exactly where it
+came in rather than at the top or bottom of the unassigned run. A move by hand
+never touches the priority: it gives the moved clipping a number between its
+new neighbours' numbers (`commands.arrivals_for`), so the sort reproduces the
+arrangement, and nothing else in the list is renumbered.
+
+**A drop only changes a priority when the place asks for it** (`level_at`).
+The list is sorted, so most drops land somewhere the clipping could sit anyway:
+at the top of the unassigned run, say, with the last priority 5 above it.
+Reading "the row above" as the answer made that a demotion to 5. Now the
+clipping keeps its own priority whenever its own priority still fits between
+the neighbours, and takes the place's only when it cannot - dropped in among
+the 1s it becomes a 1, dragged down into the unassigned it loses its priority.
+
+A session written by 2.0.33 carries priority 3 on every clipping and means
+nothing by it. `session.decode_clip` reads a 3 with no arrival number beside it
+as "no priority", which is the only build that combination can have come from.
+
+**The bubbles.** They were pills on a white block: the application's own sheet
+paints every plain widget the page colour, so the holder behind them was white
+inside the preview's dark bar, and the global button padding stretched the
+circles into ovals. They are 24px circles now with `background: transparent` on
+the holder, an outline until chosen and filled in their own colour when they
+are - and the size is the widget's own (`setFixedSize`), because a `min-width`
+in a stylesheet is the content box and the border made the circle two pixels
+wider than its radius.
+
+## What the fixtures caught about the picture rule (2.0.34)
+
+2.0.33's "the picture alone settles it" gate was 8 of 64 and 40 of 256, set
+midway between the labelled repeats (0/2, 2/7, 2/10) and the nearest labelled
+non-repeat (12/71). Two suites written years apart found what those 117
+labelled pairs could not say:
+
+  * `test_focuslist`'s board fixture uses 40x30 blocks of flat colour. A flat
+    picture has no part darker than the part beside it, so its difference hash
+    is all zeros - and so is every other flat picture's. Fourteen fixture
+    clippings came back as twelve repeats.
+  * `test_duplicates` draws cutting-like pictures: a masthead band and eight
+    lines of type whose lengths vary. Two DIFFERENT ones measure 7 apart on the
+    whole picture and 19 on the fine print, inside that gate.
+
+Both are fair warnings about real material - a mostly-white cutting, an advert,
+a screenshot of an empty page - so the rule now has a floor as well as a
+ceiling. `LEAST_DETAIL` refuses a picture whose fine print sets fewer than 24
+of its 256 bits (real cuttings set 105 to 132; a photograph of gentle gradients
+sets 112; a flat block sets none), and the gate itself is 4 and 16, which every
+labelled pair still scores 12 of 12 on with none wrong.
+
+**And the battery was reading only exit codes.** Most suites print "N passed, M
+failed" and never call sys.exit, so a suite could report failures and be
+counted a pass. It now reads the tally as well, which is how both of these came
+to light at all.
