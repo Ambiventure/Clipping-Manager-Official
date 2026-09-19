@@ -16,6 +16,30 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.37
+
+Added
+
+  * **Manage Newspaper List**, on the right-click menu of Collect from
+    WhatsApp: every newspaper and city Collect already reads, with a search
+    bar at the top.
+  * **Papers from any state can be added**, with the other ways they are
+    typed - Hindi, Punjabi, any language, or short, like DJ.
+  * **A Cities list beside it**, for a town a caption names that Collect does
+    not read yet.
+  * **Names typed into clippings today are offered for the list**, one press
+    to keep them.
+  * **The list is kept for good** - for every newspad, after the program is
+    closed, and through updates. It also travels with "Save my setup to a
+    file".
+
+Changed
+
+  * **Collect's right-click menu is five lines.** Every option it had is still
+    there, inside Options for this session.
+  * **"Newspaper, city, page and division for this session" is now "Same
+    newspaper for every photo".** It does the same thing.
+
 ## 2.0.36
 
 Added

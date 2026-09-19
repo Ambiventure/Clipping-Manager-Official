@@ -70,7 +70,7 @@ TIP_OFF = (
     "off when you change newspad or close the program.")
 TIP_ON = "Collecting what you copy. Click to stop."
 TIP_READ_ONLY = "This newspad cannot save, so nothing can be collected into it."
-TIP_MENU = "\n\nRight-click for Collect's options."
+TIP_MENU = "\n\nRight-click for the newspaper list and Collect's options."
 
 START = ("In WhatsApp Web: right-click a photo and choose Copy image, then select "
          "its caption and press Ctrl+C.")

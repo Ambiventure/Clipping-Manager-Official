@@ -60,8 +60,8 @@ from ..core.assemble import (ExtractionError, detect_division, is_advisory,
                              load_config, looks_like_url)
 from ..core.extract_docx import extract_docx
 from ..core.extract_pdf import extract_pdf
-from ..core import (copied, duplicates, links, newspads, ocr, sentiment,
-                    training, wordlist)
+from ..core import (copied, duplicates, links, newspads, ocr, paperlist,
+                    sentiment, training, wordlist)
 from ..core.models import Clip, Section
 from ..core.profiles import NameIndex
 
@@ -228,6 +228,9 @@ class MainWindow(QMainWindow):
 
         self.config = load_config()
         self.name_index = NameIndex.load(settings=self.config.get("name_matching"))
+        # With whatever somebody has added to the list, changed on it or taken
+        # off it (Manage Newspaper List, on Collect's right-click menu).
+        paperlist.apply(self.name_index)
         # One stack per interface. They are independent in every sense: undoing
         # on the board must never reach back into the press report, and the
         # export's "history clears on export" must only clear its own.
@@ -6484,6 +6487,23 @@ class MainWindow(QMainWindow):
             self._collect_note = ""
         if parts:
             self._flash(" ".join(parts), kind)
+
+    def open_newspaper_list(self):
+        """Manage Newspaper List, from Collect's right-click menu. Opened with
+        open(), so nothing waits on it; Collect holds copies while it is up."""
+        from .newspaper_list import NewspaperListDialog
+
+        box = NewspaperListDialog(self)
+        box.setAttribute(Qt.WA_DeleteOnClose, True)
+        self._newspaper_list_box = box
+        box.open()
+        return box
+
+    def newspaper_list_after_restore(self, restored_names=None) -> None:
+        """A saved setup put the newspaper list back: read it again."""
+        wanted = set(restored_names or [])
+        if not wanted or paperlist.FILE in wanted:
+            paperlist.apply(self.name_index)
 
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog

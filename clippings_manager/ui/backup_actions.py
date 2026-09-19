@@ -119,6 +119,7 @@ def load_setup(parent) -> bool:
     finally:
         if window is not None:
             window.designs_after_restore(got.get("names") or [])
+            window.newspaper_list_after_restore(got.get("names") or [])
     note = "Put back:\n  · " + "\n  · ".join(got.get("restored", []))
     if got.get("failed"):
         note += "\n\nCould not write:\n  · " + "\n  · ".join(got["failed"])

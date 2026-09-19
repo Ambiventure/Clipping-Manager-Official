@@ -1,6 +1,11 @@
 """Collect from WhatsApp's options: what it takes, and how, for one session.
 
-Right-click the Collect from WhatsApp button for them. They are a person's
+Right-click the Collect from WhatsApp button for them. The menu is short on
+purpose: Manage Newspaper List, the same newspaper for every photo, then every
+option below in one submenu, Options for this session - the menu had grown to
+thirty lines, most of them seldom touched. The newspaper list is the one thing
+on it that is kept for good (core/paperlist.py): which newspapers exist is not
+a choice for the morning. They are a person's
 choice for the morning in front of them - "every photo today is Dainik
 Jagran, Lucknow", "a city on its own is a caption" - so they live on the
 Collector in memory, last until the program closes, and are never written
@@ -372,7 +377,8 @@ class StayOpenMenu(QMenu):
         super().keyPressEvent(event)
 
 
-MENU_TITLE = "Collect's options - for as long as the program is open"
+#: The submenu every option lives in. For as long as the program is open.
+MENU_TITLE = "Options for this session"
 
 
 def build_menu(collector, parent) -> QMenu:
@@ -402,8 +408,12 @@ def build_menu(collector, parent) -> QMenu:
                 pass
         try:
             reset.setEnabled(bool(changes(opts)))
-            clear.setEnabled(any(getattr(opts, n) != getattr(DEFAULTS, n)
-                                 for n in _PRESET_FIELDS))
+            # Only while photos are being named: there is nothing to clear
+            # otherwise, and a line that does nothing is a line too many.
+            named = any(getattr(opts, n) != getattr(DEFAULTS, n) for n in _PRESET_FIELDS)
+            clear.setEnabled(named)
+            clear.setVisible(named)
+            clear.setText(f"Clear “{_preset_phrase(opts)}”" if named else "Clear them")
         except RuntimeError:
             pass
 
@@ -444,61 +454,76 @@ def build_menu(collector, parent) -> QMenu:
         target.addMenu(sub)
         return sub
 
-    head(menu, MENU_TITLE)
+    # On top, only what a morning reaches for: the list of newspapers, and one
+    # newspaper for every photo. Everything else is in one submenu below.
+    lists = menu.addAction("Manage Newspaper List…")
+    lists.setToolTip(
+        "The newspapers and cities Collect knows in a caption. Add papers from any "
+        "state and the other ways people spell them - kept for good, for every "
+        "newspad.")
+    lists.triggered.connect(lambda: window.open_newspaper_list())
+    preset = menu.addAction("Same newspaper for every photo…")
+    preset.setToolTip(
+        "A newspaper, city, page and division every photo Collect adds arrives "
+        "with, until the program closes. A copied caption still replaces them.")
+    preset.triggered.connect(lambda: collector.show_defaults(parent))
+    clear = menu.addAction("Clear them")
+    clear.triggered.connect(lambda: (collector.set_options(replace(
+        collector.options, **{n: getattr(DEFAULTS, n) for n in _PRESET_FIELDS})), sync()))
     menu.addSeparator()
 
-    head(menu, "What to collect")
-    tick(menu, "Photos", "photos",
+    more = StayOpenMenu(MENU_TITLE, menu)
+    more.setObjectName("CollectMoreOptions")
+    more.setToolTipsVisible(True)
+    more.menuAction().setToolTip(
+        "What Collect takes, how it reads a caption and which photo it goes on - "
+        "for as long as the program is open.")
+
+    head(more, "What to collect")
+    tick(more, "Photos", "photos",
          "A picture you copy becomes a clipping. Switched off, a copied picture "
          "is still looked at to know it is a picture, but nothing is added.")
-    tick(menu, "Captions", "captions")
-    tick(menu, "Links to web stories", "links")
-    tick(menu, "A link with no photo waiting goes to the links list", "links_to_list",
+    tick(more, "Captions", "captions")
+    tick(more, "Links to web stories", "links")
+    tick(more, "A link with no photo waiting goes to the links list", "links_to_list",
          "A photo waits for a link only while it has no newspaper and no link - so "
          "a link copied after its photo's caption goes to the list too. Switched "
          "off, it is refused and kept only for the button.")
-    menu.addSeparator()
+    more.addSeparator()
 
-    head(menu, "Reading captions")
-    tick(menu, "Read LKO, MB, UMB, DLI, JAT, FZR as the division's city", "division_codes",
+    head(more, "Reading captions")
+    tick(more, "Read LKO, MB, UMB, DLI, JAT, FZR as the division's city", "division_codes",
          "\"HT LKO\" is Hindustan Times, Lucknow. JAT and MB only in capitals.")
-    tick(menu, "File the clipping under that division", "set_division",
+    tick(more, "File the clipping under that division", "set_division",
          "Only when the clipping has no division yet. A card on the sentiment "
          "board keeps the division the board is showing.")
-    tick(menu, "A city on its own is a caption", "city_alone",
+    tick(more, "A city on its own is a caption", "city_alone",
          "\"LKO\" or \"Lucknow page 3\" names the photo's city, with the newspaper "
          "left empty and flagged - or taken from this session's newspaper.")
-    tick(menu, "A newspaper not on the list, in English, before a listed city",
+    tick(more, "A newspaper not on the list, in English, before a listed city",
          "unlisted_paper_in_english",
          "\"Veer Arjun Delhi\" is named as typed and flagged, as a Hindi paper not "
-         "on the list already is.")
-    tick(menu, "Keep a town not on the city list as typed", "towns_as_typed")
-    choice(menu, "Captions that cannot be read", "as_typed", [
+         "on the list already is. To have it read every day, add it with Manage "
+         "Newspaper List.")
+    tick(more, "Keep a town not on the city list as typed", "towns_as_typed")
+    choice(more, "Captions that cannot be read", "as_typed", [
         ("auto16", "Print as typed, up to 16 words at once"),
         ("auto6", "Print as typed, up to 6 words at once"),
         ("button", "Only offer them on the button"),
         ("never", "Refuse them"),
     ])
-    choice(menu, "Where a caption goes", "caption_into", [
+    choice(more, "Where a caption goes", "caption_into", [
         ("fields", "Newspaper, city and page boxes"),
         ("fields+headline", "Those boxes, and printed above the picture exactly as copied"),
     ])
-    menu.addSeparator()
+    more.addSeparator()
 
-    head(menu, "Every photo Collect adds")
-    preset = menu.addAction("Newspaper, city, page and division for this session…")
-    preset.triggered.connect(lambda: collector.show_defaults(parent))
-    clear = menu.addAction("Clear them")
-    clear.triggered.connect(lambda: (collector.set_options(replace(
-        collector.options, **{n: getattr(DEFAULTS, n) for n in _PRESET_FIELDS})), sync()))
-    choice(menu, "Board column", "board_column", [
+    head(more, "Photos")
+    choice(more, "Board column", "board_column", [
         ("", "The column opened out, else Neutral"),
         *[(value, value) for value in COLUMN_CHOICES[1:]],
     ])
-    menu.addSeparator()
-
-    head(menu, "Photos")
-    choice(menu, "Refuse small pictures", "refuse_under", [
+    choice(more, "Refuse small pictures", "refuse_under", [
         (200, "Under 200 px"), (400, "Under 400 px"), (600, "Under 600 px"), (0, "Never"),
     ])
     tidy_now = "trimmed"
@@ -507,36 +532,37 @@ def build_menu(collector, parent) -> QMenu:
         tidy_now = "trimmed" if tidy_wanted() else "left"
     except Exception:  # noqa: BLE001
         pass
-    choice(menu, "Phone's bars", "trim", [
+    choice(more, "Phone's bars", "trim", [
         ("layout", f"As the Layout card says (now: {tidy_now})"),
         ("always", "Always trim"),
         ("never", "Never trim"),
     ], "For photos Collect adds only - the Layout card's own setting is not changed.")
-    choice(menu, "A photo already in the list", "same_photo", [
+    choice(more, "A photo already in the list", "same_photo", [
         ("point", "Point at it, add nothing"),
         ("again", "Add it again"),
     ])
-    menu.addSeparator()
+    more.addSeparator()
 
-    head(menu, "Pairing")
-    tick(menu, "A new caption replaces one already copied onto the photo", "replace_caption",
+    head(more, "Pairing")
+    tick(more, "A new caption replaces one already copied onto the photo", "replace_caption",
          "A name typed by hand is still never replaced.")
-    tick(menu, "A caption copied just before its photo goes on it", "early_caption",
+    tick(more, "A caption copied just before its photo goes on it", "early_caption",
          f"Within {EARLY_CAPTION_SECONDS // 60} minutes.")
     on_report = getattr(window, "mode", "standard") != "sentiment"
     # On the board the newest photo is what really happens, so that is what
     # is ticked there: a menu showing the other would say the opposite.
-    choice(menu, "Caption goes on", "pair_with", [
+    choice(more, "Caption goes on", "pair_with", [
         ("newest", "The newest photo"),
         ("ticked", "The one clipping ticked in the press report", on_report),
     ], "Ticking is in the press report. On the sentiment board a caption goes on "
        "the newest photo whatever is chosen here.",
         in_effect=lambda o: o.pair_with if on_report else "newest")
-    menu.addSeparator()
+    more.addSeparator()
 
-    head(menu, "While collecting")
-    tick(menu, "Bring each new photo into view", "reveal")
-    tick(menu, "Flash the taskbar when a copy is not used", "alert")
+    head(more, "While collecting")
+    tick(more, "Bring each new photo into view", "reveal")
+    tick(more, "Flash the taskbar when a copy is not used", "alert")
+    menu.addMenu(more)
     menu.addSeparator()
 
     history = menu.addAction("What was copied…")
@@ -546,6 +572,8 @@ def build_menu(collector, parent) -> QMenu:
     menu.aboutToShow.connect(sync)
     sync()
     menu.bindings = bindings
+    menu.more_menu = more
+    menu.list_action = lists
     menu.reset_action = reset
     menu.clear_action = clear
     menu.preset_action = preset

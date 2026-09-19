@@ -4886,3 +4886,44 @@ made, connected and named - suites and the window use `zoom_label`,
 `zoom_buttons`, `trainer_btn` - but they live in `_parked`, a holder that is
 never shown, so nothing that shows one can put it back on the header. The
 NEWSPAD and INTERFACE captions are gone: each control says what it is.
+
+
+## The newspaper list is kept, as changes (2.0.37)
+
+Collect names a photo from its caption only when the caption starts with a
+listed paper, and the list was the 56 papers in `config/newspapers.json`. A
+paper from another state was refused, and a name typed by hand lasted until
+the program closed (`NameIndex.add_newspaper` never saved). Manage Newspaper
+List (`ui/newspaper_list.py`, on Collect's right-click menu) edits both lists,
+newspapers and cities; `core/paperlist.py` keeps them.
+
+**Only the changes are written** - `newspaper_list.json` in the settings
+folder holds `added`, `changed` (with `was`, the shipped name) and `removed`
+for each list. The shipped file is read fresh and the changes laid over it, so
+a paper a later version ships still arrives. An entry nobody edited is the
+very `Entry` it was filled from, so opening and saving the editor writes no
+change.
+
+**The merge keeps the shipped order, and must.** `NameIndex._best` settles an
+exact tie by whichever name comes first, and the cities in the shipped file are
+not alphabetical. The first merge sorted, which would have changed how a
+document's caption resolves on every machine, list edited or not. Now changed
+entries stay in place and added ones go at the end; the editor sorts only for
+display, and `test_newspaperlist` pins that an unedited index is identical to
+the loaded one, order included.
+
+Names typed into a clipping stay session-only on purpose - a typing slip saved
+for good would be read as a newspaper every morning after. `set_newspapers`
+keeps them for the session when the list is replaced, and the editor offers
+them (`typed_newspapers`, "Add them to the list") rather than saving them
+unseen. The editor opens with everything the reader knows - the shipped list
+with the saved changes, and the reader's own short forms (`copied.SHORTHAND`,
+shown and searchable, never written, so they cannot be removed by mistake).
+One search bar at the top filters both lists and turns to the list that has
+the match.
+
+Collect's right-click menu went from about thirty lines to five: Manage
+Newspaper List, Same newspaper for every photo (was "Newspaper, city, page and
+division for this session…"), Options for this session (every option, as it
+was, in one `StayOpenMenu`), What was copied, Reset. Clear only appears while
+photos are being named.

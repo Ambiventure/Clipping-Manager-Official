@@ -92,6 +92,10 @@ class NameIndex:
                     continue
                 raw[name] = aliases
                 norm[name] = [normalise(s) for s in [name, *aliases] if s]
+        # Which names came from a list, as against typed into a clipping this
+        # session (add_newspaper): replacing the list keeps the typed ones.
+        self._listed_papers = set(self._papers)
+        self._listed_editions = set(self._editions)
 
     # -- loading -----------------------------------------------------------
     @classmethod
@@ -119,6 +123,26 @@ class NameIndex:
         if name and name not in self._editions:
             self._editions[name] = []
             self._editions_norm[name] = [normalise(name)]
+
+    def set_newspapers(self, entries) -> None:
+        """This list in place of the newspapers, other spellings and all - the
+        list as somebody has kept it (core/paperlist). Names typed into a
+        clipping this session are kept: the list does not know them."""
+        self._papers, self._papers_norm, self._listed_papers = _replaced(
+            self._papers, self._listed_papers, entries)
+
+    def set_editions(self, entries) -> None:
+        """As set_newspapers, for the cities."""
+        self._editions, self._editions_norm, self._listed_editions = _replaced(
+            self._editions, self._listed_editions, entries)
+
+    def typed_newspapers(self) -> list[str]:
+        """Newspapers typed into a clipping this session, which no list has."""
+        return sorted(name for name in self._papers if name not in self._listed_papers)
+
+    def typed_editions(self) -> list[str]:
+        """As typed_newspapers, for the cities."""
+        return sorted(name for name in self._editions if name not in self._listed_editions)
 
     def save(self, path: Path) -> None:
         """Write the grown lists back out, aliases intact."""
@@ -214,6 +238,25 @@ class NameIndex:
                 for alias in aliases
             ),
         )
+
+
+def _replaced(held: dict, listed: set, entries) -> tuple[dict, dict, set]:
+    """(names -> spellings, names -> normalised spellings, the listed names)
+    for a new list, with the names typed this session carried over."""
+    typed = {name: spellings for name, spellings in held.items() if name not in listed}
+    raw: dict[str, list[str]] = {}
+    for name, aliases in entries:
+        name = (name or "").strip()
+        if name:
+            raw[name] = [a for a in (aliases or []) if isinstance(a, str)]
+    now_listed = set(raw)
+    known = {name.casefold() for name in raw}
+    for name, spellings in typed.items():
+        if name.casefold() not in known:
+            raw[name] = list(spellings)
+    norm = {name: [normalise(s) for s in [name, *spellings] if s]
+            for name, spellings in raw.items()}
+    return raw, norm, now_listed
 
 
 # ------------------------------------------------------------------ splitting

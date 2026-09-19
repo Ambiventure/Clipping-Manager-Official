@@ -65,6 +65,7 @@ CARRIED = (
     ("categories.json", "which papers are which"),
     ("sections.json", "your section headings, and how they print"),
     ("wordlist.json", "the words you keep out of the report"),
+    ("newspaper_list.json", "the newspapers and cities you added to Collect's list"),
     ("duplicate_training.jsonl", "what you have taught it about repeats"),
     ("duplicate_verdicts.jsonl", "duplicate decisions from the review screen"),
 ) + _designs() + (
