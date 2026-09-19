@@ -23,6 +23,7 @@ from PySide6.QtCore import (QEvent, QPoint, QRectF, QSize, Qt, QTimer,
                             QUrl)
 from PySide6.QtGui import (
     QAction,
+    QColor,
     QCursor,
     QGuiApplication,
     QKeySequence,
@@ -94,6 +95,31 @@ from .sentiment_cover_card import MORNING, legacy_morning
 from .wordlist_bar import WordListBar
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+
+
+class HeaderIconButton(QPushButton):
+    """A header button with one of our vector icons in place of words.
+
+    Styled as the header's own buttons are (#HeaderButton) so it sits among
+    them as one of them, and named for screen readers.
+    """
+
+    def __init__(self, drawer, name: str, parent=None, width: int = 40, height: int = 34):
+        super().__init__(parent)
+        self.drawer = drawer
+        self.setObjectName("HeaderButton")
+        self.setAccessibleName(name)
+        self.setFixedSize(width, height)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        size = min(self.width(), self.height()) * 0.58
+        box = QRectF((self.width() - size) / 2, (self.height() - size) / 2, size, size)
+        self.drawer(painter, box, QColor("#FFFFFF"))
+        painter.end()
 
 
 class IconButton(QPushButton):
@@ -878,6 +904,43 @@ class MainWindow(QMainWindow):
             icons.paperclip(painter, QRectF(9, 9, 22, 22), theme.QORANGE)
             painter.end()
             logo.setPixmap(pixmap)
+        # The menu, in the top left corner: the program's own things - its
+        # settings and housekeeping, the Duplicates Trainer, the zoom, where its
+        # files are kept. The top bar holds only what the morning's work uses
+        # all the time (which newspad, which report, Collect); everything else
+        # that used to share the bar with them is in here.
+        self.menu_btn = HeaderIconButton(icons.menu_lines, "Menu")
+        self.menu_btn.setToolTip("Menu - Settings, the Duplicates Trainer, zoom, "
+                                 "and where your files are kept")
+        self.menu_btn.setStyleSheet(
+            "QPushButton::menu-indicator { image: none; width: 0px; }")
+        self.main_menu = QMenu(self.menu_btn)
+        self.main_menu.setToolTipsVisible(True)
+        self.settings_action = self.main_menu.addAction("Settings…")
+        self.settings_action.setToolTip(
+            "Clean up: measure every clipping again for the duplicate check, "
+            "empty the browser's saved pages, free memory and delete "
+            "temporary files. Your clippings and settings are not touched.")
+        self.settings_action.triggered.connect(self.open_settings)
+        self.main_menu.addSeparator()
+        self.trainer_action = self.main_menu.addAction("Duplicates Trainer…")
+        self.trainer_action.setToolTip(
+            "Teach it which cuttings are the same story and which are not.")
+        self.trainer_action.triggered.connect(self.open_trainer)
+        # How big everything is drawn. Each size asks first, then starts the
+        # program again at it, as the zoom on the bar always did.
+        self.zoom_menu = self.main_menu.addMenu("Zoom")
+        self.main_menu.aboutToShow.connect(self._fill_zoom_menu)
+        self._fill_zoom_menu()
+        self.main_menu.addSeparator()
+        self.kept_action = self.main_menu.addAction(
+            "Runs offline - where your files are kept, and updates…")
+        self.kept_action.setToolTip(
+            "Every document is read on this machine. Nothing is uploaded, and "
+            "nothing reaches the network unless you ask it to.")
+        self.kept_action.triggered.connect(self.where_things_are_kept)
+        self.menu_btn.setMenu(self.main_menu)
+        top.addWidget(self.menu_btn, 0, Qt.AlignTop)
         top.addWidget(logo)
 
         titles = QVBoxLayout()
@@ -920,10 +983,8 @@ class MainWindow(QMainWindow):
 
         # Which of the four newspads is open. A button with a menu, never a
         # combo box: a combo takes the wheel, and a wheel turned over the header
-        # must scroll the page, never quietly switch somebody's newspad.
-        newspad_label = QLabel("NEWSPAD")
-        newspad_label.setObjectName("ModeLabel")
-        controls.addWidget(newspad_label)
+        # must scroll the page, never quietly switch somebody's newspad. No
+        # caption beside it, nor beside the switch: each says what it is.
         self.newspad_btn = QPushButton(f"Newspad {self.newspad} ▾")
         self.newspad_btn.setObjectName("HeaderButton")
         self.newspad_btn.setCursor(Qt.PointingHandCursor)
@@ -935,10 +996,6 @@ class MainWindow(QMainWindow):
         self.newspad_menu.aboutToShow.connect(self._fill_newspad_menu)
         self.newspad_btn.setMenu(self.newspad_menu)
         controls.addWidget(self.newspad_btn)
-
-        interface_label = QLabel("INTERFACE")
-        interface_label.setObjectName("ModeLabel")
-        controls.addWidget(interface_label)
 
         # Both interfaces on the header, side by side, rather than one of them
         # hidden inside a drop-down with the other. See ui/modeswitch.py.
@@ -964,20 +1021,14 @@ class MainWindow(QMainWindow):
         self.collect_btn.customContextMenuRequested.connect(self._collect_menu)
         controls.addWidget(self.collect_btn)
 
-        # Beside the interface switch rather than inside it, and the difference
-        # is measured. A FlowLayout asks for the width of its WIDEST item, and
-        # the switch is already that item, so every pixel a third entry added
-        # to it would land on the window's own minimum width one for one: 579px
-        # today, 737px with a third entry. As a button of its own it is
-        # narrower than the switch and costs the floor nothing at all. That
-        # matters here because main_window has a 1171px floor already, and
-        # "the elements crop on the right" is a bug that has been reported.
-        #
-        # It is also not an interface. Both halves of the switch say how many
-        # clippings they are holding; the trainer holds none, owns no pool, and
-        # is a thing you open rather than a place you are. And it can be hidden
-        # when there is nothing to train on, which a switch position cannot -
-        # a three-way control that is sometimes two-way is one nobody learns.
+        # Off the bar since 2.0.36 - the Duplicates Trainer, the zoom and Runs
+        # offline are in the menu at the top left. The buttons are still made,
+        # connected and named, because the rest of the window and its tests use
+        # them, but they live in a holder that is never shown: nothing can put
+        # one back on the header by showing it.
+        self._parked = QWidget(content)
+        self._parked.hide()
+
         self.trainer_btn = QPushButton("Duplicates Trainer")
         self.trainer_btn.setObjectName("HeaderButton")
         self.trainer_btn.setCursor(Qt.PointingHandCursor)
@@ -990,7 +1041,7 @@ class MainWindow(QMainWindow):
             "evidence for setting the program's numbers in a later version, "
             "not something that changes the check while you are working.")
         self.trainer_btn.clicked.connect(self.open_trainer)
-        controls.addWidget(self.trainer_btn)
+        self.trainer_btn.setParent(self._parked)
 
         # Zoom. The office laptops are 1366x768 and the cards, the list and the
         # footer together want more room than that, so the whole application can
@@ -1005,7 +1056,7 @@ class MainWindow(QMainWindow):
         self.zoom_out_btn = self.zoom_buttons.smaller
         self.zoom_in_btn = self.zoom_buttons.bigger
         self.zoom_label = self.zoom_buttons.percent
-        controls.addWidget(self.zoom_buttons)
+        self.zoom_buttons.setParent(self._parked)
 
         self.offline_note = QPushButton("Runs offline")
         self.offline_note.setObjectName("HeaderButton")
@@ -1021,7 +1072,8 @@ class MainWindow(QMainWindow):
             "where your settings are kept, to have a copy written somewhere "
             "that is backed up, and to check for a newer version.")
         self.offline_note.clicked.connect(self.where_things_are_kept)
-        controls.addWidget(self.offline_note)
+        self.offline_note.setParent(self._parked)
+
         top.addLayout(controls)
         column.addLayout(top)
 
@@ -1059,6 +1111,20 @@ class MainWindow(QMainWindow):
         return header
 
     # -- how big everything is drawn ---------------------------------------
+    def _fill_zoom_menu(self) -> None:
+        """The menu's Zoom: every size, the one in use ticked."""
+        current = zoom.level()
+        self.zoom_menu.clear()
+        self.zoom_menu.setTitle(f"Zoom - {zoom.as_percent(current)}")
+        for size in zoom.LEVELS:
+            words = zoom.as_percent(size)
+            if abs(size - zoom.NORMAL) < 0.001:
+                words += "  (actual size)"
+            action = self.zoom_menu.addAction(words)
+            action.setCheckable(True)
+            action.setChecked(abs(size - current) < 0.001)
+            action.triggered.connect(lambda _on=False, s=size: self._zoom_to(s))
+
     def _zoom_by(self, steps: int) -> None:
         self._zoom_to(zoom.step(zoom.level(), steps))
 
@@ -5140,16 +5206,7 @@ class MainWindow(QMainWindow):
         clipping. Silently, and against check_duplicates_now's own promise
         that anything that still matters is read again.
         """
-        for clip in clips:
-            clip.picture_hash = ""
-            clip.picture_hash_lower = ""
-            clip.picture_hash_fine = ""
-            clip.ink_profile = ""
-            clip.content_w = 0
-            clip.content_h = 0
-            clip.ocr_text = ""
-            clip.ocr_engine = ""
-            clip.headline_confidence = 0
+        duplicates.forget_measurements(clips)
 
     def _quiet_board_pass_off_screen(self) -> bool:
         """A category's automatic check running while the press report is on
@@ -6427,6 +6484,11 @@ class MainWindow(QMainWindow):
             self._collect_note = ""
         if parts:
             self._flash(" ".join(parts), kind)
+
+    def open_settings(self) -> None:
+        from .settings_dialog import SettingsDialog
+
+        SettingsDialog(self).exec()
 
     def where_things_are_kept(self) -> None:
         """What the program keeps, where it keeps it, and how to have a copy."""

@@ -136,6 +136,15 @@ def rotate(painter: QPainter, box: QRectF, color: QColor) -> None:
     painter.restore()
 
 
+def menu_lines(painter: QPainter, box: QRectF, color: QColor) -> None:
+    """The menu: three lines, the middle one as long as the others."""
+    _unit(painter, box)
+    painter.setPen(_pen(color, 2.0))
+    for y in (6.5, 12.0, 17.5):
+        painter.drawLine(QPointF(4.5, y), QPointF(19.5, y))
+    painter.restore()
+
+
 def maximize(painter: QPainter, box: QRectF, color: QColor) -> None:
     _unit(painter, box)
     painter.setPen(_pen(color, 2.0))

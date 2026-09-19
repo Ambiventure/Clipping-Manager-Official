@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from PySide6.QtGui import QUndoCommand
 
-from ..core import imageops
+from ..core import duplicates, imageops
 from ..core.models import (LAST_BAND, UNASSIGNED, arrival_of,
                            priority_of, sort_band)
 
@@ -330,6 +330,9 @@ class Rotate(_Base):
             if row is None:
                 continue
             row.clip.rotation = (row.clip.rotation + degrees) % 360
+            # A turned clipping is a different picture to the duplicate check,
+            # as a trimmed one is (see SetCrop).
+            duplicates.forget_measurements([row.clip])
             # Keep the bytes in step with the picture, or a restored session
             # would show the clipping at its old angle.
             row.thumb_png = thumbnail_png(row.clip)
@@ -390,6 +393,11 @@ class SetCrop(_Base):
         if row is None:
             return
         row.clip.crop = crop
+        # A trimmed clipping is a different picture from the one the duplicate
+        # check measured, and it used to go on being compared as the untrimmed
+        # one until somebody pressed Check for Duplicates - which every
+        # capture from Chrome, trimmed the moment it arrives, never had.
+        duplicates.forget_measurements([row.clip])
         row.thumb_png = thumbnail_png(row.clip)
         row.thumbnail = pixmap_from_png(row.thumb_png)
         self.model.refresh_clip(self.clip_id)

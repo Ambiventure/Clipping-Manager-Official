@@ -16,6 +16,33 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.36
+
+Added
+
+  * **A menu in the top left corner** - the three lines beside the logo. It
+    holds Settings, the Duplicates Trainer, the zoom and Runs offline (where
+    your files are kept, and updates).
+  * **Settings, with a Clean up** that clears out what the program gathers
+    over a long run, so it works as if newly installed.
+  * **Clean up measures every clipping again for the duplicate check,**
+    from scratch. The way duplicates are decided does not change.
+  * **Clean up also empties the browser's saved pages** (your sign-ins stay),
+    frees memory and deletes the program's own temporary files.
+  * **Nothing you made is touched by Clean up** - no clipping, name, trim,
+    priority, setting or saved newspad.
+
+Changed
+
+  * **The top bar holds only the newspad, the Press Report / Sentiment Board
+    switch and Collect from WhatsApp.** It fits on one line on a laptop screen.
+
+Fixed
+
+  * **A clipping that is trimmed or turned is compared as it looks now.** The
+    duplicate check went on using the picture from before the trim, so a
+    clipping and its copy could be missed.
+
 ## 2.0.35
 
 Added

@@ -4858,3 +4858,31 @@ labelled pair still scores 12 of 12 on with none wrong.
 failed" and never call sys.exit, so a suite could report failures and be
 counted a pass. It now reads the tally as well, which is how both of these came
 to light at all.
+
+
+## Settings, the corner menu, and measurements that went stale (2.0.36)
+
+The morning this was asked for, the duplicate check missed copies that were
+plainly the same picture. The check keeps what it measures about each clipping
+- the picture prints, the ink profile, the headline read off it - because
+measuring is the slow part. Trimming (`SetCrop`) and turning (`Rotate`) changed
+the picture and kept the measurements, so a trimmed clipping went on being
+compared as the picture it used to be; captures from Chrome are trimmed as a
+matter of course. Only "Check for duplicates now" ever forgot them. Both
+commands now call `duplicates.forget_measurements`, undo included, and the
+next check measures afresh.
+
+Settings > Clean up (`ui/settings_dialog.py`) is the same forgetting for every
+clipping at once, both pools, plus the browser's page cache (never its
+`storage`, which holds the sign-ins), `QPixmapCache` and the parsed-print
+cache, and the program's own temporary files matched by name
+(`TEMP_FILES`, `TEMP_FOLDERS`) so nothing of anybody else's can be caught. It
+feeds the rule; it does not touch it.
+
+The top bar now holds only the newspad, the report switch and Collect, and
+fits one line at 1366 (98px, from 120px). The Duplicates Trainer, the zoom and
+Runs offline moved into the menu at the top left. Their buttons are still
+made, connected and named - suites and the window use `zoom_label`,
+`zoom_buttons`, `trainer_btn` - but they live in `_parked`, a holder that is
+never shown, so nothing that shows one can put it back on the header. The
+NEWSPAD and INTERFACE captions are gone: each control says what it is.

@@ -563,6 +563,34 @@ def find(clips: Iterable, threshold: float = SIMILARITY,
     return pairs
 
 
+def forget_measurements(clips: Iterable) -> int:
+    """Forget everything the check worked out about these clippings.
+
+    Every measurement, not only the two the comparison happens to use today -
+    the fine print, the ink profile and the content box as well - and the
+    headline read off the picture. All of it is recomputed the next time a
+    check needs it, from the picture as it now prints. Returns how many.
+
+    What a clipping LOOKS like is never touched: its picture, its crop, its
+    name, its priority and whether it is in the report are all left alone.
+    """
+    count = 0
+    for clip in clips:
+        if clip is None:
+            continue
+        clip.picture_hash = ""
+        clip.picture_hash_lower = ""
+        clip.picture_hash_fine = ""
+        clip.ink_profile = ""
+        clip.content_w = 0
+        clip.content_h = 0
+        clip.ocr_text = ""
+        clip.ocr_engine = ""
+        clip.headline_confidence = 0
+        count += 1
+    return count
+
+
 def marked_pairs(clips: Iterable) -> list:
     """The pairs these clippings are already marked as, in list order, with
     nothing compared again and nothing read.
