@@ -87,14 +87,14 @@ TWIN_PICTURE_TALL = 420
 #: dark bar it sits on with a hairline round it, and the one in force is filled
 #: with its own colour. Nothing else on this bar is a circle, so five circles
 #: read as one control without a label or a box round them.
-BUBBLE = 24
+BUBBLE = 32         # the height of every other button on this bar
 #: The same five colours the card's own badge uses, so a bubble pressed here
 #: and the badge that appears on the card are plainly the same thing.
 BUBBLE_COLOURS = theme.PRIORITY_COLOURS
 BUBBLE_STYLE = """
 QPushButton {{
     background: {rest}; border: 1px solid {edge}; border-radius: {radius}px;
-    padding: 0px; margin: 0px; color: {ink}; font-size: 11px; font-weight: 600;
+    padding: 0px; margin: 0px; color: {ink}; font-size: 13px; font-weight: 600;
 }}
 QPushButton:hover {{ border-color: {accent}; color: #FFFFFF; }}
 """
@@ -174,6 +174,12 @@ class PreviewDialog(QDialog):
 
         QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.navigate.emit(-1))
         QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.navigate.emit(1))
+        # 1 to 5 press the priority bubbles - the same as a click, so pressing
+        # the lit one's number takes the priority off. Not while a box has the
+        # keyboard: a 5 typed into the Page box is a page number.
+        for level in PRIORITIES:
+            QShortcut(QKeySequence(str(level)), self,
+                      lambda want=level: self._key_pick(want))
         QShortcut(QKeySequence("Ctrl++"), self, lambda: self._zoom(1))
         QShortcut(QKeySequence("Ctrl+-"), self, lambda: self._zoom(-1))
         QShortcut(QKeySequence("Ctrl+0"), self, self._zoom_reset)
@@ -272,9 +278,9 @@ class PreviewDialog(QDialog):
                 f"Priority {level}" + (
                     " - first in the report" if level == 1 else
                     " - last in the report" if level == 5 else "")
-                + ". Press it again to take the priority off, and the clipping "
-                "goes back where it came in. Clippings with no priority sit "
-                "under all five, in the order they arrived.")
+                + f" (key {level}). Press it again to take the priority off, "
+                "and the clipping goes back where it came in. Clippings with "
+                "no priority sit under all five, in the order they arrived.")
             bubble.clicked.connect(lambda _checked=False, want=level: self._pick(want))
             self.bubbles[level] = bubble
             line.addWidget(bubble)
@@ -297,6 +303,17 @@ class PreviewDialog(QDialog):
                 ink="#FFFFFF" if here else "#8A97AC",
                 radius=BUBBLE // 2))
             bubble.setDown(False)
+
+    def _key_pick(self, level: int) -> None:
+        from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QPlainTextEdit, QTextEdit
+
+        focus = QApplication.focusWidget()
+        typing = (isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
+                                     QAbstractSpinBox))
+                  or (isinstance(focus, QComboBox) and focus.isEditable()))
+        if typing:
+            return
+        self._pick(level)
 
     def _pick(self, level: int) -> None:
         """A bubble was pressed: that level, or none if it was already lit."""

@@ -615,6 +615,36 @@ def level_at(rows: list, clip_ids: Iterable[int]) -> Optional[int]:
     return 0 if landed == LAST_BAND else landed
 
 
+def ensure_arrivals(model: "ClipModel") -> int:
+    """Give every clipping without an arrival number one, moving nothing.
+
+    A session saved before 2.0.34 has no arrival numbers at all, and its
+    clippings come back through the session reader, not through make_rows -
+    so every one of them sat at 0 and tied with every other. The sort kept
+    ties where they stood, which meant that taking a priority off left the
+    clipping wherever the priority had lifted it to, instead of putting it
+    back in its place in the list.
+
+    Numbered from the list as it stands, so nothing on screen moves: when
+    none has a number they are counted 1, 2, 3 down the list, and when only
+    some lack one each gets a number between its neighbours. Returns how many
+    were given one.
+    """
+    rows = [row for row in model.rows if getattr(row, "clip", None) is not None]
+    missing = [row for row in rows if not arrival_of(row.clip)]
+    if not missing:
+        return 0
+    if len(missing) == len(rows):
+        for place, row in enumerate(rows, start=1):
+            row.clip.order_seq = float(place)
+        return len(rows)
+    for row_id, arrival in arrivals_for(model.rows, [r.id for r in missing]).items():
+        clip = model.by_id(row_id)
+        if clip is not None:
+            clip.order_seq = arrival
+    return len(missing)
+
+
 class Arrange(Reorder):
     """One step: an order, the arrival numbers that hold it, and a priority.
 
@@ -627,6 +657,7 @@ class Arrange(Reorder):
     def __init__(self, model: "ClipModel", rows: list, text: str,
                  moved_ids: Iterable[int] = (), level: Optional[int] = None,
                  level_ids: Optional[Iterable[int]] = None):
+        ensure_arrivals(model)
         moved = [i for i in moved_ids if model.row_for(i) is not None]
         # Which clippings take the new level is not always which ones moved: a
         # bubble gives a level to a clipping that is renumbered by nothing,
@@ -676,6 +707,10 @@ class SetPriority(Arrange):
 
     def __init__(self, model: "ClipModel", clip_ids: Iterable[int], level: int,
                  text: str = ""):
+        # Before anything is sorted: a clipping with no arrival number has no
+        # place to go back to, and would sort to the top of whichever block it
+        # lands in.
+        ensure_arrivals(model)
         ids = [i for i in clip_ids if model.row_for(i) is not None]
         bands = {i: (level or LAST_BAND) for i in ids}
         said = text or (

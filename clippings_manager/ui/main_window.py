@@ -628,6 +628,11 @@ class MainWindow(QMainWindow):
                     restored += 1
                 if rows:
                     pool.replace_all(rows)
+                    # A session from before arrival numbers existed brings
+                    # every clipping back without one; given here, in the
+                    # order they were saved in, so taking a priority off puts
+                    # a clipping back where it was (commands.ensure_arrivals).
+                    commands.ensure_arrivals(pool)
 
             # Resume both counters above anything restored, whatever the
             # manifest claimed - a stale number is worse than a wasted one.

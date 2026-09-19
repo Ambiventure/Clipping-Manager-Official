@@ -16,6 +16,25 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.35
+
+Added
+
+  * **Keys 1 to 5 press the priority bubbles** in the preview window, and
+    pressing the lit one's number takes the priority off. A number typed into
+    a box - the Page box, say - is still just a number.
+
+Changed
+
+  * **The priority bubbles are the height of the other buttons** on the
+    preview's bar.
+
+Fixed
+
+  * **Taking a priority off puts the clipping back at its own serial number.**
+    On a morning carried over from an earlier version it stayed wherever the
+    priority had lifted it to.
+
 ## 2.0.34
 
 Changed
