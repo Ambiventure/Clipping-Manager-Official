@@ -16,6 +16,22 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.39
+
+Fixed
+
+  * **One of our own reports comes back whole.** A report of ours that prints
+    a heading part way down - ELECTRONIC MEDIA, SOCIAL MEDIA - came back with
+    every clipping above that heading flagged "probably not a clipping" and
+    its tick cleared. On the office's own 18.09.2026 report that was 239
+    clippings of 254. They now arrive as what they are: ticked, named, and
+    under the headings the report printed.
+  * **A dossier from the sentiment board is known for one of ours** when it is
+    imported, the Word file as well as the PDF. Its Word file carried no stamp,
+    so its clippings came back under a stranger's rules.
+  * **A category that printed "Nil - no clips" is not read as a clipping**, and
+    its words are not read as the next clipping's name.
+
 ## 2.0.38
 
 Added

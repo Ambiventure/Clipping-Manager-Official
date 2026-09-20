@@ -4969,3 +4969,39 @@ had already seen. The place is now fixed when the preview ARRIVES at a clipping
 same clipping again after a priority, a trim or a rename does not move it.
 The board hit this because that is where the morning's sorting is done, but the
 press report had the same fault.
+
+
+## Our own report, read back - the second half of it (2.0.39)
+
+2.0.33 fixed the coverage summary page being read as the first section header.
+The same rule bit again from the other end, and this time on a file we could
+measure: the office's own `PRESS MEDIA COVERAGE OVER NORTHERN RAILWAYS
+18.09.2026.pdf` - 254 pages, exported by 2.0.32, stamped, read as ours. It
+prints no heading over the first 240 clippings, because nobody asked for one,
+and then ELECTRONIC MEDIA and SOCIAL MEDIA near the end. Every picture above
+the first header is a letterhead, says the rule, so **239 of 254 came back
+flagged "probably not a clipping", each with its tick cleared**.
+
+The rule is right for a division's document and wrong for ours: in our own
+report every picture above the heading is a clipping somebody accepted and
+exported, and the report prints headings only where they asked for them. It is
+now skipped when the file is one of ours (`own` in `assemble.build_clips`); the
+cover is still furniture, which is what the rule was catching here.
+
+Two more, found while measuring:
+
+  * the sentiment dossier's **Word** file carried no stamp at all - only title,
+    subject and author - so a dossier imported into the press report was read
+    under a division's rules. It now writes the same two stamps the report's
+    Word file writes (`dc:description` and `cp:keywords`), and the dossier's
+    PDF carries the keywords beside its creator.
+  * 2.0.38's "Nil - no clips" page is a page with words and no picture. Those
+    words live in `core/ourfiles` now, printed from there by the exporter and
+    marked as furniture by the reader, so the page cannot become a caption for
+    the clipping after it.
+
+`test_ownreport` grew section 3b (the office's shape: six clippings with no
+heading, then one with) and 4b (the Nil page), both in PDF and Word, both with
+the stamp and with it stripped off - 89 checks. The measurement that started it
+is in `scratchpad/probe_ownimport2.py`: it reads a real report and prints what
+the importer made of it.

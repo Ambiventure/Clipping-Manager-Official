@@ -541,7 +541,18 @@ def build_clips(
             clip.probable_junk = True
             clip.junk_reason = (event.furniture_note
                                 or "decorative section artwork, not a clipping")
-        elif first_header is not None and stream_index < first_header:
+        elif (first_header is not None and stream_index < first_header
+                and not own):
+            # NEVER IN ONE OF OUR OWN REPORTS. The rule is for a division's
+            # document, where the pictures above the first header are the
+            # letterhead. In our own report every picture above it is a
+            # clipping somebody accepted and exported, printed with no heading
+            # because they asked for none - and the report prints its headings
+            # only where they asked for them. Measured on the office's own
+            # 18.09.2026 report: it prints ELECTRONIC MEDIA near the end, so
+            # 239 of its 254 clippings came back flagged "probably not a
+            # clipping", with their ticks cleared. The cover is still furniture
+            # (ourfiles), which is what this rule was catching here.
             clip.probable_junk = True
             clip.junk_reason = "appears above the first section header"
         clips.append(clip)

@@ -35,6 +35,8 @@ from docx.oxml.ns import qn
 from docx.oxml.shared import OxmlElement
 from docx.shared import Pt, RGBColor
 
+from .. import version
+from ..core import assemble, ourfiles
 from ..core import sentiment as sentiment_core
 from ..core.models import Clip, Section
 from . import layout
@@ -210,8 +212,10 @@ _FALLBACK_STYLES = {
     Section.ADVERTISEMENT: ("Advertisement", "#B45309"),
 }
 
-#: What an empty category says on its own page when it is switched on.
-NIL_WORDS = "Nil - no clips"
+#: What an empty category says on its own page when it is switched on. The
+#: words live in core/ourfiles because the reader has to know them too: read
+#: back, that page is furniture rather than a caption without a clipping.
+NIL_WORDS = ourfiles.NIL_WORDS
 NIL_SIZE = 16.0
 
 
@@ -669,7 +673,9 @@ def build_pdf(
         "title": title,
         "subject": subject,
         "author": "Northern Railway Media Monitoring Cell",
-        "creator": "Clippings Manager",
+        "creator": f"Clippings Manager {version.describe()}",
+        "producer": f"Clippings Manager {version.describe()}",
+        "keywords": assemble.MADE_HERE,
     })
 
     if options.include_cover:
@@ -963,6 +969,13 @@ def build_docx(
     document.core_properties.title = title
     document.core_properties.subject = subject
     document.core_properties.author = "Northern Railway Media Monitoring Cell"
+    # The same two stamps the press report's Word file carries, so a dossier
+    # imported back - into the press report or anywhere else - is known for
+    # one of ours and read as one. Without them its clippings came back under
+    # a division's rules. Word keeps the keywords through a save; a tool that
+    # rewrites the description leaves them, and the other way about.
+    document.core_properties.comments = f"Clippings Manager {version.describe()}"
+    document.core_properties.keywords = assemble.MADE_HERE
 
     pages = 0
     started = False

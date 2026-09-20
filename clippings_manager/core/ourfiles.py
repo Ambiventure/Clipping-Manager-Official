@@ -54,6 +54,11 @@ COVER_DATE = "DATE :"
 #: The coverage summary page's heading (2.0.31).
 SUMMARY_TITLE = "Coverage summary"
 
+#: What the sentiment dossier prints for a category that is switched on and
+#: holds nothing (2.0.38). build_sentiment prints these words from here, so the
+#: page that writes them and the reader that skips them cannot drift apart.
+NIL_WORDS = "Nil - no clips"
+
 #: What a page number looks like on its own at the foot of a sheet. Numbers are
 #: only furniture in one of our own files: a division's caption that is nothing
 #: but a page number is rare but real, and this never sees those.
@@ -76,7 +81,8 @@ def looks_like_ours(events: Iterable) -> bool:
         if getattr(event, "kind", "") != "text":
             continue
         text = _text(event)
-        if text.startswith(COVER_COUNT) or text == SUMMARY_TITLE:
+        if (text.startswith(COVER_COUNT) or text == SUMMARY_TITLE
+                or text.endswith(NIL_WORDS)):
             return True
     return False
 
@@ -140,6 +146,16 @@ def mark_furniture(events: list) -> int:
                     event.furniture = True
                     event.furniture_note = "the report's cover"
                     marked += 1
+
+    # A category with nothing in it, in the dossier: its page says so in
+    # words. They are not a caption for the clipping on the next page, and
+    # they are not a clipping.
+    for event in events:
+        if getattr(event, "kind", "") == "text" and _text(event).endswith(NIL_WORDS):
+            if not event.furniture:
+                event.furniture = True
+                event.furniture_note = "a category with no clippings"
+                marked += 1
 
     # The page numbers. In a PDF they are their own text event at the foot of
     # every sheet, and the caption walk above the next picture reads them: the
