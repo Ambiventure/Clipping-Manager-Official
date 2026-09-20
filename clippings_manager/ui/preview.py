@@ -831,7 +831,7 @@ class PreviewDialog(QDialog):
             self.section.setCurrentIndex(
                 max(0, self.section.findText(clip.section.value)))
             self.section.setToolTip(
-                "Which of the four columns this clipping is filed under.")
+                "Which of the board's categories this clipping is filed under.")
         else:
             self.section_label.setText(
                 "Section heading printed over this clipping")

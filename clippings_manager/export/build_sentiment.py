@@ -73,6 +73,50 @@ def report_columns() -> tuple:
     """Every category, in reading order, with any newcomer on the end."""
     rest = tuple(c for c in sentiment_core.COLUMNS if c not in REPORT_ORDER)
     return tuple(c for c in REPORT_ORDER if c in sentiment_core.COLUMNS) + rest
+
+
+def printed_columns(options: SentimentOptions) -> tuple:
+    """((category, printed at all, says Nil when empty), ...) for this dossier.
+
+    With a print order set on the sentiment page, that order and its switches:
+    a category switched on is printed, and prints "Nil - no clips" when it
+    holds nothing; one switched off is not printed at all, whether it holds
+    anything or not - which is what the switch says it does, and what the
+    export warns about when it drops clippings.
+
+    Without a print order - a dossier built by something older, or by a test -
+    every category that holds a clipping, in the reading order, and nothing at
+    all for the ones that do not: exactly as before this existed.
+    """
+    plan = getattr(options, "print_plan", ()) or ()
+    if plan:
+        known = {column.value: column for column in sentiment_core.COLUMNS}
+        out = []
+        for value, on in plan:
+            column = known.get(str(getattr(value, "value", value)))
+            if column is not None:
+                out.append((column, bool(on), bool(on)))
+        if out:
+            return tuple(out)
+    return tuple((column, True, False) for column in report_columns())
+
+
+def _left_out(column: Section, items) -> str:
+    """What the export says about a category somebody switched off."""
+    heading, _colour = _category_style(column)
+    return (f"{heading} is switched off in the print order, so "
+            f"{len(items)} clipping{'s were' if len(items) != 1 else ' was'} "
+            f"left out of the dossier.")
+
+
+def nil_line(options: SentimentOptions, column: Section) -> str:
+    """What an empty category prints. The category names itself when the
+    coloured headers are switched off and nothing else would say which one
+    this page is."""
+    if options.include_category_headers:
+        return NIL_WORDS
+    heading, _colour = _category_style(column)
+    return f"{heading} - {NIL_WORDS}"
 DOCX_ALIGNMENTS = {
     "left": WD_ALIGN_PARAGRAPH.LEFT,
     "center": WD_ALIGN_PARAGRAPH.CENTER,
@@ -163,7 +207,12 @@ _FALLBACK_STYLES = {
     Section.NEUTRAL: ("Neutral", "#2563EB"),
     Section.NEGATIVE: ("Negative", "#DC2626"),
     Section.DIGITAL: ("Digital News", "#7C3AED"),
+    Section.ADVERTISEMENT: ("Advertisement", "#B45309"),
 }
+
+#: What an empty category says on its own page when it is switched on.
+NIL_WORDS = "Nil - no clips"
+NIL_SIZE = 16.0
 
 
 @dataclass
@@ -184,6 +233,11 @@ class SentimentOptions:
     # It governs the clipping titles and the paper - not the coloured category
     # headers, which are the dossier's identity rather than a typographic choice.
     heading: object | None = None
+    # ((category value, print it even when empty), ...) - the print order card
+    # on the sentiment page. Empty means the old behaviour: every category that
+    # holds something, in the reading order, and nothing for the ones that do
+    # not (see printed_columns).
+    print_plan: tuple = ()
 
 
 # --------------------------------------------------------------- small helpers
@@ -241,8 +295,11 @@ def _category_style(column: Section) -> tuple[str, str]:
         label, colour = style["label"], style["colour"]
     except Exception:  # noqa: BLE001 - the fallback carries the same colours
         pass
-    heading = label if label.lower().endswith("news") else f"{label} News"
-    return heading, colour
+    # "Positive" prints as "Positive News"; an advertisement is not news and
+    # prints as itself.
+    if column is Section.ADVERTISEMENT or label.lower().endswith("news"):
+        return label, colour
+    return f"{label} News", colour
 
 
 def _division_code(division: Any) -> str:
@@ -638,9 +695,26 @@ def build_pdf(
 
     written = 0
     done = 0
-    for column in report_columns():
-        items = buckets[column]
+    for column, printed, says_nil in printed_columns(options):
+        items = buckets.get(column) or []
+        if not printed:
+            if items:
+                warnings.append(_left_out(column, items))
+            continue
         if not items:
+            if not says_nil:
+                continue
+            # Switched on and holding nothing: one page that says so, so the
+            # reader knows the category was looked at and was empty.
+            sheet = document.new_page(width=page_width, height=page_height)
+            cursor = _pdf_head(sheet, typeface, options, page_width, banner,
+                               column, True)
+            _draw_line(
+                sheet, typeface, nil_line(options, column),
+                pymupdf.Rect(MARGIN, cursor, page_width - MARGIN,
+                             cursor + NIL_SIZE * 2.0),
+                NIL_SIZE, align="left", colour=TITLE_COLOUR, bold=False,
+            )
             continue
 
         first_in_category = True
@@ -939,9 +1013,23 @@ def build_docx(
 
     written = 0
     done = 0
-    for column in report_columns():
-        items = buckets[column]
+    for column, printed, says_nil in printed_columns(options):
+        items = buckets.get(column) or []
+        if not printed:
+            if items:
+                warnings.append(_left_out(column, items))
+            continue
         if not items:
+            if not says_nil:
+                continue
+            if started:
+                document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+            started = True
+            pages += 1
+            _docx_head(document, options, banner, column, True)
+            paragraph = document.add_paragraph()
+            _docx_run(paragraph, nil_line(options, column), NIL_SIZE,
+                      TITLE_COLOUR)
             continue
 
         first_in_category = True

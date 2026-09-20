@@ -1,4 +1,4 @@
-"""The sentiment interface: six divisions, four columns of coverage.
+"""The sentiment interface: six divisions, five categories of coverage.
 
 The standard report answers "what goes in today's newspad, in what order". This
 answers a different question: for a given division, how did the day's coverage
@@ -9,7 +9,7 @@ comes from the file name and the category from the headings inside the document,
 a morning's imports drop into the right columns on their own. Dragging a card to
 another column is a correction, not the main job.
 
-The four columns are four virtualised list views over the same clippings the
+The categories are virtualised list views over the same clippings the
 standard report uses - there is one set of clippings in this application, not two -
 so a name typed in either place is the same name.
 """
@@ -68,7 +68,7 @@ from .sentiment_cover_card import SentimentCoverCard
 # Wording taken from the live prototype so the two read the same.
 COLUMN_META = {
     "Positive": {
-        "title": "Positive News (+)",
+        "title": "Positive News",
         "subtitle": "Achievements, safety, passenger praise",
         "empty": "No positive clips yet",
         "icon": "thumbs_up",
@@ -76,7 +76,7 @@ COLUMN_META = {
                 "or hover and press Ctrl+V to paste a screenshot",
     },
     "Neutral": {
-        "title": "Neutral News (●)",
+        "title": "Neutral News",
         "subtitle": "Informational updates, schedules, operations",
         "empty": "No neutral clips yet",
         "icon": "minus",
@@ -84,7 +84,7 @@ COLUMN_META = {
                 "or hover and press Ctrl+V to paste a screenshot",
     },
     "Negative": {
-        "title": "Negative News (−)",
+        "title": "Negative News",
         "subtitle": "Delays, complaints, track/operational issues",
         "empty": "No negative clips yet",
         "icon": "thumbs_down",
@@ -99,7 +99,32 @@ COLUMN_META = {
         "hint": "Upload a news screenshot or hover and press Ctrl+V to paste one,\n"
                 "then paste the article link onto the card",
     },
+    "Advertisement": {
+        "title": "Advertisement",
+        "subtitle": "Railway advertisements, tenders & notices",
+        "empty": "No advertisements yet",
+        "icon": "megaphone",
+        "hint": "Click or drag & drop PDF / Word / image clippings,\n"
+                "or hover and press Ctrl+V to paste a screenshot",
+    },
 }
+
+#: What a category is called on a card's Move: chips, where there is room for
+#: three letters and no more. Built from the columns themselves, so a category
+#: added to the board turns up on every card without another list to keep.
+SHORT_NAMES = {"Positive": "Pos", "Neutral": "Neu", "Negative": "Neg",
+               "Digital": "Dig", "Advertisement": "Adv"}
+
+
+def short_name(value: str) -> str:
+    return SHORT_NAMES.get(value, (value or "")[:3] or "?")
+
+
+def moves_to(section: Optional[Section] = None) -> tuple:
+    """(short name, category) for every category a card can be moved to."""
+    return tuple((short_name(column.value), column.value)
+                 for column in sentiment.COLUMNS
+                 if section is None or column is not section)
 CARD_MIME = "application/x-clippings-cards"
 # A card is a tile now, not a row: the clipping sits in its own framed box with
 # the headline box directly under it, which is where the eye expects to type.
@@ -180,8 +205,12 @@ def strips_for(clip, section) -> tuple:
     return True, has_url
 
 
-def card_geometry(rect: QRect) -> dict:
-    """Every part of a card, named. Paint and hit-test both read this."""
+def card_geometry(rect: QRect, section: Optional[Section] = None) -> dict:
+    """Every part of a card, named. Paint and hit-test both read this.
+
+    ``section`` is the category the card is in: its own chip is not drawn, so
+    the others close the gap rather than leaving a hole where it would be.
+    """
     card = QRect(rect.left() + 8, rect.top() + CARD_GAP // 2,
                  max(140, rect.width() - 18), CARD_HEIGHT)
     inner = card.adjusted(CARD_PAD, CARD_PAD, -CARD_PAD, -CARD_PAD)
@@ -211,11 +240,29 @@ def card_geometry(rect: QRect) -> dict:
     y = second.bottom() + 8
     actions = QRect(inner.left(), y, inner.width(), CARD_ACTIONS - 6)
 
+    # The chips take the room between the word "Move:" and the two buttons at
+    # the right, and no more: a fifth category means a fourth chip, and a fixed
+    # width put it under the delete button on a narrow column. Where even that
+    # is not enough the word goes and the chips have the line to themselves -
+    # they are coloured and named, and a card too narrow to say "Move:" is
+    # still a card somebody has to be able to use.
     chips = []
-    x = actions.left() + 38
-    for name, width in (("Neu", 40), ("Neg", 40), ("Dig", 40)):
-        chips.append((name, QRect(x, actions.top(), width, 20)))
-        x += width + 5
+    others = moves_to(section)
+    move_label = None
+    if others:
+        gaps = 5 * (len(others) - 1)
+        with_word = max(0, (actions.right() - 44) - (actions.left() + 38))
+        if with_word >= len(others) * 32 + gaps:
+            move_label = QRect(actions.left(), actions.top(), 34, actions.height())
+            start = actions.left() + 38
+        else:
+            start = actions.left()
+        room = max(0, (actions.right() - 44) - start)
+        width = max(30, min(40, (room - gaps) // len(others)))
+        x = start
+        for name, _category in others:
+            chips.append((name, QRect(x, actions.top(), width, 20)))
+            x += width + 5
 
     icons_x = actions.right()
     buttons = []
@@ -228,6 +275,7 @@ def card_geometry(rect: QRect) -> dict:
         "badge": badge, "caption": caption, "image": image, "title": title,
         "clear": clear, "second": second, "clear_second": clear_second,
         "add": add, "actions": actions, "chips": chips, "buttons": buttons,
+        "move_label": move_label,
     }
 
 
@@ -264,7 +312,7 @@ class CardDelegate(QStyledItemDelegate):
                 else ("title", "url"))
 
     def hit_at(self, rect: QRect, point: QPoint, clip=None) -> Optional[str]:
-        geometry = card_geometry(rect)
+        geometry = card_geometry(rect, self.section)
         for name in ("grip", "check", "image"):
             if geometry[name].contains(point):
                 return name
@@ -298,7 +346,7 @@ class CardDelegate(QStyledItemDelegate):
 
     def field_rect(self, rect: QRect, field: str = "") -> QRect:
         """Where a named strip is drawn, for the editor to sit exactly on it."""
-        geometry = card_geometry(rect)
+        geometry = card_geometry(rect, self.section)
         first, _second = self.fields()
         return geometry["title"] if (not field or field == first) \
             else geometry["second"]
@@ -365,7 +413,7 @@ class CardDelegate(QStyledItemDelegate):
             return
         clip = row.clip
         style = theme.SENTIMENT_STYLES[self.section.value]
-        geometry = card_geometry(option.rect)
+        geometry = card_geometry(option.rect, self.section)
         card = geometry["card"]
 
         painter.save()
@@ -474,13 +522,13 @@ class CardDelegate(QStyledItemDelegate):
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor("#9AA4AB"))
-        painter.drawText(QRect(actions.left(), actions.top(), 34,
-                               actions.height()),
-                         Qt.AlignVCenter | Qt.AlignLeft, "Move:")
+        if geometry["move_label"] is not None:
+            painter.drawText(geometry["move_label"],
+                             Qt.AlignVCenter | Qt.AlignLeft, "Move:")
 
         for name, box in geometry["chips"]:
-            other = {"Neu": "Neutral", "Neg": "Negative", "Dig": "Digital"}[name]
-            if other == self.section.value:
+            other = dict(moves_to(self.section)).get(name)
+            if other is None or other == self.section.value:
                 continue
             chip = theme.SENTIMENT_STYLES[other]
             hovered = self.hover_hit == f"move:{name}"
@@ -508,7 +556,7 @@ class CardDelegate(QStyledItemDelegate):
 
 
 class SentimentColumn(QListView):
-    """One of the four columns. Accepts cards dragged from the others."""
+    """One of the board's categories. Accepts cards dragged from the others."""
 
     cardsDropped = Signal(list, str)      # clip ids, target section value
     cardOpened = Signal(int)
@@ -619,8 +667,9 @@ class SentimentColumn(QListView):
             return
         if hit and hit.startswith("move:"):
             self.commit_editor()
-            target = {"Neu": "Neutral", "Neg": "Negative",
-                      "Dig": "Digital"}[hit.split(":", 1)[1]]
+            target = dict(moves_to(self.section)).get(hit.split(":", 1)[1])
+            if target is None:
+                return
             self.cardsDropped.emit([row.id], target)
             return
         self.commit_editor()
@@ -993,7 +1042,7 @@ class SentimentBoard(QWidget):
             "the page it is built on.",
         )
         settings_stack.addWidget(self.heading)
-        # Four columns that each need 275px cannot honestly fit a narrow window,
+        # Columns that each need 275px cannot honestly fit a narrow window,
         # and shrinking them past that point is what put the delete button on a
         # card beyond the mouse. So the board scrolls sideways instead, the way a
         # board with more columns than screen always has: every column keeps a
@@ -1558,7 +1607,9 @@ class SentimentBoard(QWidget):
 
             head_row = QHBoxLayout()
             head_row.setSpacing(8)
-            title = QLabel(meta["title"])
+            # Elided, never clipped: five headers share the width four used
+            # to have, and a title cut off mid-word looks like a fault.
+            title = ElidedLabel(meta["title"], floor=52)
             title.setStyleSheet(
                 "color: white; font-size: 13px; font-weight: 800;"
             )
@@ -1574,7 +1625,7 @@ class SentimentBoard(QWidget):
             expand = QPushButton("Expand")
             expand.setCursor(Qt.PointingHandCursor)
             expand.setToolTip(
-                f"Show only {meta['title']} and hide the other three columns"
+                f"Show only {meta['title']} and hide the other categories"
             )
             expand.setStyleSheet(
                 "QPushButton { background: rgba(255,255,255,0.92); border: none;"
@@ -1631,9 +1682,12 @@ class SentimentBoard(QWidget):
             self.column_counts[slug] = count
             # 150 was a promise the column could not keep: its contents need
             # roughly twice that, so the layout allowed widths at which every
-            # card was clipped. 275 is the measured width below which a card's
-            # chips and its action buttons start to overlap.
-            panel.setMinimumWidth(275)
+            # card was clipped. 275 was the width below which a card's chips
+            # and its action buttons used to overlap; the chips now take the
+            # room they are given (see card_geometry), and 250 is what lets all
+            # five categories stand side by side on a 1366-wide laptop instead
+            # of the fifth waiting behind a sideways scroll.
+            panel.setMinimumWidth(250)
             self.column_panels[slug] = panel
             row.addWidget(panel, 1)
         return holder
@@ -2142,7 +2196,8 @@ class SentimentBoard(QWidget):
             where + " media sentiment report  \u00b7  " + str(len(visible))
             + " clipping" + plural
         )
-        self.strip_title.setText(f"Four sentiment columns for {where}")
+        self.strip_title.setText(
+            f"{len(sentiment.COLUMNS)} sentiment categories for {where}")
         self._refresh_bubbles()
         self.cover.set_division(division)
         self.cover.set_counts(

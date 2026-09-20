@@ -28,13 +28,16 @@ from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ..core import sentiment
 from . import theme
 from .cover_card import Segmented, settings_dir
 from .design_file import DesignFile
@@ -100,7 +103,13 @@ DEFAULTS = {
 # The dossier still sets its titles its own way - ranged left and bold, which is
 # how a dossier reads - but no longer at 11pt, which was too small to carry a page.
 # The two panels stay separate: they are different documents.
-DOSSIER_DEFAULTS = {**DEFAULTS, "size": 16, "align": "left", "bold": True}
+DOSSIER_DEFAULTS = {
+    **DEFAULTS, "size": 16, "align": "left", "bold": True,
+    # The categories in the order the dossier reads them, and which of them
+    # print even when they are empty. See core/sentiment.printing_plan.
+    sentiment.PRINT_ORDER_KEY: [column.value for column in sentiment.COLUMNS],
+    sentiment.PRINT_SWITCH_KEY: {column.value: True for column in sentiment.COLUMNS},
+}
 
 
 #: Pasted phone screenshots lose their status and navigation bars as a
@@ -127,7 +136,10 @@ def set_tidy_wanted(on: bool) -> None:
 
 
 def defaults_for(key: str) -> dict:
-    return dict(DOSSIER_DEFAULTS if key == "sentiment" else DEFAULTS)
+    base = DOSSIER_DEFAULTS if key == "sentiment" else DEFAULTS
+    return {name: (list(value) if isinstance(value, list)
+                   else dict(value) if isinstance(value, dict) else value)
+            for name, value in base.items()}
 
 
 def settings_for(key: str) -> Path:
@@ -155,6 +167,8 @@ def normalise_layout(key: str, saved) -> dict:
         return data
     for name, fallback in fallbacks.items():
         value = saved.get(name, fallback)
+        if isinstance(fallback, (list, dict)):
+            continue                      # the print order, sorted out below
         if isinstance(fallback, bool):
             data[name] = bool(value)
         elif isinstance(fallback, int):
@@ -180,6 +194,11 @@ def normalise_layout(key: str, saved) -> dict:
         data["align"] = fallbacks["align"]
     if not 6 <= data["size"] <= 72:
         data["size"] = fallbacks["size"]
+    if sentiment.PRINT_ORDER_KEY in fallbacks:
+        plan = sentiment.printing_plan(saved.get(sentiment.PRINT_ORDER_KEY),
+                                       saved.get(sentiment.PRINT_SWITCH_KEY))
+        data[sentiment.PRINT_ORDER_KEY] = [column.value for column, _on in plan]
+        data[sentiment.PRINT_SWITCH_KEY] = {column.value: on for column, on in plan}
     return data
 
 
@@ -294,6 +313,19 @@ class HeadingLayoutCard(QFrame, DesignFile):
         self.align_pick.setMinimumWidth(120)
         controls.addWidget(self._labelled("Align", self.align_pick))
 
+        # The dossier alone: the press report is one running order, not
+        # categories, so there is nothing here for it to order.
+        if self.key == "sentiment":
+            self.order_btn = QPushButton("Print order…")
+            self.order_btn.setCursor(Qt.PointingHandCursor)
+            self.order_btn.setToolTip(
+                "Which categories the dossier prints, and in what order. A "
+                "category switched on prints even when it is empty - it says "
+                "“Nil - no clips”; switched off, neither it nor its clippings "
+                "are printed.")
+            self.order_btn.clicked.connect(self.edit_print_order)
+            controls.addWidget(self.order_btn)
+
         holder = QWidget()
         holder.setStyleSheet("background: transparent;")
         holder.setLayout(controls)
@@ -357,7 +389,11 @@ class HeadingLayoutCard(QFrame, DesignFile):
         """Take the values off the controls and remember them."""
         if self._loading:
             return
+        # Over what is there, never in place of it: the print order is not on
+        # a control of its own (it has its own window), and rebuilding the
+        # whole dictionary from the controls threw it away.
         self._values = {
+            **self._values,
             "page": self.page_pick.currentData() or self._defaults["page"],
             "family": self.family_pick.currentData() or self._defaults["family"],
             "size": self.size_pick.currentData() or self._defaults["size"],
@@ -368,9 +404,30 @@ class HeadingLayoutCard(QFrame, DesignFile):
         self._changed_design()
         self.changed.emit()
 
+    # -------------------------------------------------------- print order
+    def print_plan(self) -> tuple:
+        """((category, print it even when empty), ...) as this card has it."""
+        return sentiment.printing_plan(
+            self._values.get(sentiment.PRINT_ORDER_KEY),
+            self._values.get(sentiment.PRINT_SWITCH_KEY))
+
+    def edit_print_order(self) -> bool:
+        """The small window for the order and the switches."""
+        from .print_order import PrintOrderDialog
+
+        box = PrintOrderDialog(self.print_plan(), self)
+        if box.exec() != QDialog.Accepted:
+            return False
+        plan = box.plan()
+        self._values[sentiment.PRINT_ORDER_KEY] = [value for value, _on in plan]
+        self._values[sentiment.PRINT_SWITCH_KEY] = {value: on for value, on in plan}
+        self._changed_design()
+        self.changed.emit()
+        return True
+
     def reset(self) -> None:
         """Back to the way the newspad has always printed."""
-        self._values = dict(self._defaults)
+        self._values = defaults_for(self.key)
         self._loading = True
         self._apply()
         self._loading = False

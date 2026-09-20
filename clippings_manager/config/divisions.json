@@ -242,11 +242,11 @@
       "Positive",
       "Neutral",
       "Negative",
-      "Digital"
+      "Digital",
+      "Advertisement"
     ],
-    "_comment": "Advertisement, Electronic and Social clippings appear in Digital: they are the ones that carry article links.",
+    "_comment": "Electronic and Social clippings appear in Digital: they are the ones that carry article links. Advertisement has a category of its own.",
     "folds_into_digital": [
-      "Advertisement",
       "Electronic",
       "Social"
     ]

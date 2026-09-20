@@ -26,7 +26,8 @@ KIND_OF = {
     Section.ADVERTISEMENT: "Advertisement",
 }
 KIND_ORDER = ("Print", "Electronic", "Digital", "Social", "Advertisement")
-BOARD_ORDER = (Section.POSITIVE, Section.NEUTRAL, Section.NEGATIVE)
+BOARD_ORDER = (Section.POSITIVE, Section.NEUTRAL, Section.NEGATIVE,
+               Section.DIGITAL, Section.ADVERTISEMENT)
 
 #: The newspaper list is long on a big day; past this many the rest are one line.
 MOST_NEWSPAPERS = 20

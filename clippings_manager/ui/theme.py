@@ -133,6 +133,11 @@ SENTIMENT_STYLES = {
     "Digital":  {"label": "Digital News", "hindi": "डिजिटल न्यूज़", "sign": "🌐",
                  "colour": "#7C3AED", "bg": "#FAF5FF", "line": "#E9D5FF",
                  "badge": "#6D28D9"},
+    # Amber, which no other category uses, and far enough from Negative's red
+    # to be told apart at a glance across the board.
+    "Advertisement": {"label": "Advertisement", "hindi": "विज्ञापन", "sign": "◆",
+                      "colour": "#B45309", "bg": "#FFFBEB", "line": "#FDE68A",
+                      "badge": "#92400E"},
 }
 
 # --- source badges ----------------------------------------------------------

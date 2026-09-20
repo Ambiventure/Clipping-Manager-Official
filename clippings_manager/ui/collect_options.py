@@ -54,7 +54,8 @@ SAME_PHOTO_CHOICES = ("point", "again")
 PAIR_CHOICES = ("newest", "ticked")
 REFUSE_CHOICES = (200, 400, 600, 0)
 COLUMN_CHOICES = ("", Section.POSITIVE.value, Section.NEUTRAL.value,
-                  Section.NEGATIVE.value, Section.DIGITAL.value)
+                  Section.NEGATIVE.value, Section.DIGITAL.value,
+                  Section.ADVERTISEMENT.value)
 
 
 @dataclass(frozen=True)

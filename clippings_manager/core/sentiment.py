@@ -1,4 +1,4 @@
-"""The sentiment side: six divisions, four categories, and how a clip lands in one.
+"""The sentiment side: six divisions, five categories, and how a clip lands in one.
 
 The standard report cares about the running order of a day's clippings. The
 sentiment dossier cares about something else entirely: for each of the six Northern
@@ -21,12 +21,16 @@ from typing import Optional
 from .assemble import load_config
 from .models import Clip, Section
 
-# The four board columns, in the order they are shown.
-COLUMNS = (Section.POSITIVE, Section.NEUTRAL, Section.NEGATIVE, Section.DIGITAL)
+# The board's categories, in the order they are shown - and, unless the print
+# order says otherwise, the order the dossier reads in.
+COLUMNS = (Section.POSITIVE, Section.NEUTRAL, Section.NEGATIVE, Section.DIGITAL,
+           Section.ADVERTISEMENT)
 
-# Sections with no column of their own. They all tend to carry an article link,
-# which is what the Digital column is for, so that is where they appear.
-FOLDS_INTO_DIGITAL = (Section.ADVERTISEMENT, Section.ELECTRONIC, Section.SOCIAL)
+# Sections with no category of their own. They carry an article link, which is
+# what Digital is for, so that is where they appear. Advertisement had been one
+# of them until it was given a category of its own: an advertisement is not news
+# coverage at all, and the department counts it separately.
+FOLDS_INTO_DIGITAL = (Section.ELECTRONIC, Section.SOCIAL)
 
 
 @dataclass(frozen=True)
@@ -77,12 +81,43 @@ def division_by_code(code: str, config: Optional[dict] = None) -> Optional[Divis
 
 
 def column_for(section: Section) -> Section:
-    """Which of the four columns a clipping's section belongs in."""
+    """Which of the board's categories a clipping's section belongs in."""
     if section in FOLDS_INTO_DIGITAL:
         return Section.DIGITAL
     if section in COLUMNS:
         return section
     return Section.NEUTRAL
+
+
+#: Where a print order and its switches are kept in the dossier's heading
+#: and layout settings (ui/layout_card.py), and what they mean:
+#:
+#:   order     - the categories in the order the dossier reads them
+#:   switches  - {category: on}. On prints the category even when it holds
+#:               nothing, as "Nil - no clips"; off leaves it out altogether.
+PRINT_ORDER_KEY = "print_order"
+PRINT_SWITCH_KEY = "print_categories"
+
+
+def printing_plan(order=None, switches=None) -> tuple:
+    """((category, print it even when empty), ...), in printing order.
+
+    Whatever the saved order does not name keeps its place at the end, so a
+    category added in a later version is printed rather than quietly dropped,
+    and a name from a newer build that this one has never heard of is ignored.
+    A category with no switch saved is on: a dossier that leaves a category
+    out must be somebody's decision, never a default.
+    """
+    known = {column.value: column for column in COLUMNS}
+    seen, out = set(), []
+    for value in (order or ()):
+        column = known.get(str(value))
+        if column is not None and column.value not in seen:
+            seen.add(column.value)
+            out.append(column)
+    out += [column for column in COLUMNS if column.value not in seen]
+    on = switches if isinstance(switches, dict) else {}
+    return tuple((column, bool(on.get(column.value, True))) for column in out)
 
 
 #: What the board's division picker holds while every division is on show.

@@ -415,6 +415,27 @@ def globe(painter: QPainter, box: QRectF, color: QColor) -> None:
     painter.restore()
 
 
+def megaphone(painter: QPainter, box: QRectF, color: QColor) -> None:
+    """Advertisement: a horn opening to the right, with two sound lines."""
+    _unit(painter, box)
+    painter.setPen(_pen(color, 1.7))
+    painter.setBrush(Qt.NoBrush)
+    horn = QPainterPath()
+    horn.moveTo(4.0, 10.0)
+    horn.lineTo(10.0, 10.0)
+    horn.lineTo(16.5, 5.5)
+    horn.lineTo(16.5, 18.5)
+    horn.lineTo(10.0, 14.0)
+    horn.lineTo(4.0, 14.0)
+    horn.closeSubpath()
+    painter.drawPath(horn)
+    # The handle under the horn, and the sound coming out of it.
+    painter.drawLine(QPointF(7.0, 14.0), QPointF(8.5, 19.5))
+    painter.drawLine(QPointF(19.0, 9.5), QPointF(20.5, 8.5))
+    painter.drawLine(QPointF(19.0, 14.5), QPointF(20.5, 15.5))
+    painter.restore()
+
+
 def sliders(painter: QPainter, box: QRectF, color: QColor) -> None:
     _unit(painter, box)
     painter.setPen(_pen(color, 1.8))

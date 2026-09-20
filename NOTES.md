@@ -4927,3 +4927,45 @@ Newspaper List, Same newspaper for every photo (was "Newspaper, city, page and
 division for this session…"), Options for this session (every option, as it
 was, in one `StayOpenMenu`), What was copied, Reset. Clear only appears while
 photos are being named.
+
+
+## A fifth category, a print order, and where "next" comes from (2.0.38)
+
+**Advertisement.** `sentiment.COLUMNS` is the one list the board, the buckets
+and the dossier are built from, so the category itself was one line; what it
+cost was everything that had assumed four. The card's Move: chips were three
+hard-coded names (`{"Neu": ..., "Neg": ..., "Dig": ...}`) laid out at fixed
+positions with the card's own chip skipped, leaving a hole - now
+`moves_to(section)` builds them from the columns and `card_geometry` takes the
+section so paint and hit-test agree. The chips size themselves to the room
+between the word "Move:" and the two buttons, and drop the word when even that
+is short, because a column is narrower with five of them: the minimum went from
+275 to 250, which is what lets all five stand side by side on a 1366 laptop
+instead of the fifth sitting behind a sideways scroll. `ADVERTISEMENT` came out
+of `FOLDS_INTO_DIGITAL`, so anything already filed as an advertisement moves
+into the new category on its own.
+
+**Print order** (`ui/print_order.py`, `sentiment.printing_plan`). The order and
+the switches live with the dossier's other layout settings
+(`heading_sentiment.json`, so per newspad and carried by the backup) and reach
+the exporter as `SentimentOptions.print_plan`. `printed_columns` returns
+`(category, printed, says Nil when empty)`; an empty `print_plan` means the old
+behaviour exactly - every category that holds something, no Nil pages - so a
+headless build or an older call is unchanged. A category switched off is not
+printed even when it holds clippings (the switch says so, and the window says
+so), and the export warns with how many it left out.
+
+Two traps in the layout card: `_values` was rebuilt from the controls on every
+edit, which threw the print order away (it has no control of its own), and
+`defaults_for` handed out the module's own list and dict, which a drag would
+have edited in place.
+
+**The next clipping after a priority.** 2.0.35 remembered the clipping below
+the one on screen when a bubble was pressed. Press a second bubble - or change
+your mind, or clear it - and the first press has already moved the clipping to
+the top, so "the one below it" became the clipping now shown as No. 2, one they
+had already seen. The place is now fixed when the preview ARRIVES at a clipping
+(`_remember_after`, `_preview_at`), never when a bubble is pressed; drawing the
+same clipping again after a priority, a trim or a rename does not move it.
+The board hit this because that is where the morning's sorting is done, but the
+press report had the same fault.

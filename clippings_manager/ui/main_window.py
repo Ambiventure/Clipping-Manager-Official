@@ -298,7 +298,9 @@ class MainWindow(QMainWindow):
         self.preview: PreviewDialog | None = None
         # The clipping to walk to next, when a priority has just moved
         # the one on show out from under the place in the list.
-        self._preview_next_id: int | None = None
+        # (the clipping the preview is on, the one that was below it when it
+        # got there). See _remember_after.
+        self._preview_at: tuple = (None, None)
         self._group_serial = itertools.count(1)
         self._last_clicked_id: int | None = None
         # The other end of a shift-click run in a board category's list. Its
@@ -3845,13 +3847,12 @@ class MainWindow(QMainWindow):
         # the two are called by - are looked up in this one.
         self.preview.model = model
         at, walk = self._preview_place(clip_id)
-        # Opening on a clipping is a new place in the list, so any clipping
-        # left waiting from a priority press belongs to the walk before it.
-        self._preview_next_id = None
         # The counter must count what is on screen. With a filter on it used to
         # read "3 / 40" while the list showed nine.
         position = (at + 1) if at is not None else 0
         self.preview.show_row(row, position, len(walk))
+        # Opening on a clipping is arriving at a place in the list.
+        self._remember_after(clip_id)
         self.preview.show()
         self.preview.raise_()
         self.preview.activateWindow()
@@ -3862,6 +3863,10 @@ class MainWindow(QMainWindow):
             at, walk = self._preview_place(clip_id)
             self.preview.show_row(
                 row, (at + 1) if at is not None else 0, len(walk))
+            # Arriving at another clipping fixes a new place; drawing the same
+            # one again - after a priority, a trim, a rename - does not.
+            if clip_id != self._preview_at[0]:
+                self._remember_after(clip_id)
 
     def _preview_heading(self, clip_id: int, key: str, words: str) -> None:
         """A heading was chosen for one clipping in the press report preview.
@@ -4034,26 +4039,33 @@ class MainWindow(QMainWindow):
                 return index, walk
         return None, walk
 
+    def _remember_after(self, row_id: int) -> None:
+        """The place in the list the preview has just arrived at: this clipping,
+        and the one below it as the list stands now.
+
+        Somebody going down a morning setting priorities is at a PLACE in the
+        list, not on a clipping, and the place is fixed when they get there.
+        Work it out when a bubble is pressed instead and the second press is
+        wrong: the first press has already moved the clipping to the top, so
+        "the one below it" becomes the clipping now shown as No. 2 - which is
+        one they have already seen. Pressing a second bubble (or pressing the
+        lit one to clear it) must not change which clipping comes next.
+        """
+        at, walk = self._preview_place(row_id)
+        after = walk[at + 1].id if at is not None and at + 1 < len(walk) else None
+        self._preview_at = (row_id, after)
+
     def _preview_priority(self, row_id: int, level: int) -> None:
         """A priority bubble was pressed in the preview.
 
         Two things happen and they are one step: the clipping is given the
-        level, and it moves to where that level sits in the list.
-
-        The walk does NOT follow it. Somebody going down a morning setting
-        priorities is at a place in the list, not on a clipping: send them back
-        up to wherever the clipping landed and the next press of the arrow
-        walks the same clippings all over again. So the one that WAS below it
-        is remembered here, before anything moves, and the next arrow goes
-        there - which is the clipping they had not seen yet.
+        level, and it moves to where that level sits in the list. The walk does
+        NOT follow it - see _remember_after for where the next one comes from.
         """
         pool = self._preview_pool()
         if pool.row_for(row_id) is None:
             return
-        at, walk = self._preview_place(row_id)
-        after = walk[at + 1].id if at is not None and at + 1 < len(walk) else None
         self.stack_for(pool).push(commands.SetPriority(pool, [row_id], level))
-        self._preview_next_id = after
         # A trim half drawn over the picture is not thrown away for this. The
         # clipping has moved in the list; the picture on screen and the box
         # being dragged over it have not changed, and showing the row again
@@ -4066,11 +4078,11 @@ class MainWindow(QMainWindow):
     def _preview_navigate(self, step: int) -> None:
         if self.preview is None or self.preview.row is None:
             return
-        # The clipping that was below this one before a priority moved it. It
-        # is used once and only forwards; anything else - a step back, a second
-        # step on - walks the list as it now stands.
-        waiting, self._preview_next_id = self._preview_next_id, None
-        if step > 0 and waiting is not None:
+        # The clipping that was below this one when the preview arrived here,
+        # whatever has moved since. Forwards only: a step back walks the list as
+        # it now stands, and arriving anywhere fixes a new place.
+        here, waiting = self._preview_at
+        if step > 0 and waiting is not None and here == self.preview.row.id:
             at, _walk = self._preview_place(waiting)
             if at is not None:
                 self._refresh_preview(waiting)
@@ -4879,6 +4891,10 @@ class MainWindow(QMainWindow):
         board_style = export_layout.HeadingStyle.from_settings(
             self.board.heading.settings())
         chosen["page"] = board_style.page
+        # Which categories this dossier prints, and in what order - the Print
+        # order window on the same card.
+        chosen["print_plan"] = tuple(
+            (column.value, on) for column, on in self.board.heading.print_plan())
         if burned:
             # The words are in the pictures now, so the report must not set them
             # again: a heading above the image and the same heading inside it is

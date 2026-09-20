@@ -16,6 +16,34 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.38
+
+Added
+
+  * **Advertisement is a category of its own** on the sentiment board, beside
+    Digital news. It has everything the other categories have: cards with a
+    headline bar and Add URL, dragging in and out, its own count, its own
+    colour, and a place in the dossier.
+  * **Print order**, on the sentiment page's Heading & Document Layout card.
+    Drag the five categories into the order you want the dossier to read in.
+  * **A switch in front of each category there.** On, and the category is
+    printed even when it is empty - it says "Nil - no clips". Off, and it is
+    left out of the dossier altogether.
+  * **A switched-off category says what it left out** after the export, so a
+    category switched off months ago cannot quietly drop today's clippings.
+
+Changed
+
+  * **An advertisement is no longer filed under Digital news.** Anything
+    already filed as an advertisement moves to the new category.
+
+Fixed
+
+  * **The next clipping after a priority is the one that was below it**, even
+    when you press a second bubble or change your mind. It used to take you to
+    the clipping now shown as No. 2, which you had already seen. On the
+    sentiment board and in the press report alike.
+
 ## 2.0.37
 
 Added
