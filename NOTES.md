@@ -5225,3 +5225,58 @@ are not public" would have thrown away the only notice of it.
 did at 1180 before any of this - and measured at 1366 the dossier's strip goes
 to two rows for a grouping button labelled anything longer than about "Group
 posts". Hence "Group by platform", with the sentence in the tooltip.
+
+
+## A video on a card, and four things that were the wrong width (2.0.44)
+
+**An X post with a video came out as a grey box.** Not the picture: the whole
+card. X's embed asks the browser whether it can play the video, and the browser
+INSIDE THE APP - Qt's engine - is built without H.264, so it answers no:
+`canPlayType('video/mp4; codecs="avc1.42E01E"')` returns `""` and
+`MediaSource.isTypeSupported` returns false. X answers that by throwing the
+whole card away and drawing "The media could not be played" in its place,
+headline and all.
+
+It took a while to see because the program's OWN Chrome does have the codecs:
+fifteen captures of the office's three links there came out right, every time.
+Through the browser inside the app - which is what the office captures with -
+six of six were lost. Facebook and Instagram were never affected: their embeds
+show a still poster and never instantiate a player.
+
+`blockjs.STILL_THE_VIDEO` runs on a card before the site's own scripts do, and
+tells the page it CAN play: `canPlayType` answers "probably" for anything that
+looks like MP4, `MediaSource.isTypeSupported` answers true, `load()` does
+nothing, `play()` returns a promise that never settles, and a source set on a
+media element goes nowhere. Nothing is ever decoded, so the player stays
+exactly as it starts - the poster frame with the play button over it, which is
+the cutting wanted. Measured after: six of six right, and the files went from
+131 kB of grey to 1.3 MB of photograph.
+
+It has to be installed with `Page.addScriptToEvaluateOnNewDocument` BEFORE
+navigating. Run as an ordinary script after `Page.navigate`, it lands on the
+document being left rather than the one arriving, and the card is built
+unpatched - measured, six of six still lost. It is removed again afterwards, so
+a page somebody opens in the browser window is never touched by it.
+
+**A label can decide how wide the program is.** Switching Collect on while the
+sentiment board was open grew the window from 760 to 1119 pixels, walking its
+right edge off a half-screen desktop. The cause was `BoardStatus`, a plain
+QLabel on the export bar: handed "Collecting into the sentiment board, Neutral
+column - 0 photos, 0 captions." it asked for one unbroken line 811 pixels wide,
+which became the export strip's minimum, then the board's, then the window's.
+It is an `ElidedLabel` now, with the sentence on its tooltip.
+
+A sweep for the same fault found two more - the words-kept-out strip and the
+empty-list guidance - and they are wrapped or elided too. The only long label
+left is the board's own title, which is four fixed words and well inside the
+window's own minimum. The rule worth keeping: **nothing that is handed a
+SENTENCE may be a plain QLabel in a strip.**
+
+Also: the dossier export bar's border was `border: 1px` with `border-top: 3px`
+and a radius - Qt lays the thick side over the thin one and stops it dead where
+the curve begins, so the orange ran along the top and the rest was a hairline
+nobody could see. One 2px border all the way round. The sideways scroll bar had
+no rule at all, so Windows drew its own; it is the same grey pill as the
+upright one now. And the print order window's tick boxes were drawn in the
+window's background colour, on a row of the same colour - given an outline, a
+white face and a navy box with a tick.

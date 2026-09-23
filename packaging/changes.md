@@ -16,6 +16,29 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.44
+
+Fixed
+
+  * **A post on X with a video in it comes out as its picture again.** It was
+    coming out as a grey box saying "The media could not be played", with the
+    writing and the headline gone with it - the whole card, not just the
+    picture. Facebook's and Instagram's video posts were never affected.
+  * **The window no longer jumps wider when Collect is switched on.** On a
+    window taking half the screen it grew past the right-hand edge, because
+    the line that says what Collect is doing was asking for a width of its
+    own. Two other lines that could have done the same have been dealt with
+    too.
+  * **The cover panel now looks switched off when it is.** Turning off Enable
+    Cover Page fades everything below it and says "no cover page will be
+    printed" beside the switch.
+  * **The tick boxes in the print order window can be seen.** They were the
+    same colour as the row behind them.
+  * **The border round the dossier's export bar goes all the way round.** The
+    orange line ran along the top and stopped dead at the corner.
+  * **The sideways scroll bar matches the rest of the program** - a grey pill
+    instead of Windows' hollow rectangle with arrows at each end.
+
 ## 2.0.43
 
 Added

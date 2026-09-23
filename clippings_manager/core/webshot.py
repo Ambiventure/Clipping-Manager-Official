@@ -1088,6 +1088,7 @@ def _capture_at(page: _Wire, opening: str, keep: str,
     notes: dict = {"card": card.note} if card is not None else {}
     window = card.window if card is not None else PAGE_WIDE
     looked: set = set()
+    stilled = ""
     try:
         try:
             if not answers(page, ANSWER_SECONDS):
@@ -1097,6 +1098,22 @@ def _capture_at(page: _Wire, opening: str, keep: str,
             page.call("Emulation.setDeviceMetricsOverride", seconds=CALL_SECONDS,
                       width=window, height=PAGE_TALL, deviceScaleFactor=SHARPNESS,
                       mobile=False)
+            if card is not None:
+                # BEFORE THE CARD'S OWN SCRIPTS RUN, which is the whole point:
+                # run in the page after navigating, this landed on the document
+                # being left rather than the one arriving, and the card's player
+                # was built unpatched (measured: six of six still lost). Asked
+                # for on the NEXT document, it is the first thing that runs
+                # there. Taken off again afterwards so the page somebody opens
+                # in the browser window is never touched by it.
+                from .blockjs import STILL_THE_VIDEO
+                try:
+                    told = page.call("Page.addScriptToEvaluateOnNewDocument",
+                                     seconds=CALL_SECONDS, source=STILL_THE_VIDEO)
+                    stilled = told.get("result", {}).get("identifier", "")
+                    notes["stilled"] = bool(stilled)
+                except ShotError:
+                    stilled = ""            # an engine without it loses nothing
             page.call("Page.navigate", url=opening, seconds=PAGE_SECONDS)
             time.sleep(max(0.5, settle))
             for step in range(1, MOVES + 1):
@@ -1124,6 +1141,13 @@ def _capture_at(page: _Wire, opening: str, keep: str,
             raise
         _unstick(page)
         raise ShotError(STOPPED, kind="stopped") from None
+    finally:
+        if stilled:
+            try:
+                page.call("Page.removeScriptToEvaluateOnNewDocument",
+                          seconds=CALL_SECONDS, identifier=stilled)
+            except ShotError:
+                pass
     if card is not None:
         # The card's own address is platform.twitter.com; the post is X's.
         # The cutting is filed under the site the office was sent.

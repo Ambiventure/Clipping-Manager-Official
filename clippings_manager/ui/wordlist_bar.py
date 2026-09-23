@@ -61,6 +61,7 @@ from PySide6.QtWidgets import (
 
 from ..core import wordlist
 from . import theme
+from .fluid import ElidedLabel
 
 def _not_saved(parent, error) -> None:
     """A write to the settings folder failed. Said, never swallowed: a list
@@ -106,8 +107,12 @@ class WordListBar(QWidget):
         self.dot.setFixedWidth(12)
         row.addWidget(self.dot)
 
-        self.words = QLabel()
-        self.words.setWordWrap(False)
+        # ONE LINE, BUT NEVER A LINE THAT SETS THE WINDOW'S WIDTH. The strip is
+        # meant to stay a single line, so it is not wrapped; unwrapped, a plain
+        # QLabel asks for the whole sentence and the strip then decides how
+        # narrow the window may be (the fault BoardStatus had). Elided, it
+        # gives way and keeps the sentence on its tooltip.
+        self.words = ElidedLabel(floor=120)
         row.addWidget(self.words, 1)
 
         self.open_btn = QPushButton("Words kept out of the report…")

@@ -92,10 +92,27 @@ class PrintOrderDialog(QDialog):
         self.list.setIconSize(QSize(14, 14))
         # The row being moved has to stay readable: the default highlight
         # writes white on a pale background here.
+        # THE TICK BOX HAS TO BE SEEN. Qt draws an unstyled indicator in the
+        # window's own background colour, which on this panel is the same
+        # colour as the row behind it - so the switch that decides whether a
+        # category prints at all was an invisible square. Given an outline, a
+        # white face and a filled navy box with a tick in it when it is on, it
+        # reads at a glance which way round every category is.
         self.list.setStyleSheet(
             "QListWidget::item { padding: 7px 4px; }"
             f"QListWidget::item:selected {{ background: {theme.NAVY_SELECT};"
-            f" color: {theme.INK}; }}")
+            f" color: {theme.INK}; }}"
+            "QListWidget::indicator { width: 16px; height: 16px;"
+            " margin-right: 8px; border-radius: 4px;"
+            f" border: 1.6px solid {theme.HAIRLINE_STRONG};"
+            f" background: {theme.SURFACE}; }}"
+            f"QListWidget::indicator:hover {{ border-color: {theme.NAVY}; }}"
+            f"QListWidget::indicator:checked {{ background: {theme.NAVY};"
+            f" border-color: {theme.NAVY}; }}"
+            # The tick is painted to a file the first time a GUI exists, the
+            # same way the rest of the program's tick boxes get theirs.
+            + (f"QListWidget::indicator:checked {{ image: url({tick}); }}"
+               if (tick := theme.tick_icon()) else ""))
         self.list.setMinimumHeight(len(sentiment.COLUMNS) * 38 + 12)
         self.fill(plan)
         outer.addWidget(self.list, 1)

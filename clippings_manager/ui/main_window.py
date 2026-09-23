@@ -1771,6 +1771,7 @@ class MainWindow(QMainWindow):
             "or drop files anywhere in this window."
         )
         label.setAlignment(Qt.AlignCenter)
+        label.setWordWrap(True)      # never the thing that sets the window's width
         label.setStyleSheet(
             f"color: {theme.MUTED}; font-size: 13px; line-height: 170%;"
         )

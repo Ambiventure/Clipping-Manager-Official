@@ -1190,10 +1190,15 @@ class SentimentBoard(QWidget):
         # Kept, so the floating buttons can be placed above it rather than on
         # top of it - they were covering the right-hand end of Download PDF.
         self.export_strip = strip
+        # ONE BORDER, ALL THE WAY ROUND. It used to be a 3px orange top on a
+        # 1px grey frame: Qt draws a rounded box of mixed border widths by
+        # laying the thick side over the thin one and stopping it dead at the
+        # corner, so the orange ran along the top, was cut off square where the
+        # curve began, and the rest of the bar was a hairline nobody could see.
+        # It read as a border that had not been finished.
         strip.setStyleSheet(
             f"#ExportStrip {{ background: {theme.SURFACE};"
-            f" border: 1px solid {theme.HAIRLINE_STRONG};"
-            f" border-top: 3px solid {theme.ORANGE_DEEP};"
+            f" border: 2px solid {theme.ORANGE_DEEP};"
             f" border-radius: 16px; }}"
             f"#ExportStrip QLabel {{ background: transparent; border: none; }}"
         )
@@ -1210,7 +1215,16 @@ class SentimentBoard(QWidget):
             f"color: {theme.ORANGE}; font-size: 11px; font-weight: 800;"
             f" letter-spacing: .05em;"
         )
-        self.status = QLabel()
+        # ELIDED, OR IT DECIDES HOW WIDE THE PROGRAM IS. A plain QLabel asks
+        # for one unbroken line, and this one is handed whole sentences -
+        # switching Collect on puts up "Collecting into the sentiment board,
+        # Neutral column..." and the label then wanted 811 pixels. That became
+        # the export strip's minimum, then the board's, then the WINDOW'S:
+        # measured, a 760-wide window jumped to 1119 the moment Collect was
+        # switched on, which on a half-screen window walks its right edge off
+        # the desktop. Nothing on this bar may set the window's width; the
+        # whole sentence is on the tooltip, where it costs nothing.
+        self.status = ElidedLabel(floor=90)
         self.status.setObjectName("BoardStatus")
         self.status.setStyleSheet(
             f"#BoardStatus {{ color: {theme.NAVY}; background: {theme.NAVY_WASH};"

@@ -88,6 +88,82 @@ _KEEP = r"""
 
 # ------------------------------------------------------------------ prepare
 #: Called as (PREPARE_PAGE)({...limits}). Returns JSON of what it did.
+#: Called first of all on a post's card, before the site's own scripts have
+#: built the post. See STILL_THE_VIDEO's comment for what it is for.
+STILL_THE_VIDEO = r"""
+(() => {
+  // A POST'S VIDEO IS NEVER PLAYED, AND THE CARD IS NEVER TOLD SO.
+  //
+  // A cutting is a still picture: nothing is ever gained by playing the video,
+  // and on X everything is lost by trying. The browser inside the program has
+  // no H.264 of its own - Qt's engine is built without it - so an X card's
+  // player fails a second or two after it starts, and X answers that by
+  // throwing the whole card away and drawing "The media could not be played"
+  // in its place. Not the picture: the WHOLE card, 560 x 897 of grey, headline
+  // and all. Measured in the browser inside the app: three runs of two posts,
+  // six of six lost. In the program's own Chrome, which does have the codecs,
+  // fifteen of fifteen came out right - so this was invisible until it was
+  // captured the way the office captures.
+  //
+  // The cure is to make sure the player never gets as far as failing. Where it
+  // has no source it stays exactly as it starts: the poster frame, the play
+  // button over it, and readyState 0 - which is what the captures that DID
+  // come out right were showing. So load() does nothing, play() returns a
+  // promise that never settles (never resolving is what a paused player looks
+  // like; REJECTING is an error, and the error is the thing being avoided),
+  // and a source set on the element goes nowhere.
+  //
+  // Only on a card, and only in the page. Nothing here reaches a page somebody
+  // is reading in the browser window: capture_current never calls it.
+  const proto = window.HTMLMediaElement && HTMLMediaElement.prototype;
+  if (!proto || proto.__clipStilled) return 'no media element';
+  proto.__clipStilled = true;
+  proto.load = function () {};
+  proto.play = function () { return new Promise(function () {}); };
+  const drop = (name) => {
+    try {
+      const was = Object.getOwnPropertyDescriptor(proto, name);
+      if (!was || !was.set) return;
+      Object.defineProperty(proto, name, {
+        configurable: true, enumerable: was.enumerable,
+        get: was.get ? function () { return was.get.call(this); } : undefined,
+        set: function () {},
+      });
+    } catch (e) { /* a browser that will not have it keeps its own */ }
+  };
+  drop('src');
+  drop('srcObject');
+  // AND THE CARD IS NEVER TOLD THAT IT CANNOT PLAY. This is what actually
+  // does it. Measured in the browser inside the app: canPlayType for
+  // 'video/mp4; codecs="avc1.42E01E"' answers "" and
+  // MediaSource.isTypeSupported answers false, because Qt's engine is built
+  // without H.264. X ASKS, is told no, and throws the whole card away for a
+  // grey "The media could not be played" - headline and all. Told yes, it
+  // draws the player it always draws: the poster frame with the play button
+  // over it, which is exactly the cutting wanted. Nothing is ever decoded,
+  // because load() above does nothing and no source is ever set.
+  const asked = proto.canPlayType;
+  proto.canPlayType = function (type) {
+    return /mp4|avc1|h264|mpeg|m4a|aac/i.test(String(type || ''))
+      ? 'probably' : asked.call(this, type);
+  };
+  if (window.MediaSource && MediaSource.isTypeSupported) {
+    const wasSupported = MediaSource.isTypeSupported;
+    MediaSource.isTypeSupported = function (type) {
+      return /mp4|avc1|h264|mpeg|m4a|aac/i.test(String(type || ''))
+        ? true : wasSupported.call(this, type);
+    };
+  }
+  // One that is already on the page, put back to where it starts.
+  for (const v of document.querySelectorAll('video, audio')) {
+    try { v.pause(); } catch (e) { /* not started */ }
+    v.removeAttribute('autoplay');
+    v.setAttribute('preload', 'none');
+  }
+  return 'stilled';
+})()
+"""
+
 PREPARE_PAGE = r"""
 (async (opts) => {
   opts = Object.assign({domMs: 4000, scrollLimit: 3000, stepPause: 120, imageMs: 4000, fontsMs: 1500,
@@ -201,6 +277,27 @@ CLEAR_CLUTTER = r"""
   // it (never the card itself, which is why it is asked for by name).
   if (card) {
     const notices = [];
+    // A player with nothing under it: put its own poster frame in its place,
+    // so a card whose picture is the video still comes out as a picture. X
+    // draws a poster image of its own under the player and this finds it
+    // already there; this is for the card that does not.
+    for (const v of document.querySelectorAll('video[poster]')) {
+      const r = v.getBoundingClientRect();
+      if (r.width < 60 || r.height < 60) continue;
+      const near = [...(v.parentElement ? v.parentElement.querySelectorAll('img') : [])]
+        .filter(i => i.complete && i.naturalWidth > 80);
+      if (near.length || v.hasAttribute('data-clip-stood-in')) continue;
+      const img = document.createElement('img');
+      img.src = v.poster;
+      img.setAttribute('data-clip-added', '1');
+      img.setAttribute('data-clip-poster', '1');
+      img.style.cssText = 'display:block;width:' + r.width + 'px;height:'
+        + r.height + 'px;object-fit:cover;margin:0;';
+      v.setAttribute('data-clip-stood-in', '1');
+      v.parentElement.insertBefore(img, v);
+      setStyle(v, 'display', 'none');
+      notices.push('the poster in place of the player');
+    }
     const drop = (el, why) => {
       const r = el.getBoundingClientRect();
       // Never anything big: the post itself is the big thing on a card, and
@@ -1122,6 +1219,7 @@ def _finish(script: str) -> str:
             .replace("MOST_TALL", str(MOST_TALL)))
 
 
+STILL_THE_VIDEO = _finish(STILL_THE_VIDEO)
 PREPARE_PAGE = _finish(PREPARE_PAGE)
 CLEAR_CLUTTER = _finish(CLEAR_CLUTTER)
 FIND_BLOCK = _finish(FIND_BLOCK)

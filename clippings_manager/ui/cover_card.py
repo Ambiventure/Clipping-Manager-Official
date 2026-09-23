@@ -36,6 +36,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QCheckBox,
+    QGraphicsOpacityEffect,
     QComboBox,
     QDateEdit,
     QFileDialog,
@@ -918,6 +919,14 @@ class CoverCard(QFrame, DesignFile):
             "clipping. What is set up below is kept either way.")
         self.print_cover.toggled.connect(self._cover_printing_changed)
         header.addWidget(self.print_cover)
+        # What the fading below means, in words, because a faded panel on its
+        # own could be read as "still loading".
+        self.no_cover_note = QLabel("no cover page will be printed")
+        self.no_cover_note.setStyleSheet(
+            f"color: {theme.MUTED}; font-size: 11px; font-style: italic;"
+            " background: transparent; border: none;")
+        self.no_cover_note.hide()
+        header.addWidget(self.no_cover_note)
 
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.setObjectName("CoverReset")
@@ -1691,10 +1700,27 @@ class CoverCard(QFrame, DesignFile):
 
     def _cover_printing_changed(self, on: bool) -> None:
         """Grey what is below when there is to be no cover page, so nobody sets
-        up a cover that is never going to print."""
+        up a cover that is never going to print.
+
+        setEnabled alone was not enough to SEE: every control on this panel
+        carries its own stylesheet, and a rule written for a disabled one is
+        overridden by the rule written for the control itself - so the panel
+        went dead to the mouse while looking exactly as it had. The whole body
+        is faded instead, which no per-control style can override, and the
+        switch says in words what the fading means.
+        """
         body = getattr(self, "body", None)
         if body is not None:
             body.setEnabled(on)
+            if on:
+                body.setGraphicsEffect(None)
+            else:
+                faded = QGraphicsOpacityEffect(body)
+                faded.setOpacity(0.38)
+                body.setGraphicsEffect(faded)
+        note = getattr(self, "no_cover_note", None)
+        if note is not None:
+            note.setVisible(not on)
         if not self._loading:
             self.save()
 

@@ -507,8 +507,23 @@ QScrollBar::handle:vertical {{
     background: #C3CBD6; border-radius: 6px; min-height: 44px; margin: 2px;
 }}
 QScrollBar::handle:vertical:hover {{ background: #A2ADBC; }}
-QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+/* The sideways one was never given a rule, so Windows drew its own: a hollow
+   rectangle with arrow buttons at each end, which is the one thing on the
+   board that does not belong to this century. The same grey pill as the
+   upright one, laid on its side. */
+QScrollBar:horizontal {{ background: transparent; height: 12px; margin: 0; }}
+QScrollBar::handle:horizontal {{
+    background: #C3CBD6; border-radius: 6px; min-width: 44px; margin: 2px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: #A2ADBC; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0;
+    background: none; border: none; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+QScrollBar::up-arrow, QScrollBar::down-arrow,
+QScrollBar::left-arrow, QScrollBar::right-arrow {{
+    background: none; width: 0; height: 0;
+}}
+QScrollBar::corner {{ background: transparent; }}
 
 /* ------------------------------------------------------------- inline edit */
 QLineEdit {{
