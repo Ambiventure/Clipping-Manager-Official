@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import io
 
-from PySide6.QtCore import QSize, QStringListModel, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, QStringListModel, Qt, Signal
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +39,7 @@ from ..core import imageops
 from ..core.models import (PRIORITIES, UNASSIGNED, CropRect, Section,
                            priority_of)
 from . import theme
+from .cover_card import icon_pixmap
 from .trimming import TrimCanvas
 from .fluid import ElidedLabel
 from .scroll import WHEEL_PIXELS, smooth
@@ -141,6 +143,11 @@ class PreviewDialog(QDialog):
     jumpRequested = Signal(int)
     #: Open the duplicates review, to decide about the pair on screen.
     reviewRequested = Signal()
+    #: Put this clipping's picture on the clipboard (a row id).
+    copyRequested = Signal(int)
+    #: (row id, newspad number) - put a COPY of this clipping into that
+    #: newspad's saved work. The window does it; this only asks.
+    sendToNewspad = Signal(int, int)
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
@@ -358,7 +365,124 @@ class PreviewDialog(QDialog):
         self.twin = self._build_twin()
         self.twin.hide()
         side_by_side.addWidget(self.twin)
+        # The two things done to a clipping FROM here rather than to it: take a
+        # copy of the picture, and put a copy in another newspad. Neither
+        # changes the clipping, so neither belongs among Rotate, Split, Trim
+        # and Exclude at the foot. They ride on the edge of the picture itself,
+        # where the picture is what they are about.
+        self._rail = self._build_rail(holder)
+        holder.installEventFilter(self)
         return holder
+
+    #: The rail's buttons, and the room it leaves round them.
+    RAIL_BUTTON = 38
+    RAIL_PAD = 6
+
+    def _build_rail(self, holder) -> QWidget:
+        """A tab of two buttons riding on the right edge of the picture.
+
+        Fixed to the edge and rounded on the left only, so it reads as part of
+        the window rather than as a pair of buttons left on top of it: the
+        straight right side IS the window's edge. Over the dark viewport it is
+        a lighter pane of the same dark, which is how the zoom controls and the
+        rest of that area are drawn.
+        """
+        rail = QFrame(holder)
+        rail.setObjectName("PreviewRail")
+        rail.setCursor(Qt.ArrowCursor)
+        rail.setStyleSheet(
+            "#PreviewRail { background: rgba(255, 255, 255, 0.10);"
+            " border: 1px solid rgba(255, 255, 255, 0.14); border-right: none;"
+            " border-top-left-radius: 13px; border-bottom-left-radius: 13px;"
+            " border-top-right-radius: 0; border-bottom-right-radius: 0; }"
+            "#PreviewRail QToolButton { background: transparent; border: none;"
+            " border-radius: 9px; padding: 0; }"
+            "#PreviewRail QToolButton:hover {"
+            " background: rgba(255, 255, 255, 0.16); }"
+            "#PreviewRail QToolButton:pressed {"
+            " background: rgba(255, 255, 255, 0.24); }"
+            "#PreviewRail QToolButton::menu-indicator { image: none;"
+            " width: 0; height: 0; }")
+        column = QVBoxLayout(rail)
+        column.setContentsMargins(self.RAIL_PAD, self.RAIL_PAD,
+                                  self.RAIL_PAD, self.RAIL_PAD)
+        column.setSpacing(4)
+
+        self.copy_btn = QToolButton(rail)
+        self.copy_btn.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
+        self.copy_btn.setCursor(Qt.PointingHandCursor)
+        self.copy_btn.setIcon(icon_pixmap("copy_pages", "#E8EDF5", 19))
+        self.copy_btn.setIconSize(QSize(19, 19))
+        self.copy_btn.setToolTip(
+            "Copy this clipping's picture, as it prints, to the clipboard - "
+            "ready to paste into WhatsApp, an email or a document.")
+        self.copy_btn.clicked.connect(self._copy_picture)
+        column.addWidget(self.copy_btn)
+
+        self.send_btn = QToolButton(rail)
+        self.send_btn.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
+        self.send_btn.setCursor(Qt.PointingHandCursor)
+        self.send_btn.setIcon(icon_pixmap("layers", "#E8EDF5", 19))
+        self.send_btn.setIconSize(QSize(19, 19))
+        self.send_btn.setPopupMode(QToolButton.InstantPopup)
+        self.send_btn.setToolTip(
+            "Put a copy of this clipping into another newspad. It stays here "
+            "too, and it is there when you switch to that newspad.")
+        self.send_btn.clicked.connect(self._offer_newspads)
+        column.addWidget(self.send_btn)
+        rail.adjustSize()
+        rail.raise_()
+        return rail
+
+    def eventFilter(self, watched, event):
+        rail = getattr(self, "_rail", None)
+        if rail is not None and event.type() == QEvent.Resize \
+                and watched is rail.parentWidget():
+            self._place_rail()
+        return super().eventFilter(watched, event)
+
+    def _place_rail(self) -> None:
+        """Against the right edge, half way down the picture."""
+        rail = getattr(self, "_rail", None)
+        if rail is None or rail.parentWidget() is None:
+            return
+        holder = rail.parentWidget()
+        rail.adjustSize()
+        rail.move(max(0, holder.width() - rail.width()),
+                  max(0, (holder.height() - rail.height()) // 2))
+        rail.raise_()
+
+    def _copy_picture(self) -> None:
+        if self.row is not None:
+            self.copyRequested.emit(self.row.id)
+
+    def _offer_newspads(self) -> None:
+        """The other newspads, by name and by what is in them.
+
+        The one that is open is shown and cannot be chosen: it is where the
+        clipping already is, and writing into its saved work behind the
+        window's back would be undone by the window's next save.
+        """
+        from ..core import newspads
+
+        menu = QMenu(self.send_btn)
+        here = newspads.active()
+        for number in range(1, newspads.COUNT + 1):
+            found = newspads.summary(number)
+            words = newspads.describe(number, *(found or ()))
+            if number == here:
+                action = menu.addAction(f"{words}   (this one)")
+                action.setEnabled(False)
+                continue
+            action = menu.addAction(words)
+            action.triggered.connect(
+                lambda _checked=False, n=number: self._send_to(n))
+        menu.exec(self.send_btn.mapToGlobal(
+            self.send_btn.rect().bottomLeft()))
+
+    def _send_to(self, number: int) -> None:
+        if self.row is not None:
+            self.sendToNewspad.emit(self.row.id, number)
 
     def _build_twin(self) -> QWidget:
         panel = QFrame()

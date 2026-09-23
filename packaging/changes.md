@@ -16,6 +16,20 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.45
+
+Added
+
+  * **Two buttons on the edge of the preview window.** Copy the clipping's
+    picture to the clipboard - as it prints, so a trimmed or turned clipping
+    copies trimmed and turned - ready to paste into WhatsApp, an email or a
+    document.
+  * **And put a copy of the clipping into another newspad.** Choose any of the
+    other three; the menu says how many clippings each one holds. It is a
+    copy: the clipping stays where it is, and the one you sent is waiting when
+    you switch to that newspad. A clipping on the sentiment board arrives on
+    that newspad's board.
+
 ## 2.0.44
 
 Fixed

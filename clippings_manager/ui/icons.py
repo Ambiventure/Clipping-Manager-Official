@@ -639,6 +639,20 @@ def eye(painter: QPainter, box: QRectF, color: QColor) -> None:
     painter.restore()
 
 
+def copy_pages(painter: QPainter, box: QRectF, color: QColor) -> None:
+    """Two sheets, one behind the other: a copy of this.
+
+    Written in the 24x24 space every icon here uses - the first go at it used
+    fractions of one, and drew a speck a pixel across.
+    """
+    _unit(painter, box)
+    painter.setPen(_pen(color, 1.7))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawRoundedRect(QRectF(3.5, 3.5, 12.5, 12.5), 2.6, 2.6)
+    painter.drawRoundedRect(QRectF(8.0, 8.0, 12.5, 12.5), 2.6, 2.6)
+    painter.restore()
+
+
 def move(painter: QPainter, box: QRectF, color: QColor) -> None:
     """Four-way arrows - the placement tab and the drag hint."""
     _unit(painter, box)

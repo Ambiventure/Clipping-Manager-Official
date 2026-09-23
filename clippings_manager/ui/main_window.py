@@ -9,6 +9,7 @@ of WhatsApp Web.
 from __future__ import annotations
 
 import functools
+import io
 import itertools
 import json
 import os
@@ -21,7 +22,7 @@ from types import SimpleNamespace
 
 from PySide6.QtCore import (QEvent, QPoint, QRectF, QSize, Qt, QTimer,
                             QUrl)
-from PySide6.QtGui import (
+from PySide6.QtGui import (QImage, 
     QAction,
     QColor,
     QCursor,
@@ -3806,6 +3807,71 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.Yes
 
     # ------------------------------------------------------------- preview
+    def _copy_clip_picture(self, clip_id: int) -> None:
+        """This clipping's picture, as it prints, on the clipboard.
+
+        As it PRINTS, not as it arrived: clip.render() is the same call the
+        exporters make, so a trimmed or turned clipping is copied trimmed and
+        turned. Somebody pasting it into WhatsApp gets what the report would
+        have shown them.
+        """
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        if row is None or row.clip is None:
+            return
+        try:
+            image = row.clip.render()
+            if image.mode not in ("RGB", "RGBA", "L"):
+                image = image.convert("RGB")
+            buffer = io.BytesIO()
+            image.save(buffer, "PNG")
+            picture = QImage()
+            picture.loadFromData(buffer.getvalue(), "PNG")
+            if picture.isNull():
+                raise ValueError("the picture could not be read")
+            QApplication.clipboard().setImage(picture)
+        except Exception as bad:  # noqa: BLE001 - one clipping, never the morning
+            self._flash(f"That picture could not be copied ({bad}).", "bad")
+            return
+        self._flash("Picture copied — paste it wherever you need it.", "good")
+
+    def _send_clip_to_newspad(self, clip_id: int, number: int) -> None:
+        """A COPY of this clipping into another newspad's saved work.
+
+        It is a copy: the clipping stays where it is. The other newspad is not
+        loaded - only one ever is - so it is written into that newspad's own
+        manifest and pictures, and it is there when somebody switches to it.
+        Which list it joins is the one it is in here, so a board clipping
+        arrives on that newspad's board.
+        """
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        if row is None or row.clip is None:
+            return
+        which = "sentiment" if pool is getattr(self, "board_model", None) else "standard"
+        # Its own newspad is saved first, so a picture it has never written to
+        # disk is not the one thing the copy is missing.
+        try:
+            self.save_session()
+        except Exception:  # noqa: BLE001 - the copy is what matters here
+            pass
+        try:
+            held = newspads.deliver(
+                number, row.clip, pool=which,
+                thumb_png=getattr(row, "thumb_png", b"") or b"",
+                source_name=f"Newspad {self.newspad}")
+        except newspads.HandoverError as bad:
+            self._flash(str(bad), "bad")
+            return
+        except Exception as bad:  # noqa: BLE001
+            self._flash(f"It could not be put in Newspad {number} ({bad}).", "bad")
+            return
+        where = "board" if which == "sentiment" else "list"
+        self._flash(
+            f"Copied into Newspad {number}'s {where} — {held} clipping"
+            f"{'s' if held != 1 else ''} there now. It is still here too.",
+            "good")
+
     def _preview_pool(self):
         """Whichever pool the open preview belongs to."""
         return getattr(self, "preview_model", None) or self.model
@@ -3840,6 +3906,8 @@ class MainWindow(QMainWindow):
             self.preview.source_of = self._source_of
             self.preview.jumpRequested.connect(self.open_preview)
             # The review of the list the previewed clipping is in.
+            self.preview.copyRequested.connect(self._copy_clip_picture)
+            self.preview.sendToNewspad.connect(self._send_clip_to_newspad)
             self.preview.reviewRequested.connect(
                 lambda: self.review_duplicates(pool=self._preview_pool()))
         # Set before the row is shown: it decides whether the Section control

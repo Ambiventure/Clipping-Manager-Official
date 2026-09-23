@@ -51,6 +51,7 @@ import json
 import os
 import sys
 from datetime import datetime
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -201,6 +202,101 @@ def remember(number: int) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp, target)
+
+
+class HandoverError(Exception):
+    """A copy into another newspad that must not be attempted."""
+
+
+def deliver(number: int, clip, pool: str = "standard",
+            thumb_png: bytes = b"", source_name: str = "") -> int:
+    """Put a COPY of one clipping into another newspad's saved work.
+
+    Returns the number of clippings that newspad holds afterwards.
+
+    ONLY ONE NEWSPAD IS EVER LOADED (see the top of this file), so a clipping
+    sent to another one cannot be handed to a window: it is written into that
+    newspad's own manifest and picture folder, exactly as its own window would
+    have written it, and it is there when somebody switches to it. Nothing in
+    the open newspad changes - this is a copy, not a move, and the clipping
+    stays where it is.
+
+    NEVER THE NEWSPAD THAT IS OPEN. The window owns that one's manifest and
+    rewrites the whole of it on its next save, so anything written round the
+    back of it would be thrown away seconds later without a word. The caller
+    offers the other three; this refuses the open one outright rather than
+    trusting it.
+
+    NEVER OVER A MANIFEST THAT CANNOT BE READ either. An unreadable manifest is
+    a morning waiting to be rescued, and saving a fresh one over it - which is
+    what appending to "nothing saved" would do - destroys it.
+    """
+    from .session import SessionStore, encode_clip
+
+    number = _clamp(number)
+    if number == active():
+        raise HandoverError("that newspad is the one that is open")
+    store = SessionStore(folder(number))
+    if store.unreadable():
+        raise HandoverError(f"Newspad {number}'s saved work could not be read, "
+                            "so nothing was added to it")
+    payload = store.load() or {
+        "mode": "standard", "division": "",
+        "next_clip_id": 1, "next_group_serial": 1,
+        "pools": {"standard": [], "sentiment": []},
+        "newspad": {},
+    }
+    pools = payload.setdefault("pools", {})
+    rows = pools.setdefault(pool if pool in ("standard", "sentiment") else "standard", [])
+
+    data = getattr(clip, "image_bytes", b"") or b""
+    blob = store.put_blob(data) if data else ""
+    if blob and thumb_png:
+        store.put_thumb(blob, thumb_png)
+
+    try:
+        next_id = int(payload.get("next_clip_id") or 1)
+    except (TypeError, ValueError):
+        next_id = 1
+    # Past anything already in either pool, whatever the counter says: a
+    # manifest written by a build that did not keep one would otherwise hand
+    # out an id two clippings already hold.
+    for one in list(pools.get("standard") or []) + list(pools.get("sentiment") or []):
+        try:
+            next_id = max(next_id, int(one.get("id") or 0) + 1)
+        except (TypeError, ValueError):
+            pass
+
+    written = encode_clip(clip)
+    # A COPY, so it is its own clipping in its own newspad. The uid is what
+    # the duplicate check and the board's own lists know a clipping by, and
+    # two clippings sharing one would be one clipping in two places. The
+    # arrival number puts it at the end of the list it is joining, and any
+    # memory of being a repeat of something belongs to the newspad it came
+    # from, not to this one.
+    written["uid"] = uuid.uuid4().hex
+    written["order_seq"] = max(
+        [float(one.get("clip", {}).get("order_seq") or 0.0) for one in rows]
+        + [0.0]) + 1.0
+    written["duplicate_of"] = None
+    written["excluded_as_duplicate"] = False
+
+    rows.append({
+        "id": next_id,
+        "source_kind": "image",
+        # Where it came from, in words, so the bracket it lands under in the
+        # other newspad says so rather than naming a file that newspad has
+        # never seen.
+        "source_name": source_name or "sent from another newspad",
+        "group_key": "",
+        "home_title": "",
+        "home_kind": "",
+        "blob": blob,
+        "clip": written,
+    })
+    payload["next_clip_id"] = next_id + 1
+    store.save(payload)
+    return len(rows)
 
 
 def summary(number: int) -> Optional[tuple]:

@@ -5280,3 +5280,42 @@ no rule at all, so Windows drew its own; it is the same grey pill as the
 upright one now. And the print order window's tick boxes were drawn in the
 window's background colour, on a row of the same colour - given an outline, a
 white face and a navy box with a tick.
+
+
+## Copying a clipping out of the preview (2.0.45)
+
+Two buttons on a tab riding the right edge of the picture. They are there
+rather than among Rotate, Split, Trim and Exclude at the foot because neither
+of them CHANGES the clipping - one takes a copy of the picture, the other takes
+a copy of the clipping - and the foot is where the things that change it live.
+The tab is rounded on its left side only and flush on its right, so the
+window's own edge is the tab's straight side and it reads as part of the window
+rather than as two buttons left on top of it.
+
+**The clipboard gets the picture as it PRINTS.** `clip.render()` is the call
+the exporters make, so a trimmed or turned clipping is copied trimmed and
+turned - what somebody pastes into WhatsApp is what the report would have
+shown.
+
+**Copying into another newspad had to be done on disk.** Only one newspad is
+ever loaded (see core/newspads), so the clipping cannot be handed to a window:
+`newspads.deliver` writes it into the other newspad's own manifest and picture
+folder exactly as its window would have, and it is there when somebody switches
+to it. Four things it is careful about:
+
+  * **Never the newspad that is open.** The window owns that manifest and
+    rewrites the whole of it on its next save, so anything written round the
+    back of it would vanish seconds later without a word. It refuses outright
+    rather than trusting the caller.
+  * **Never over a manifest that cannot be read**, which is a morning waiting
+    to be rescued: appending to "nothing saved" would write a fresh manifest
+    over it.
+  * **Its own uid and its own id.** The uid is what the duplicate check and
+    the board's lists know a clipping by, so a copy sharing one would be one
+    clipping in two places; the id is taken past anything either pool already
+    holds, not merely from the counter, in case an older build wrote no
+    counter.
+  * **The pool it came from.** A board clipping joins that newspad's board.
+
+The clipping's own newspad is saved first, so a picture the window has not yet
+written to disk is not the one thing the copy is missing.
