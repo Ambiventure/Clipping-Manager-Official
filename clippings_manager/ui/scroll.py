@@ -304,6 +304,18 @@ class SmoothWheel(QObject):
             sideways = self._area.horizontalScrollBar()
             if sideways is not None and sideways.maximum() > 0:
                 return False
+        # A SIDEWAYS SURFACE NEVER TAKES A PLAIN NOTCH. The wheel belongs to the
+        # page: over the board's strip of category columns a notch must scroll
+        # the board, not slide the columns sideways. It only became visible when
+        # a fifth category made the strip wider than the window at 1366 - with
+        # four it had nothing to scroll, so it handed every notch back by
+        # accident rather than on purpose. Shift (handed back above where there
+        # is a real sideways bar to use) and a mouse that tilts sideways still
+        # reach it.
+        if (self._bar is self._area.horizontalScrollBar()
+                and not event.modifiers() & Qt.ShiftModifier
+                and not event.angleDelta().x()):
+            return False
         if not event.pixelDelta().isNull():
             return False                # a touchpad: already smooth, leave it
 

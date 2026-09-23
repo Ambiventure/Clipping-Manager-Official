@@ -560,6 +560,8 @@ class EntryDelegate(QStyledItemDelegate):
             bits.append("· from a copied caption")
         elif clip.name_source == "ocr":
             bits.append("· read from the image")
+        elif clip.name_source == "report":
+            bits.append("· from the report's record")
         elif clip.name_source == "manual":
             bits.append("· typed")
 

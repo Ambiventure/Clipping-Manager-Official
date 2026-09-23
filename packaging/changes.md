@@ -16,6 +16,33 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.40
+
+Added
+
+  * **Every report now carries a record of its own clippings.** A report made
+    from today comes back whole when it is imported again - every name,
+    heading, category and link exactly as it went out, including clippings
+    whose name was never printed on the page.
+  * **A report whose headlines were burned into the pictures comes back with
+    them off again**, each name back in its own box. Word and PDF alike.
+
+Fixed
+
+  * **An old report of ours imports with its names.** A report named for a
+    division - "Press Media Coverage Regarding Delhi Division..." - was read by
+    that division's own rules. Delhi's and Lucknow's say the name is inside the
+    picture, so every printed name was thrown away: 17 of 17 in the report sent
+    in. Ambala's and Jammu's would have put each name on the wrong clipping.
+  * **A name printed in Hindi comes back in Hindi.** "दैनिक जागरण दिल्ली" was
+    arriving as "दैनə क जागरण दɘ Ėली". It is now read from the letters the page
+    itself carries, and only when redrawing it gives that very page back.
+  * **A long web address printed under a clipping is no longer read as the next
+    clipping's name**, and no clipping takes the address of the one before it.
+  * **The board's categories no longer take the wheel from the page.** With
+    five categories the strip was wide enough to scroll sideways, and a notch
+    over it slid the columns instead of moving the page.
+
 ## 2.0.39
 
 Fixed

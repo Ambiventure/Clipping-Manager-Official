@@ -36,7 +36,7 @@ from docx.oxml.shared import OxmlElement
 from docx.shared import Pt, RGBColor
 
 from .. import version
-from ..core import assemble, ourfiles
+from ..core import assemble, ourfiles, reportrecord
 from ..core import sentiment as sentiment_core
 from ..core.models import Clip, Section
 from . import layout
@@ -202,7 +202,7 @@ DOCX_LINK_COST = PILL_TEXT_SIZE + 16.0
 # headline stranded on the page before - which is what was reported. 48 buys about
 # 34pt of picture and buys back the page.
 DOCX_SLACK = 48.0
-DOCX_DIVIDER = "─" * 44
+DOCX_DIVIDER = ourfiles.DIVIDER_MARK * 44
 
 _FALLBACK_STYLES = {
     Section.POSITIVE: ("Positive", "#16A34A"),
@@ -416,6 +416,22 @@ def prints_a_title(clip, column) -> bool:
     if column is not Section.DIGITAL:
         return True
     return title != (clip.url or "").strip()
+
+
+def _origin(origins: Optional[dict], clip: Clip) -> tuple:
+    """The clipping this one was made from, and the band burned onto it.
+
+    A burned dossier is handed copies whose names have been cleared, because
+    the names are inside the pictures now (build_burned.flatten). The record
+    has to carry what was burned in, so the names come from the original and
+    the band says where to crop it back to. Anything else - the ordinary
+    dossier - is its own origin and has no band.
+    """
+    if origins:
+        found = origins.get(getattr(clip, "uid", ""))
+        if found:
+            return found
+    return clip, None
 
 
 def _pairs_with(
@@ -648,8 +664,13 @@ def build_pdf(
     report_date: Optional[date] = None,
     options: Optional[SentimentOptions] = None,
     progress: Progress = None,
+    origins: Optional[dict] = None,
 ) -> Result:
-    """Write the division sentiment dossier as a PDF."""
+    """Write the division sentiment dossier as a PDF.
+
+    ``origins`` is the map build_burned.flatten fills when the pictures have
+    had their headlines burned into them - see _origin.
+    """
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     report_date = report_date or date.today()
@@ -678,6 +699,13 @@ def build_pdf(
         "keywords": assemble.MADE_HERE,
     })
 
+    # What this dossier is made of, written into the file itself
+    # (core/reportrecord). A burned dossier has no text on it at all, so
+    # without this there is nothing for an import to read.
+    record = reportrecord.Record(
+        "dossier-burned" if origins else "dossier", "pdf", report_date,
+        division=code)
+
     if options.include_cover:
         if options.cover_config is None:
             warnings.append(
@@ -693,6 +721,7 @@ def build_pdf(
                     cover.insert_image(
                         pymupdf.Rect(0, 0, page_width, page_height), stream=data
                     )
+                    record.cover = True
                 except Exception as exc:  # noqa: BLE001
                     warnings.append(
                         f"The cover page could not be placed "
@@ -721,6 +750,7 @@ def build_pdf(
                              cursor + NIL_SIZE * 2.0),
                 NIL_SIZE, align="left", colour=TITLE_COLOUR, bold=False,
             )
+            record.nil.append(column.value)
             continue
 
         first_in_category = True
@@ -798,14 +828,19 @@ def build_pdf(
                         cursor += PAIR_GAP_AFTER_RULE
                     left = MARGIN + (usable_width - draw_width) / 2.0
                     try:
+                        data = _image_bytes(one)
                         sheet.insert_image(
                             pymupdf.Rect(left, cursor, left + draw_width,
                                          cursor + draw_height),
-                            stream=_image_bytes(one),
+                            stream=data,
                         )
                         written += 1
                     except Exception as exc:  # noqa: BLE001
                         warnings.append(_image_warning(one, exc))
+                    else:
+                        source, band = _origin(origins, one)
+                        record.add(source, data, sheet=sheet.number,
+                                   slot=number, printed="", band=band)
                     cursor += draw_height + PAIR_GAP_ABOVE_LINK
                     if (one.url or "").strip():
                         try:
@@ -834,13 +869,18 @@ def build_pdf(
                 )
             top = cursor + offset + title_block
             try:
+                data = _image_bytes(clip)
                 sheet.insert_image(
                     pymupdf.Rect(left, top, left + draw_width, top + draw_height),
-                    stream=_image_bytes(clip),
+                    stream=data,
                 )
                 written += 1
             except Exception as exc:  # noqa: BLE001 - one bad image costs one page
                 warnings.append(_image_warning(clip, exc))
+            else:
+                source, band = _origin(origins, clip)
+                record.add(source, data, sheet=sheet.number,
+                           printed=title_text, band=band)
 
             if linked and (clip.url or "").strip():
                 try:
@@ -854,6 +894,7 @@ def build_pdf(
         document.new_page(width=page_width, height=page_height)
         warnings.append("There were no clippings to export, so the dossier is empty.")
 
+    reportrecord.attach_pdf(document, record, warnings)
     document.save(str(output), garbage=4, deflate=True, clean=True)
     pages = document.page_count
     document.close()
@@ -914,11 +955,13 @@ def _docx_head(
     return used
 
 
-def _docx_image(document, clip: Clip, width: float, height: float) -> None:
+def _docx_image(document, clip: Clip, width: float, height: float) -> bytes:
+    """Place one clipping. Returns the bytes that actually went in, which is
+    what the report's record is keyed on."""
     paragraph = document.add_paragraph()
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph.paragraph_format.space_after = Pt(4)
-    _place_picture(paragraph.add_run(), clip, Pt(width), Pt(height))
+    return _place_picture(paragraph.add_run(), clip, Pt(width), Pt(height))
 
 
 def _docx_link(document, url: str) -> None:
@@ -936,8 +979,13 @@ def build_docx(
     report_date: Optional[date] = None,
     options: Optional[SentimentOptions] = None,
     progress: Progress = None,
+    origins: Optional[dict] = None,
 ) -> Result:
-    """Write the division sentiment dossier as a Word document."""
+    """Write the division sentiment dossier as a Word document.
+
+    ``origins`` is the map build_burned.flatten fills when the pictures have
+    had their headlines burned into them - see _origin.
+    """
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     report_date = report_date or date.today()
@@ -977,6 +1025,11 @@ def build_docx(
     document.core_properties.comments = f"Clippings Manager {version.describe()}"
     document.core_properties.keywords = assemble.MADE_HERE
 
+    # The same record the dossier's PDF carries (core/reportrecord).
+    record = reportrecord.Record(
+        "dossier-burned" if origins else "dossier", "docx", report_date,
+        division=code)
+
     pages = 0
     started = False
 
@@ -1007,6 +1060,7 @@ def build_docx(
             if laid_out:
                 pages += 1
                 started = True
+                record.cover = True
             data = b"" if laid_out else _cover_png(
                 options.cover_config, len(clips), style.page, warnings)
             if data:
@@ -1018,6 +1072,7 @@ def build_docx(
                     paragraph.add_run().add_picture(io.BytesIO(data), width=Pt(width))
                     pages += 1
                     started = True
+                    record.cover = True
                 except Exception as exc:  # noqa: BLE001
                     warnings.append(
                         f"The cover page could not be placed "
@@ -1026,6 +1081,9 @@ def build_docx(
 
     written = 0
     done = 0
+    # Counted the way the reader counts them, so the sheet number in the record
+    # means the same thing at both ends: the cover picture is picture one.
+    placed = len(document.element.body.findall(".//" + qn("a:blip")))
     for column, printed, says_nil in printed_columns(options):
         items = buckets.get(column) or []
         if not printed:
@@ -1043,6 +1101,7 @@ def build_docx(
             paragraph = document.add_paragraph()
             _docx_run(paragraph, nil_line(options, column), NIL_SIZE,
                       TITLE_COLOUR)
+            record.nil.append(column.value)
             continue
 
         first_in_category = True
@@ -1069,6 +1128,7 @@ def build_docx(
                 if _pairs_with(clip, candidate, usable_width, free):
                     partner = candidate
 
+            caption = ""
             if options.include_clip_titles and prints_a_title(clip, column):
                 caption = _sieve().clean(clip.printed_caption.strip())
                 paragraph = document.add_paragraph()
@@ -1105,10 +1165,15 @@ def build_docx(
                         _docx_run(rule, DOCX_DIVIDER, 9, DIVIDER_COLOUR)
                         rule.paragraph_format.space_after = Pt(6)
                     try:
-                        _docx_image(document, one, draw_width, draw_height)
+                        data = _docx_image(document, one, draw_width, draw_height)
                         written += 1
                     except Exception as exc:  # noqa: BLE001
                         warnings.append(_image_warning(one, exc))
+                    else:
+                        source, band = _origin(origins, one)
+                        record.add(source, data, sheet=placed, slot=number,
+                                   printed="", band=band)
+                        placed += 1
                     if (one.url or "").strip():
                         try:
                             _docx_link(document, one.url)
@@ -1122,10 +1187,15 @@ def build_docx(
                 free -= DOCX_LINK_COST
             draw_width, draw_height = _fit(clip, usable_width, max(1.0, free))
             try:
-                _docx_image(document, clip, draw_width, draw_height)
+                data = _docx_image(document, clip, draw_width, draw_height)
                 written += 1
             except Exception as exc:  # noqa: BLE001 - one bad image costs one page
                 warnings.append(_image_warning(clip, exc))
+            else:
+                source, band = _origin(origins, clip)
+                record.add(source, data, sheet=placed, printed=caption,
+                           band=band)
+                placed += 1
 
             if linked and (clip.url or "").strip():
                 try:
@@ -1138,5 +1208,6 @@ def build_docx(
         pages = 1
         warnings.append("There were no clippings to export, so the dossier is empty.")
 
+    reportrecord.attach_docx(document, record, warnings)
     document.save(str(output))
     return Result(path=output, pages=pages, clippings=written, warnings=warnings)

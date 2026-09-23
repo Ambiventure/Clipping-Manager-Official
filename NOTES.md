@@ -5005,3 +5005,57 @@ heading, then one with) and 4b (the Nil page), both in PDF and Word, both with
 the stamp and with it stripped off - 89 checks. The measurement that started it
 is in `scratchpad/probe_ownimport2.py`: it reads a real report and prints what
 the importer made of it.
+
+
+## Our own report, read back - what it took to finish it (2.0.40)
+
+Three separate faults were hiding behind one report ("the names do not fill
+in"), and only one of them was the one already fixed in 2.0.39.
+
+**The division profile was being applied to our own file.** `detect_division`
+reads the FILE NAME, and a report of ours is often named for a division, so
+"Press Media Coverage Regarding Delhi Division ..." was read by Delhi's
+profile - whose `caption_position` is "burned", meaning "the name is inside the
+picture, there is no caption to read". Every one of its 17 printed captions was
+dropped. Lucknow is "burned" too; Ambala and Jammu are "after", which hands
+each caption to the picture above it. Our exporters always print the caption
+directly above its clipping, so `build_clips` now forces `position="before"`
+for our own files, and the caption walk stops at the page edge (our reports put
+one clipping on a sheet). The same page rule gives each clipping its own link:
+`link_for` looked backwards as well and handed a clipping the address of the
+one before it. `_mark_address_tails` marks the second line of a wrapped address
+so it can never be read as a name.
+
+**Hindi came back as glyph numbers** ("दैनə क जागरण दɘ Ėली"). MuPDF writes a
+ToUnicode map by reading the font's cmap backwards, so every glyph the font's
+GSUB *makes* - matra variants, half forms, conjuncts, and Latin ligatures in
+Calibri and Cambria - has no entry, and readers fall back to the glyph number.
+`core/glyphtext.py` reads those words from the embedded font's own tables in
+stored order, then CONFIRMS each candidate by drawing it again with that font
+and comparing glyph ids: a word is accepted only when exactly one well-formed
+spelling draws exactly the page's glyphs. 1,404 of 1,404 lab lines exact, and
+it refuses every word of a Word-made division PDF rather than guessing.
+
+**`core/reportrecord.py` is the answer for everything else.** Every export now
+embeds a JSON record of its clippings (PDF: an embedded file; Word: a customXml
+part - both measured through a PyMuPDF save, a PDFium save and a Word 16
+SaveAs). On import it is paired to the pictures by sha1, then by fingerprint
+for a re-encoded file, then by order only when the counts agree; the page wins
+when a caption was edited after the export. It carries what the page cannot:
+the names of clippings that printed no caption at all, and the burned band's
+box, so a burned report comes back with the band cropped off and the name in
+its box. Nothing machine-identifying goes in, and every string passes the same
+word list the page does.
+
+For burned reports made before the record existed, `recover_bands` finds the
+band by the export's own geometry and inks, reads it, and crops it - but only
+when the file as a whole looks burned, because on a single picture the colour
+tests alone can be fooled by a cutting whose own top line is dark blue-grey on
+white (measured: the side geometry only bites on 68 of 250 real clippings).
+The first picture of a burned report with no band is its cover.
+
+Measured on the office's own files: the Water Safety report 17 clippings, 14
+named (three were never named), Hindi correct; 18.09 253 clippings, 158 named;
+the burned dossier 12 clippings, 10 names off the bands, 12 bands cropped,
+0 inked pixels lost; 47 sample documents compared against 2.0.39, only our own
+report reads differently.

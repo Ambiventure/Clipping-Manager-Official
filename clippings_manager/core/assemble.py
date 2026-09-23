@@ -15,7 +15,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from . import glyphmap, ourfiles
 from .models import Clip, CropRect, Section
@@ -47,6 +47,7 @@ class Event:
     page: int = 0                   # 1-based page number, PDFs only
     furniture: bool = False         # section artwork, not a clipping
     furniture_note: str = ""        # and what it is, when we know (ourfiles)
+    garbled: bool = False           # Hindi glyphtext could not read back
 
 
 # --------------------------------------------------------------------- config
@@ -120,6 +121,45 @@ def match_section(text: str, config: Optional[dict] = None) -> Optional[Section]
 
 
 _URL_LIKE = re.compile(r'^(?:https?://|www\.)[^\s]+$', re.IGNORECASE)
+
+#: The second line of a web address that wrapped: no spaces, and the marks an
+#: address is made of - "measures-following-cag-report",
+#: "across-stns/articleshow/134395717.cms". A caption has spaces, or none of
+#: these marks.
+_ADDRESS_TAIL = re.compile(r'^[^\s]{3,}$')
+_ADDRESS_MARKS = re.compile(r'[-/._=?&%#~]')
+
+
+def _mark_address_tails(events: list) -> int:
+    """In one of our own PDFs, mark the second line of every wrapped address.
+
+    The report prints a clipping's address under it, and a long one wraps onto
+    a second line that is written as a text block of its own - so the joiner
+    in extract_pdf, which works inside one block, never sees the two together.
+    The tail then read as the next clipping's caption: "measures-following-
+    cag-report The Times of India". Marked as furniture here, on the same page
+    as the address it follows, it is neither a caption nor anything else.
+    """
+    marked = 0
+    last_text = None
+    for event in events:
+        if event.kind == "link":
+            continue
+        if event.kind != "text":
+            last_text = None
+            continue
+        words = (event.text or "").strip()
+        if (last_text is not None and not event.furniture
+                and getattr(event, "page", 0) == getattr(last_text, "page", 0)
+                and (address_in(last_text.text) or last_text.furniture_note
+                     == "the rest of a web address")
+                and _ADDRESS_TAIL.match(words) and _ADDRESS_MARKS.search(words)
+                and not looks_like_url(words)):
+            event.furniture = True
+            event.furniture_note = "the rest of a web address"
+            marked += 1
+        last_text = event
+    return marked
 
 # A line that BEGINS with an address, whatever follows it. PDF text extraction
 # breaks a long link across two lines, and the caption walk joins a run of lines
@@ -309,10 +349,34 @@ def _unread(text: str) -> bool:
 # apart and quietly turn the warning back into a blocking one.
 NO_CHARMAP = "carry no character map"
 
+# The same mark, for what the report's own record has to say about itself
+# (core/reportrecord): a clipping it could not match, or a caption somebody
+# edited after the report was made. Both are notes about a document that read
+# perfectly well, and both would otherwise open the blocking box on every
+# single import of the same file. Written once here and quoted into the
+# messages themselves, so the two cannot drift apart.
+FROM_RECORD = "the report's own record"
+
+# And the same again for a burned report of ours that carries no record - the
+# headline is inside the picture, so it is read back off the picture and the
+# band taken away (core/reportrecord.recover_bands). Nothing is lost there
+# either: the report read perfectly, and this is a note about names that were
+# recovered rather than about anything that was not.
+FROM_BAND = "read off the picture"
+
 
 def is_advisory(warning: str) -> bool:
-    """True when a warning reports nothing lost but a caption's name."""
-    return NO_CHARMAP in (warning or "")
+    """True when a warning is about names rather than about anything lost."""
+    words = warning or ""
+    return NO_CHARMAP in words or FROM_RECORD in words or FROM_BAND in words
+
+
+#: What flag_junk calls a picture with no caption that sits above the first
+#: captioned one. Named here because build_clips has to undo this one mark,
+#: and only this one: in a report of ours a clipping whose printed caption we
+#: could not READ has the same shape as a letterhead and is not one.
+UNCAPTIONED_LETTERHEAD = ("no caption, and sits above the first captioned "
+                          "clipping - probably a logo or letterhead")
 
 
 def looks_like_url(text: str) -> bool:
@@ -358,6 +422,8 @@ def build_clips(
     config: dict,
     warnings: Optional[list[str]] = None,
     own: bool = False,
+    cover: Optional[bool] = None,
+    known: Iterable[str] = (),
 ) -> list[Clip]:
     """Assemble Clips from an ordered event stream.
 
@@ -365,6 +431,15 @@ def build_clips(
     size-and-shape rules that catch icons and rules in a division's document
     are not applied, because every picture in one of our reports was accepted
     as a clipping by the person who exported it.
+
+    ``cover`` is what the report's own record says about whether it has one
+    (core/reportrecord). None means nobody said, which is every division's
+    document and every report made before the record existed, and the cover is
+    then guessed off the page exactly as before.
+
+    ``known`` is the sha1 of every picture that record names. It only ever
+    stops a picture being called furniture, and it is empty for every file
+    that carries no record of ours.
     """
     warnings = warnings if warnings is not None else []
     profile = config.get("divisions", {}).get(division, {})
@@ -376,9 +451,39 @@ def build_clips(
     # coverage summary are marked before a single line is read off it: they are
     # not captions, not section headers, and the cover picture is not a
     # clipping. See core/ourfiles for what went wrong without this.
+    #
+    # OURS BY ITS WORDS AND OURS BY ITS SHEETS ARE TWO DIFFERENT THINGS, so
+    # there are two answers here. Nearly everything below needs only the first,
+    # and ourfiles.looks_like_ours settles it from what is printed on the page:
+    # a report made before the stamp existed, or one a tool has rewritten the
+    # metadata of, is still ours.
+    #
+    # Three rules need the second. They read the SHEETS - a caption never
+    # crosses a page edge, a caption is all of it or none of it, a link comes
+    # only off the clipping's own page - and they hold because our exporter
+    # lays out one clipping to a sheet, its caption above it and its address
+    # below. Only the stamp says the sheets were laid out here. The
+    # department's own 26.08 Word report prints "NUMBER OF CLIPPINGS:" on its
+    # cover, which is all looks_like_ours asks for, but its pages FLOW: a
+    # caption sits at the foot of the sheet before its picture and a link a
+    # page earlier still. Measured against 2.0.39, those rules took five names
+    # and one link off it - 89 captions down to 84 - and that is a division's
+    # document reading differently, which is not allowed.
+    stamped = bool(own)
     own = bool(own) or ourfiles.looks_like_ours(events)
     if own:
-        ourfiles.mark_furniture(events)
+        ourfiles.mark_furniture(events, cover, known)
+        # OUR CAPTION IS ALWAYS ABOVE ITS PICTURE, whatever the file is called.
+        # The division profile comes from the file name, and a report of ours
+        # is often named for a division - "Press Media Coverage Regarding Delhi
+        # Division ..." - so it was read by Delhi's rules. Delhi's captions are
+        # burned into the pictures, so every printed caption was ignored: 17 of
+        # 17 came back with no name, from a report exported that same morning.
+        # A name mentioning Ambala or Jammu ("after") would have handed each
+        # caption to the picture above it. Our exporters print the caption
+        # directly above the clipping, always, and that is how it is read.
+        position = "before"
+        _mark_address_tails(events)
 
     image_positions = [i for i, e in enumerate(events) if e.kind == "image"]
     last_image = image_positions[-1] if image_positions else -1
@@ -426,6 +531,13 @@ def build_clips(
         # what used to arrive glued to the front of the next caption.
         if event.furniture:
             return False
+        # Hindi in one of our own reports that glyphtext could not read back.
+        # What get_text() gave for it is glyph numbers posing as letters -
+        # "दैनə क जागरण दɘ Ėली" - which the name lookup happily took for
+        # Dainik Jagran with an edition of "दɘ Ėली". Unnamed is better than
+        # that. A division's document keeps its lines exactly as they were.
+        if own and event.garbled:
+            return False
         if match_section(event.text, config) is not None:
             return False
         # A printed web address belongs under the picture, not over it. It also
@@ -437,6 +549,20 @@ def build_clips(
         if unreadable(event.text):
             return False
         return not any(rx.search(event.text) for rx in ignores)
+
+    def refused(event: Event) -> bool:
+        """Did this line fail usable() because it could not be READ?
+
+        The caption walk also stops at a picture, a section heading, a printed
+        address and the ignore list, and every one of those is the caption
+        ending where it should. These two are words lost.
+        """
+        return bool(event.kind == "text"
+                    and ((own and event.garbled) or unreadable(event.text)))
+
+    #: Clippings whose caption walk a line we could not read cut short. In one
+    #: of our own files they come in unnamed, and the advisory counts them.
+    cut: set[int] = set()
 
     def caption_for(stream_index: int, ordinal: int) -> str:
         """Caption text for one image, taken only from its own window.
@@ -451,12 +577,39 @@ def build_clips(
         parts: list[str] = []
         if position == "before":
             start = image_positions[ordinal - 1] + 1 if ordinal else 0
+            here = getattr(events[stream_index], "page", 0)
             for i in range(stream_index - 1, start - 1, -1):
                 if events[i].kind == "image":
+                    break
+                # Our own report prints a clipping's caption on the clipping's
+                # own sheet. Whatever is on the sheet before belongs to the
+                # clipping before - its address, a heading's page - and walking
+                # back across the page edge is how an address's second line
+                # became the next clipping's name. A Word file has no pages
+                # (0 throughout), so this never stops a Word caption. Only for
+                # a stamped file: see the note at the top of build_clips.
+                if stamped and getattr(events[i], "page", 0) != here:
                     break
                 if events[i].kind == "link":
                     continue
                 if not usable(events[i]):
+                    # A CAPTION OF OURS IS ALL OF IT OR NONE OF IT. The walk
+                    # runs backwards, so what it has collected when a line
+                    # stops it is the caption's TAIL - and the name is at the
+                    # front. A caption that wrapped over three lines with the
+                    # middle one refused arrived as "सफाई अभियान और यात्रियों
+                    # को दी सुविधाएं आज सुबह", which apply_to_clip wrote into
+                    # the newspaper and edition boxes: a plausible Hindi name
+                    # that is not a name at all, while the advisory said the
+                    # clipping had come in unnamed. Unnamed is what the plan
+                    # asks for, so unnamed is what it gets. Only for a stamped
+                    # file: see the note at the top of build_clips. The 26.08
+                    # Word report's captions are glyph numbers on 161 of its
+                    # 167 clippings, and it keeps every partial run it has
+                    # always had.
+                    if stamped and refused(events[i]):
+                        cut.add(ordinal)
+                        return ""
                     break
                 parts.append(events[i].text.strip())
             parts.reverse()
@@ -485,6 +638,16 @@ def build_clips(
         start = image_positions[ordinal - 1] + 1 if ordinal else 0
         forward = range(stream_index + 1, end)
         backward = range(start, stream_index)
+        if stamped:
+            # Our report prints a clipping's address UNDER it, on its own
+            # sheet. Looking back as well handed the clipping after a linked
+            # one that clipping's address: "Lucknow News" arrived carrying
+            # sachkahoon.com from the page before. Only for a stamped file:
+            # see the note at the top of build_clips.
+            here = getattr(events[stream_index], "page", 0)
+            forward = [i for i in forward
+                       if getattr(events[i], "page", 0) == here]
+            backward = []
         for i in list(forward) + list(backward):
             if events[i].kind == "link" and looks_like_url(events[i].url):
                 return events[i].url
@@ -505,6 +668,7 @@ def build_clips(
 
     clips: list[Clip] = []
     opened: set = set()
+    refused_names: list[Clip] = []      # the clippings `cut` cost a name
     for ordinal, stream_index in enumerate(image_positions):
         event = events[stream_index]
         if not event.data:
@@ -528,6 +692,8 @@ def build_clips(
             sort_position=ordinal,
             title_in_image=(position == "burned"),
         )
+        if ordinal in cut:
+            refused_names.append(clip)
         # The first real clipping of a titled run opens it, and keeps the words.
         # In one of our own reports every heading on the page was put there by
         # the person who exported it, so all of them come back the same way and
@@ -559,8 +725,33 @@ def build_clips(
 
     # Say so once, rather than leaving somebody to wonder why a whole file came
     # in unnamed. It is a fact about the document, not about this machine.
-    garbled = sum(1 for e in events
-                  if e.kind == "text" and _unread(e.text))
+    #
+    # What the number counts differs, because what is lost differs. In a
+    # document that is not ours to the letter - a division's, or the 26.08
+    # Word report that only looks like ours - a line that cannot be read is a
+    # line, and this is the count it has always printed. In a report of ours
+    # the thing lost is a NAME: MuPDF breaks "हिंदुस्तान" into two dict lines
+    # of its own accord and a caption that wrapped runs to three, and all of
+    # that is still one name. So ours counts the clippings whose caption a
+    # line we could not read cut short - exactly the ones that came in unnamed
+    # for this reason, which is what the words below promise. Hindi glyphtext
+    # refused comes in through the same door (usable), and the cover and the
+    # summary page never count, because nothing on them was going to be a name.
+    if stamped:
+        garbled = len(cut)
+    else:
+        garbled = 0
+        previous = None
+        for e in events:
+            if e.kind == "link":
+                continue
+            if e.kind == "text":
+                unread_line = own and e.garbled and not e.furniture
+                if _unread(e.text) or (unread_line and not (
+                        previous is not None and previous.garbled
+                        and previous.page == e.page)):
+                    garbled += 1
+            previous = e
     if garbled and clips:
         warnings.append(
             f"{garbled} caption(s) could not be read: this document's fonts "
@@ -569,12 +760,14 @@ def build_clips(
             f"hand - the rest were recovered."
         )
 
-    flag_junk(clips, config, position, own=own)
+    flag_junk(clips, config, position, own=own,
+              had_caption={id(clip) for clip in refused_names})
+
     return clips
 
 
 def flag_junk(clips: list[Clip], config: dict, position: str = "before",
-              own: bool = False) -> None:
+              own: bool = False, had_caption: Optional[set] = None) -> None:
     """Mark likely non-clippings. Never deletes: the user decides in the review grid.
 
     ``own``: the file is one of the program's own reports. The size and shape
@@ -624,12 +817,19 @@ def flag_junk(clips: list[Clip], config: dict, position: str = "before",
         "before",
         "after",
     ):
-        first_captioned = next((i for i, c in enumerate(clips) if c.caption_raw), None)
+        # A CLIPPING WHOSE CAPTION WE COULD NOT READ STILL HAD ONE, and it
+        # counts as the first captioned clipping. ``had_caption`` holds those
+        # (a Hindi name the glyph reader refused, say). Lifting the mark
+        # afterwards was not enough: the boundary itself moved, so the next
+        # genuinely uncaptioned clipping - which had been safely before it -
+        # was flagged instead, and arrived with its tick cleared. One clipping
+        # to the right is the same harm.
+        had_caption = had_caption or set()
+        first_captioned = next(
+            (i for i, c in enumerate(clips)
+             if c.caption_raw or id(c) in had_caption), None)
         if first_captioned:
             for clip in clips[:first_captioned]:
-                if not clip.caption_raw:
+                if not clip.caption_raw and id(clip) not in had_caption:
                     clip.probable_junk = True
-                    clip.junk_reason = clip.junk_reason or (
-                        "no caption, and sits above the first captioned clipping "
-                        "- probably a logo or letterhead"
-                    )
+                    clip.junk_reason = clip.junk_reason or UNCAPTIONED_LETTERHEAD

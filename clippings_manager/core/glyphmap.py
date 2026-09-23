@@ -133,7 +133,16 @@ def _from_format_12(buf: bytes, sub: int) -> dict:
 
 def glyph_to_unicode(path: Path) -> dict:
     """A real font's character map, inverted: glyph number -> character."""
-    buf = path.read_bytes()
+    return cmap_of(path.read_bytes())
+
+
+def cmap_of(buf: bytes) -> dict:
+    """The same, for a font already in memory.
+
+    glyphtext reads the font a PDF embedded, which arrives as bytes from the
+    document itself; writing it out to a file only to read it straight back
+    was the prototype's one clumsy step.
+    """
     where = _tables(buf).get("cmap")
     if not where:
         return {}

@@ -43,8 +43,9 @@ both of them, so the two halves cannot drift apart.
 
 from __future__ import annotations
 
+import hashlib
 import re
-from typing import Iterable
+from typing import Iterable, Optional
 
 #: The cover's own lines. The count is printed by build_pdf, build_docx and
 #: cover_render - every cover this program can make carries it.
@@ -59,6 +60,27 @@ SUMMARY_TITLE = "Coverage summary"
 #: page that writes them and the reader that skips them cannot drift apart.
 NIL_WORDS = "Nil - no clips"
 
+#: What the dossier's Word file draws between two clippings sharing a sheet -
+#: a run of this character and nothing else. Read back it became the second
+#: clipping's caption, and a clipping WITH a caption at the end of a file makes
+#: every picture before it "above the first captioned clipping": a six clipping
+#: dossier came back with five of them flagged. Printed from here for the same
+#: reason NIL_WORDS is.
+DIVIDER_MARK = "─"
+
+#: A line that is a rule and nothing else. The range is the WHOLE box drawing
+#: block, U+2500 to U+257F, not only the character above: a report may have
+#: been through a tool that redrew the rule with a heavier or a doubled line,
+#: and any run of box drawing characters is a rule rather than a name whoever
+#: printed it. Only our own files ever reach this.
+_ONLY_A_RULE = re.compile(r"^[─-╿\s]+$")
+
+#: What a cover's pictures and lines are marked as. Named because the record
+#: reader (core/reportrecord) has to leave the cover out of its counting: it is
+#: not a clipping, so it has no entry, and a report with as many clippings as
+#: entries would never match by order if the cover were counted among them.
+COVER_NOTE = "the report's cover"
+
 #: What a page number looks like on its own at the foot of a sheet. Numbers are
 #: only furniture in one of our own files: a division's caption that is nothing
 #: but a page number is rare but real, and this never sees those.
@@ -67,6 +89,22 @@ _ONLY_A_NUMBER = re.compile(r"^\s*\d{1,4}\s*$")
 
 def _text(event) -> str:
     return (getattr(event, "text", "") or "").strip()
+
+
+def _named(pictures: Iterable, known) -> bool:
+    """Is any of these pictures one the report's own record names?
+
+    A picture with an entry in the record is a clipping this program put on the
+    page on purpose, so it is never furniture - the same rule extract_pdf
+    already applies to the backdrop of a category heading.
+    """
+    if not known:
+        return False
+    for event in pictures:
+        data = getattr(event, "data", b"") or b""
+        if data and hashlib.sha1(data).hexdigest() in known:
+            return True
+    return False
 
 
 def looks_like_ours(events: Iterable) -> bool:
@@ -87,11 +125,20 @@ def looks_like_ours(events: Iterable) -> bool:
     return False
 
 
-def mark_furniture(events: list) -> int:
+def mark_furniture(events: list, cover: Optional[bool] = None,
+                   known: Iterable[str] = ()) -> int:
     """Mark the cover, the page numbers and the summary page. Returns how many.
 
     Only ever called for one of our own files, and only ever ADDS furniture
     marks: a document that prints none of this is left exactly as it was.
+
+    ``cover`` is what the report's own record says (core/reportrecord), and it
+    settles a question the page cannot always answer. Left as None - every
+    division's document, and every report of ours made before the record
+    existed - the cover is guessed from the page exactly as it always was.
+
+    ``known`` is the sha1 of every picture that record names, and it is how a
+    report whose cover is no longer in it is recognised. See the cover block.
     """
     marked = 0
     events = list(events)
@@ -126,11 +173,37 @@ def mark_furniture(events: list) -> int:
         baked = len(pictures) == 1 and not any(words)
         printed = any(w.startswith(COVER_COUNT) or w.startswith(COVER_DATE)
                       for w in words)
-        if baked or printed:
+        # A burned dossier with no cover and its category headings switched off
+        # opens on a page holding one picture and no words - which is a
+        # clipping, and the guess above would throw it away. Told there is no
+        # cover, the guess is not made; told there is one, the first sheet is
+        # the cover whatever it happens to print.
+        if cover is False:
+            wanted = False
+        elif cover is True:
+            # The cover is the FIRST SHEET, not the first sheet that happens to
+            # carry anything. A report whose cover was left plain puts nothing
+            # on page one at all, and without this the first clipping - page
+            # two, one picture, no caption - would be taken for the cover.
+            wanted = first == 1 and (printed or bool(pictures))
+            # AND THE COVER MAY NOT BE IN THE FILE ANY MORE. Somebody deletes
+            # page one before forwarding the report, or sends pages 2 onwards
+            # of it, and the first sheet is then the first CLIPPING. Marking
+            # that sheet ate the clipping's printed caption, flagged it
+            # "probably not a clipping", and - because the reader leaves the
+            # cover out of its counting - put it beyond the record's reach as
+            # well, so it came back with no name at all where 2.0.39 read it
+            # perfectly. A picture the record names is a clipping, so a sheet
+            # holding one is not the cover, whatever the record says it had.
+            if wanted and _named(pictures, known):
+                wanted = False
+        else:
+            wanted = baked or printed
+        if wanted:
             for event in on_page:
                 if not event.furniture:
                     event.furniture = True
-                    event.furniture_note = "the report's cover"
+                    event.furniture_note = COVER_NOTE
                     marked += 1
     else:
         last_cover_line = None
@@ -140,11 +213,30 @@ def mark_furniture(events: list) -> int:
             text = _text(event)
             if text.startswith(COVER_COUNT) or text.startswith(COVER_DATE):
                 last_cover_line = index
+        # A Word report has no pages, so the cover is whatever comes before its
+        # own last line. Where the cover was rasterised to one picture with its
+        # words baked in, there is no such line and the record has to say so -
+        # but only when nothing is written above that picture, because a line
+        # above the first picture in a Word file is that clipping's caption.
+        # The same guard the PDF branch needs: a Word report forwarded with its
+        # cover taken out opens on a picture with nothing above it, which is
+        # exactly the shape of a rasterised cover. The record names the
+        # clipping and has no entry for the cover, so it settles which is which.
+        if last_cover_line is None and cover is True:
+            first_picture = next(
+                (i for i, e in enumerate(events)
+                 if getattr(e, "kind", "") == "image"), None)
+            if (first_picture is not None
+                    and not _named([events[first_picture]], known)
+                    and not any(
+                        getattr(e, "kind", "") == "text" and _text(e)
+                        for e in events[:first_picture])):
+                last_cover_line = first_picture
         if last_cover_line is not None:
             for event in events[:last_cover_line + 1]:
                 if not event.furniture:
                     event.furniture = True
-                    event.furniture_note = "the report's cover"
+                    event.furniture_note = COVER_NOTE
                     marked += 1
 
     # A category with nothing in it, in the dossier: its page says so in
@@ -156,6 +248,15 @@ def mark_furniture(events: list) -> int:
                 event.furniture = True
                 event.furniture_note = "a category with no clippings"
                 marked += 1
+
+    # The rule the Word dossier draws between two clippings on one sheet. It
+    # is a line, not a name.
+    for event in events:
+        if (getattr(event, "kind", "") == "text" and not event.furniture
+                and _text(event) and _ONLY_A_RULE.match(_text(event))):
+            event.furniture = True
+            event.furniture_note = "a rule between two clippings"
+            marked += 1
 
     # The page numbers. In a PDF they are their own text event at the foot of
     # every sheet, and the caption walk above the next picture reads them: the

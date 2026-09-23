@@ -4906,13 +4906,20 @@ class MainWindow(QMainWindow):
         )
 
         burn_warnings: list = []
+        # Where each burned picture came from, and where its bands are. The
+        # dossier only ever sees the copies, whose names have been cleared
+        # because the names are inside the pictures now, so this is what the
+        # record inside the file is written from (core/reportrecord). It is the
+        # only way a burned report can be imported again with its names.
+        origins: dict = {}
         if burned:
             from ..export import build_burned
 
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
                 clips = build_burned.flatten(clips, board_style,
-                                             warnings=burn_warnings)
+                                             warnings=burn_warnings,
+                                             origins=origins)
             finally:
                 QApplication.restoreOverrideCursor()
 
@@ -4930,7 +4937,8 @@ class MainWindow(QMainWindow):
                     else build_sentiment.build_pdf
                 )
                 try:
-                    result = builder(clips, path, division, stamp, options)
+                    result = builder(clips, path, division, stamp, options,
+                                     origins=origins or None)
                 except Exception as exc:  # noqa: BLE001 - never a raw traceback
                     failed.append(f"{path.name}: {type(exc).__name__}: {exc}")
                     continue

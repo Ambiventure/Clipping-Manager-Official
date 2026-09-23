@@ -370,6 +370,50 @@ def strip_band(image):
     return image.crop((0, cut, width, height))
 
 
+def band_text(image) -> str:
+    """Every word on one strip of a picture, read as a single block.
+
+    For the band a burned report draws its headline onto (export/build_burned,
+    found again by core/reportrecord.recover_bands). It is not a page: it is one
+    line of this program's own type on white, so the reader is told to read a
+    block rather than go looking for a layout - a wide strip with a short
+    centred title on it is exactly the shape that makes layout analysis invent
+    columns. The mode is put back afterwards because this engine is shared with
+    the duplicate check, which reads whole cuttings and wants the layout found.
+
+    Nothing is scaled or trimmed first. Measured on the one burned report that
+    exists: ten bands of ten came back exactly as they were drawn, in Hindi and
+    in English, whether the strip was read at its own size or at half, so it is
+    read as it is and the picture is left alone.
+
+    What comes back goes through the same invisible-character table a caption
+    read off a page does. The reader puts a zero-width joiner inside a
+    Devanagari word often enough to matter: three Hindi titles burned at every
+    heading size the panel offers came back with one in 5 of the 12 readings,
+    at 12, 18, 24 and 28 point alike. A name off a band goes into caption_raw
+    and from there onto the department's own newspaper list, and a name with a
+    character in it that nobody can see is a name that never matches again. All
+    12 read right once the table has been through them.
+    """
+    api = _open()
+    if api is None or image is None:
+        return ""
+    try:
+        import tesserocr
+
+        from .assemble import _tidy
+
+        before = api.GetPageSegMode()
+        api.SetPageSegMode(tesserocr.PSM.SINGLE_BLOCK)
+        try:
+            api.SetImage(image)
+            return " ".join(_tidy(api.GetUTF8Text()).split())
+        finally:
+            api.SetPageSegMode(before)
+    except Exception:  # noqa: BLE001 - never let OCR break an import
+        return ""
+
+
 def build_engines(count: int) -> list:
     """Make several readers, for reading several clippings at once.
 

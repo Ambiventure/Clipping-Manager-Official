@@ -23,6 +23,7 @@ one page, not the import.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -35,6 +36,8 @@ import pymupdf
 
 from . import imageops
 from . import glyphmap
+from . import glyphtext
+from . import reportrecord
 from .assemble import (
     Event,
     ExtractionError,
@@ -109,11 +112,14 @@ def _join_wrapped_urls(lines):
     run onto a second line. Left split, the tail reads as ordinary text and gets
     swept into the next clipping's caption. A continuation never contains a
     space, which is what tells it apart from a caption that follows an address.
+
+    Anything carried after the box (whether glyphtext could read the line) is
+    the first line's, and comes through untouched.
     """
     joined = []
     index = 0
     while index < len(lines):
-        text, box = lines[index]
+        text, box, *rest = lines[index]
         index += 1
         if looks_like_url(text):
             while index < len(lines):
@@ -122,7 +128,7 @@ def _join_wrapped_urls(lines):
                     break
                 text += tail
                 index += 1
-        joined.append((text, box))
+        joined.append((text, box, *rest))
     return joined
 
 
@@ -133,8 +139,14 @@ def _overlap(first, second) -> float:
     return (shared / narrower) if narrower > 0 else 0.0
 
 
-def _stack_runs(pictures):
-    """Group pictures that sit one directly above the other into single items."""
+def _stack_runs(pictures, known=()):
+    """Group pictures that sit one directly above the other into single items.
+
+    ``known`` is every picture the report's own record names. Two of those are
+    two clippings this program put on the page on purpose, so they are never
+    joined: the dossier pairs two short digital clippings on one sheet with a
+    15pt gap between them, which is one point over the rule above.
+    """
     runs = []
     for picture in pictures:
         previous = runs[-1][-1] if runs else None
@@ -142,6 +154,8 @@ def _stack_runs(pictures):
             previous is not None
             and not previous["furniture"]
             and not picture["furniture"]
+            and not (known and previous.get("sha1") in known
+                     and picture.get("sha1") in known)
             and -4.0 <= picture["box"][1] - previous["box"][3] <= STACK_GAP_POINTS
             and _overlap(previous["box"], picture["box"]) >= STACK_OVERLAP
         ):
@@ -181,8 +195,15 @@ def _page_events(
     page_number: int,
     warnings: list[str],
     config: Optional[dict] = None,
+    faces: Optional[dict] = None,
+    known=(),
 ) -> list[Event]:
-    """Every image and text block on one page, in reading order."""
+    """Every image and text block on one page, in reading order.
+
+    ``faces`` is glyphtext's cache of the document's embedded fonts, kept by
+    the caller so a font is read once per file rather than once per page.
+    ``known`` is the pictures the report's own record names - see _stack_runs.
+    """
     items: list[tuple[float, float, Event]] = []
     # Where the section headers sit. The 360 Degree document draws each one over
     # a piece of artwork - a coloured banner, a speech bubble - and that artwork
@@ -210,16 +231,38 @@ def _page_events(
     except Exception:  # noqa: BLE001 - a hint, never a requirement
         page_fonts = []
 
-    for block in text_page.get("blocks", []):
+    # Hindi that our own exports wrote with glyphs the text map does not name:
+    # "दैनिक जागरण दिल्ली" read as "दैनə क जागरण दɘ Ėली" (see glyphtext). Only
+    # a page set in a Devanagari face is looked at, and a line is only ever
+    # replaced by words that were drawn again and came out glyph for glyph.
+    # One that cannot be read is left as it was and marked, so that in one of
+    # our own reports it is never taken for a name (assemble.build_clips).
+    blocks = text_page.get("blocks", [])
+    read_back: dict = {}
+    if glyphtext.worth_reading(page_fonts):
+        try:
+            read_back = glyphtext.mend(document, page, blocks,
+                                       faces if faces is not None else {})
+        except Exception:  # noqa: BLE001 - a reading that fails changes nothing
+            read_back = {}
+
+    for b, block in enumerate(blocks):
         if block.get("type") != 0:
             continue
         lines = []
-        for line in block.get("lines", []):
-            raw = "".join(span.get("text", "") for span in line.get("spans", []))
+        for n, line in enumerate(block.get("lines", [])):
+            verdict = read_back.get((b, n), ("",))
+            if verdict[0] == "drop":
+                continue                # said by the line before, in full
+            if verdict[0] == "text":
+                raw, bbox = verdict[1], verdict[2]
+            else:
+                raw = "".join(span.get("text", "") for span in line.get("spans", []))
+                bbox = line.get("bbox")
             text = " ".join(raw.split())
             if not text:
                 continue
-            if unreadable(text):
+            if unreadable(text) and verdict[0] != "text":
                 # Glyph numbers, not words. Read them back through a real copy
                 # of the font if we can be sure of the answer; if we cannot, the
                 # line stays as it is and is dropped later, so a clipping comes
@@ -234,11 +277,13 @@ def _page_events(
                     mended = _repair_by_span(line.get("spans", []), page_fonts)
                 if mended:
                     text = mended
-            lines.append((text, tuple(line.get("bbox") or (0, 0, 0, 0))))
-        for text, box in _join_wrapped_urls(lines):
+            lines.append((text, tuple(bbox or (0, 0, 0, 0)),
+                          verdict[0] == "garbled"))
+        for text, box, garbled in _join_wrapped_urls(lines):
             if match_section(text, config) is not None:
                 header_bands.append((box[1], box[3]))
-            items.append((box[1], box[0], Event("text", text=text, page=page_number)))
+            items.append((box[1], box[0], Event("text", text=text, page=page_number,
+                                                garbled=garbled)))
 
     try:
         placed = page.get_image_info(xrefs=True)
@@ -267,6 +312,8 @@ def _page_events(
                 f"({type(exc).__name__}); it was skipped."
             )
             continue
+        # Only worth the digest when there is a record to compare it with.
+        digest = hashlib.sha1(data).hexdigest() if known else ""
         pictures.append({
             "box": box,
             "xref": xref,
@@ -274,14 +321,21 @@ def _page_events(
             "ext": ext,
             "width": width,
             "height": height,
+            "sha1": digest,
             # A section header printed across a picture means the picture is
-            # the header's backdrop, not a clipping.
-            "furniture": any(box[1] < bottom and top < box[3]
-                             for top, bottom in header_bands),
+            # the header's backdrop, not a clipping - unless the report's own
+            # record names the picture, in which case it IS a clipping and the
+            # words over it are the dossier's category heading. Measured: a
+            # dossier printed with its clipping titles switched off sits the
+            # first picture of every category straight under that heading, and
+            # every one of them came back "not a clipping".
+            "furniture": (digest not in known
+                          and any(box[1] < bottom and top < box[3]
+                                  for top, bottom in header_bands)),
         })
 
     pictures.sort(key=lambda picture: (picture["box"][1], picture["box"][0]))
-    for run in _stack_runs(pictures):
+    for run in _stack_runs(pictures, known):
         lead = run[0]
         data, ext = lead["data"], lead["ext"]
         native = (lead["width"], lead["height"])
@@ -351,11 +405,21 @@ def extract_pdf(
 
     document = _open(path)
     events: list[Event] = []
+    faces: dict = {}
     with document:
         if document.needs_pass:
             raise ExtractionError(
                 f"{path.name}: the PDF is password protected, so it cannot be read."
             )
+
+        # What this report says it is made of, read before the pages are, so
+        # the page walk knows which pictures were put there one to a clipping.
+        # A file with no record of ours - a division's document, a report made
+        # before this existed, one a tool has stripped - gives None here and is
+        # read exactly as it always was.
+        record = reportrecord.read_pdf(document)
+        known = reportrecord.sha1s(record)
+
         for number in range(document.page_count):
             try:
                 page = document.load_page(number)
@@ -367,7 +431,8 @@ def extract_pdf(
                 continue
             page_warnings: list[str] = []
             events.extend(
-                _page_events(document, page, number + 1, page_warnings, config))
+                _page_events(document, page, number + 1, page_warnings, config,
+                             faces, known))
             warnings.extend(f"{path.name}: {w}" for w in page_warnings)
 
         code = division or detect_division(path.name, config) or ""
@@ -375,9 +440,21 @@ def extract_pdf(
             stamps = document.metadata or {}
         except Exception:  # noqa: BLE001 - metadata is a courtesy
             stamps = {}
+        # A record of ours says the file is ours as surely as the stamp does,
+        # and more surely: a tool that rewrites the document properties leaves
+        # an embedded attachment alone.
         own = made_here(stamps.get("creator"), stamps.get("producer"),
-                        stamps.get("keywords"))
-        clips = build_clips(events, str(path), code, config, warnings, own=own)
+                        stamps.get("keywords")) or record is not None
+        cover = record.get("cover") if record is not None else None
+        clips = build_clips(events, str(path), code, config, warnings, own=own,
+                            cover=cover, known=known)
+        if record is not None:
+            reportrecord.apply(clips, record, warnings)
+        elif own:
+            # A report of ours from before the record existed. If it was a
+            # burned one its headlines are inside the pictures, and the only
+            # place left to read them is off the pictures themselves.
+            reportrecord.recover_bands(clips, warnings)
 
     return clips, warnings
 

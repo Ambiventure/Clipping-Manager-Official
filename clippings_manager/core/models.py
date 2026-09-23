@@ -203,7 +203,11 @@ class Clip:
     page: str = ""
 
     # --- where the name came from, and how sure we are --------------------------
-    name_source: str = ""         # "caption" | "ocr" | "manual" | "copied" | ""
+    # "report" is a name taken back out of one of our own reports by the record
+    # embedded in it (core/reportrecord), which is what the person exporting it
+    # had typed or the import had parsed at the time.
+    name_source: str = ""         # "caption" | "ocr" | "manual" | "copied"
+                                  # | "link" | "report" | ""
     name_confidence: float = 0.0  # 0.0-1.0, whatever the source
     ocr_text: str = ""            # the headline read off the picture, for matching
     # What language the clipping itself appears to be in, worked out once from

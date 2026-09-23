@@ -69,11 +69,26 @@ def _measure(page, typeface, text, width, size, style, colour, bold):
 def compose(clip: Clip, typeface: "build_pdf.Typeface",
             heading: Optional[layout.HeadingStyle] = None,
             dpi: int = 200) -> bytes:
+    """One clipping, its headline and its address, as a single JPEG."""
+    return compose_with_box(clip, typeface, heading, dpi)[0]
+
+
+def compose_with_box(clip: Clip, typeface: "build_pdf.Typeface",
+                     heading: Optional[layout.HeadingStyle] = None,
+                     dpi: int = 200) -> tuple[bytes, dict]:
     """One clipping, its headline and its address, as a single JPEG.
 
-    Returns the picture bytes. The headline goes above and the address below,
-    which is where the printed report puts them - so a burned clipping and a
-    printed one read the same way round.
+    Returns the picture bytes and where the clipping itself sits inside them.
+    The headline goes above and the address below, which is where the printed
+    report puts them - so a burned clipping and a printed one read the same way
+    round, and the original picture is still all there in the middle.
+
+    The box is what puts it back. A burned report carries no text at all, so
+    when one comes back in it is the record inside the file (core/reportrecord)
+    that says where the bands are and what the headline said; the clipping is
+    cropped to this box and gets its name printed above it again. The numbers
+    are the composed JPEG's own pixels, which is dpi/72 times the points the
+    page was laid out in.
     """
     style = heading or layout.HeadingStyle()
     # The burned picture carries the headline INSIDE the JPEG, so a word left
@@ -134,19 +149,38 @@ def compose(clip: Clip, typeface: "build_pdf.Typeface",
 
     pixmap = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csRGB)
     out = pixmap.tobytes("jpeg", jpg_quality=QUALITY)
+    scale = dpi / 72.0
+    box = {
+        "dpi": int(dpi),
+        "w": int(pixmap.width),
+        "h": int(pixmap.height),
+        "box": [
+            max(0, int(round(left * scale))),
+            max(0, int(round(above * scale))),
+            min(int(pixmap.width), int(round((left + float(rect.width)) * scale))),
+            min(int(pixmap.height), int(round((above + float(rect.height)) * scale))),
+        ],
+    }
     sheet.close()
-    return out
+    return out, box
 
 
 def flatten(clips: Sequence[Clip],
             heading: Optional[layout.HeadingStyle] = None,
             dpi: int = 200,
-            warnings: Optional[list] = None) -> list[Clip]:
+            warnings: Optional[list] = None,
+            origins: Optional[dict] = None) -> list[Clip]:
     """Copies of ``clips`` whose picture already contains the words.
 
     The headline and the address are cleared on the copies, because they are in
     the picture now: left in place the report would print each of them twice,
     once as text above and once inside the image below it.
+
+    ``origins``, when given, is filled in as ``{uid: (the original, the band
+    box)}``. The dossier builder writes the report's record from it, because by
+    the time it sees a clipping the names have been cleared off it here and the
+    record has to carry what was burned IN. copy.copy keeps the uid, which is
+    what makes the two halves findable again.
 
     The originals are untouched - this is an export, and a person's board must
     look the same after it as before.
@@ -157,7 +191,7 @@ def flatten(clips: Sequence[Clip],
     for number, clip in enumerate(clips, start=1):
         one = copy.copy(clip)
         try:
-            data = compose(clip, typeface, heading, dpi)
+            data, box = compose_with_box(clip, typeface, heading, dpi)
         except Exception as exc:  # noqa: BLE001 - one bad picture costs one page
             warnings.append(
                 f"Clipping {number} ({clip.effective_label or 'unnamed'}) could "
@@ -165,6 +199,9 @@ def flatten(clips: Sequence[Clip],
                 f"used as it is, with the headline printed above it instead."
             )
             burned.append(one)
+            if origins is not None:
+                # No band on this one: the picture is the clipping, untouched.
+                origins[clip.uid] = (clip, None)
             continue
         with pymupdf.open(stream=data, filetype="jpeg") as check:
             size = check[0].rect if check.page_count else None
@@ -180,4 +217,6 @@ def flatten(clips: Sequence[Clip],
         one.url = ""
         one.section_title = clip.section_title
         burned.append(one)
+        if origins is not None:
+            origins[clip.uid] = (clip, box)
     return burned

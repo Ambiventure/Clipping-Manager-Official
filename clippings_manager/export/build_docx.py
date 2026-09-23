@@ -22,7 +22,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from .. import version
-from ..core import assemble, imageops, ourfiles
+from ..core import assemble, imageops, ourfiles, reportrecord
 from ..core.models import Clip
 
 from . import layout, word_cover
@@ -147,6 +147,20 @@ def _image_bytes(clip: Clip) -> bytes:
     return imageops.encode_for_export(clip)
 
 
+def _pictures_so_far(document) -> int:
+    """How many pictures are in the body already.
+
+    Counted the way the reader counts them - every ``a:blip`` - so the sheet
+    number in the report's record means the same thing at both ends. The cover
+    contributes one when it is a picture, and one more when it is the laid-out
+    cover with the logo on it.
+    """
+    try:
+        return len(document.element.body.findall(".//" + qn("a:blip")))
+    except Exception:  # noqa: BLE001 - a count, never a requirement
+        return 0
+
+
 def _normalised(clip: Clip, as_png: bool = False) -> bytes:
     """Re-encode through Pillow, which rewrites the headers cleanly.
 
@@ -162,13 +176,17 @@ def _normalised(clip: Clip, as_png: bool = False) -> bytes:
     return imageops.encode_for_export(clip)
 
 
-def _place_picture(run, clip: Clip, width, height) -> None:
+def _place_picture(run, clip: Clip, width, height) -> bytes:
     """Insert the image, working around python-docx's fragile header parser.
 
     Word itself opens these files happily, but python-docx reads the JPEG markers
     with its own small parser and rejects around one in sixteen of the division
     images. Re-encoding through Pillow rewrites the headers and it accepts them, so
     the pass-through is tried first and the clean copy is the fallback.
+
+    Returns the bytes that actually went in. The report's record keys each
+    clipping on the sha1 of exactly those bytes, and a picture that needed the
+    PNG fallback is not the one the first attempt would have produced.
     """
     attempts = (
         lambda: _image_bytes(clip),
@@ -178,8 +196,9 @@ def _place_picture(run, clip: Clip, width, height) -> None:
     last: Exception | None = None
     for produce in attempts:
         try:
-            run.add_picture(io.BytesIO(produce()), width=width, height=height)
-            return
+            data = produce()
+            run.add_picture(io.BytesIO(data), width=width, height=height)
+            return data
         except Exception as exc:  # noqa: BLE001 - try the next encoding
             last = exc
     raise last if last else RuntimeError("image could not be placed")
@@ -341,6 +360,17 @@ def build(
 
     sieve = _wordlist.Sieve()
 
+    # The same record the PDF carries, in the place a Word file keeps one
+    # (core/reportrecord). A Word cover is written as text, or as one picture
+    # with its words baked into it, so whether there is a cover at all - and
+    # whether the first picture in the file is a clipping - is something only
+    # this can say.
+    placed = _pictures_so_far(document)
+    record = reportrecord.Record(
+        "press", "docx", report_date,
+        cover=bool(laid_out or cover_lines or placed),
+        summary=bool(summary is not None and summary.tallies))
+
     for number, clip in enumerate(clips, start=1):
         if progress:
             progress(number, len(clips), clip.effective_label or "clipping")
@@ -406,7 +436,7 @@ def build(
             image_paragraph = document.add_paragraph()
             opening.append(image_paragraph)
             image_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            _place_picture(
+            data = _place_picture(
                 image_paragraph.add_run(), clip,
                 Pt(placement.width), Pt(placement.height),
             )
@@ -416,6 +446,8 @@ def build(
                 f"({type(exc).__name__}); its page was left blank."
             )
             continue
+        record.add(clip, data, sheet=placed, printed=caption)
+        placed += 1
 
         if clip.url:
             link_paragraph = document.add_paragraph()
@@ -439,6 +471,7 @@ def build(
     # The second stamp, as the PDF carries: Word keeps the keywords through a
     # save that rewrites everything else about the file.
     properties.keywords = assemble.MADE_HERE
+    reportrecord.attach_docx(document, record, warnings)
 
     document.save(str(output))
     # A word list that quietly edits a report is the dangerous version of this

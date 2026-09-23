@@ -25,7 +25,7 @@ from typing import Callable, Optional, Sequence
 import pymupdf
 
 from .. import version
-from ..core import assemble, imageops, ourfiles
+from ..core import assemble, imageops, ourfiles, reportrecord
 from ..core.models import Clip
 from . import layout
 
@@ -495,6 +495,16 @@ def build(
 
     sieve = _wordlist.Sieve()
 
+    # What this report is made of, written into the file itself so that
+    # importing it again brings the names back with it - including the ones
+    # that were never printed on a page (core/reportrecord). Filled in inside
+    # the loop below, so it says what was actually drawn rather than what was
+    # asked for. The press report always opens on a cover sheet, whether or not
+    # anything was drawn on it.
+    record = reportrecord.Record(
+        "press", "pdf", report_date, cover=True,
+        summary=bool(summary is not None and summary.tallies))
+
     for number, clip in enumerate(clips, start=1):
         if progress:
             progress(number, len(clips), clip.effective_label or "clipping")
@@ -542,13 +552,17 @@ def build(
             )
 
         try:
-            sheet.insert_image(pymupdf.Rect(*placement.rect), stream=_image_bytes(clip))
+            # Encoded once and kept: the record's key is the sha1 of the exact
+            # bytes that went into the file, so it has to be these bytes.
+            data = _image_bytes(clip)
+            sheet.insert_image(pymupdf.Rect(*placement.rect), stream=data)
         except Exception as exc:  # noqa: BLE001 - one bad image costs one page
             warnings.append(
                 f"Clipping {number} ({caption or 'unnamed'}) could not be drawn "
                 f"({type(exc).__name__}); its page was left blank."
             )
             continue
+        record.add(clip, data, sheet=sheet.number, printed=caption)
 
         if clip.url:
             link_top = min(
@@ -593,6 +607,7 @@ def build(
         # importer has to be able to tell that this was ours (core/ourfiles).
         "keywords": assemble.MADE_HERE,
     })
+    reportrecord.attach_pdf(document, record, warnings)
 
     # Each text box embeds its own font reference, so a 165-page run ends up with
     # dozens of copies of the same face. garbage=4 with clean folds them into one
