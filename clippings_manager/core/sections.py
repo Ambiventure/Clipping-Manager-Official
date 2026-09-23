@@ -62,6 +62,16 @@ SHIPPED = (
     ("electronic", "ELECTRONIC MEDIA"),
     ("social", "SOCIAL MEDIA"),
     ("digital", "DIGITAL MEDIA"),
+    # One per platform, for a report that heads each platform's posts rather
+    # than putting them all under SOCIAL MEDIA. Put on by "Group social by
+    # platform", and on the list like the three above so they can be renamed -
+    # TWITTER to X, say - once, for every report after it.
+    ("facebook", "FACEBOOK"),
+    ("twitter", "TWITTER"),
+    ("instagram", "INSTAGRAM"),
+    ("youtube", "YOUTUBE"),
+    ("threads", "THREADS"),
+    ("linkedin", "LINKEDIN"),
 )
 
 #: The red the 360 Degree document heads its runs in.

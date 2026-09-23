@@ -348,21 +348,27 @@ def _summary_pages(new_page, typeface: "Typeface", style, summary, report_date,
 
 
 def _number_pages(document, typeface: "Typeface", style, width: float,
-                  height: float) -> None:
+                  height: float, first: int = 1) -> None:
     """Put a page number at the foot of every sheet except the cover.
 
     The margins here are deliberately narrow - 18pt - and a clipping is scaled to
     fill the page, so a number placed inside the margin would sit on the picture.
     It goes in the bottom margin itself, small and grey, and counts from the first
     clipping: the cover is not page one of anything.
+
+    ``first`` is the sheet the counting starts on - 1 where there is a cover to
+    step over, 0 where the switch turned it off and the first clipping IS the
+    first sheet. The number printed is the sheet's place in the report, so a
+    report with no cover starts at 1 on its first clipping and one with a cover
+    also starts at 1 on its first clipping.
     """
     size = layout.PAGE_NUMBER_SIZE
-    for index in range(1, document.page_count):
+    for index in range(first, document.page_count):
         sheet = document[index]
         box = pymupdf.Rect(layout.MARGIN_SIDE, height - layout.MARGIN_BOTTOM,
                            width - layout.MARGIN_SIDE, height - 2.0)
         try:
-            _draw_line(sheet, typeface, str(index), box, size, align="center",
+            _draw_line(sheet, typeface, str(index + 1 - first), box, size, align="center",
                        colour=layout.PAGE_NUMBER_COLOUR, family=style.family)
         except Exception:  # noqa: BLE001 - a number must never cost a page
             pass
@@ -411,6 +417,7 @@ def build(
     draw_cover_text: bool = True,
     heading: Optional[layout.HeadingStyle] = None,
     summary=None,
+    with_cover: bool = True,
 ) -> Result:
     """Write the newspad. ``clips`` is already in the order the user arranged.
 
@@ -442,8 +449,13 @@ def build(
         return document.new_page(width=page_width, height=page_height)
 
     # ------------------------------------------------------------ cover page
-    cover = new_page()
-    if cover_image:
+    # NO COVER SHEET AT ALL when the card's switch is off. Not a blank sheet
+    # and not the plain count-and-date one: the file simply starts at the
+    # first clipping, and page 1 is a clipping. Everything downstream counts
+    # the pages it is given, so the numbering, the record and the summary all
+    # follow without being told.
+    cover = new_page() if with_cover else None
+    if cover is not None and cover_image:
         try:
             cover.insert_image(
                 pymupdf.Rect(0, 0, page_width, page_height),
@@ -458,6 +470,7 @@ def build(
 
     first_y, second_y = layout.cover_lines(page)
     line_height = layout.COVER_TEXT_SIZE * 1.7
+    draw_cover_text = draw_cover_text and cover is not None
     if draw_cover_text and cover_title.strip():
         _draw_line(
             cover, typeface, cover_title.strip(),
@@ -499,10 +512,11 @@ def build(
     # importing it again brings the names back with it - including the ones
     # that were never printed on a page (core/reportrecord). Filled in inside
     # the loop below, so it says what was actually drawn rather than what was
-    # asked for. The press report always opens on a cover sheet, whether or not
-    # anything was drawn on it.
+    # asked for. The press report opens on a cover sheet unless the card's
+    # switch turned it off, in which case sheet 0 is the first clipping and the
+    # record has to say so - the reader counts sheets from it.
     record = reportrecord.Record(
-        "press", "pdf", report_date, cover=True,
+        "press", "pdf", report_date, cover=bool(with_cover),
         summary=bool(summary is not None and summary.tallies))
 
     for number, clip in enumerate(clips, start=1):
@@ -590,7 +604,8 @@ def build(
             warnings.append(f"The summary page could not be written ({type(exc).__name__}).")
 
     if style.page_numbers:
-        _number_pages(document, typeface, style, page_width, page_height)
+        _number_pages(document, typeface, style, page_width, page_height,
+                      first=1 if with_cover else 0)
 
     # Which build wrote this. It is in the document properties rather than on a
     # page, so it changes nothing a reader sees, but a report that has been

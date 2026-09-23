@@ -480,6 +480,15 @@ class LinksDialog(QDialog):
             lambda: self._show_menu(self.method, self.method_more))
         row.addWidget(self.method_more)
         row.addStretch(1)
+        self.clear_btn = QPushButton("Clear all")
+        self.clear_btn.setObjectName("Quiet")
+        self.clear_btn.setCursor(Qt.PointingHandCursor)
+        self.clear_btn.setToolTip(
+            "Empty the box and the list, ready for the next message. The "
+            "clippings already captured stay in the report - this only clears "
+            "the links.")
+        self.clear_btn.clicked.connect(self._clear_all)
+        row.addWidget(self.clear_btn)
         self.capture = QPushButton("Capture")
         self.capture.setObjectName("NavyFilled")
         self.capture.setCursor(Qt.PointingHandCursor)
@@ -806,12 +815,12 @@ class LinksDialog(QDialog):
         self._painting = True
         try:
             self.list.clear()
-            for row in self.found:
+            for place, row in enumerate(self.found, 1):
                 item = QListWidgetItem()
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                 item.setData(Qt.UserRole, row.url)
                 self.list.addItem(item)
-                self._paint_row(item, row)
+                self._paint_row(item, row, place)
         finally:
             self._painting = False
         many = len(self.found)
@@ -819,8 +828,8 @@ class LinksDialog(QDialog):
         self._plain_count(
             NOTHING_YET if not many else
             f"{many} link{'s' if many != 1 else ''} found"
-            + (" — numbered as they were sent" if links.numbered(self.found) else "")
-            + (f" — {done} already captured" if done else ""))
+            + (f":  {self._by_kind()}" if self._by_kind() else "")
+            + (f"   —   {done} already captured" if done else ""))
         self._sync_capture_button()
         if self.browser is not None:
             try:
@@ -831,8 +840,14 @@ class LinksDialog(QDialog):
                 pass
 
     @staticmethod
-    def _words(row: links.Found) -> str:
-        number = f"{row.number}. " if row.number else ""
+    def _words(row: links.Found, place: int = 0) -> str:
+        """One line for one link. `place` is where it is in the list, counted
+        from one: the sender's own numbering is often missing, and more often
+        wrong by the time two links have been glued together or a duplicate has
+        been dropped, so the number shown is always the one it has HERE. It is
+        the number the capture works through them in and the one the count line
+        below counts, so the two can never disagree."""
+        number = f"{place}. " if place else (f"{row.number}. " if row.number else "")
         label = row.label or row.url
         return f"{number}{label}   —   {row.site}"
 
@@ -867,10 +882,10 @@ class LinksDialog(QDialog):
         except Exception:  # noqa: BLE001
             return how
 
-    def _paint_row(self, item, found) -> None:
+    def _paint_row(self, item, found, place: int = 0) -> None:
         key = found.url.lower()
         state = self.states.get(key) or LinkState()
-        words = self._words(found)
+        words = self._words(found, place)
         status = state.status
         if status == "done":
             text = f"✓  {words}   ({self._done_words(state)})"
@@ -907,13 +922,13 @@ class LinksDialog(QDialog):
 
     def _repaint_rows(self) -> None:
         for index in range(min(self.list.count(), len(self.found))):
-            self._paint_row(self.list.item(index), self.found[index])
+            self._paint_row(self.list.item(index), self.found[index], index + 1)
 
     def _repaint(self, url: str) -> None:
         key = url.lower()
         for index in range(min(self.list.count(), len(self.found))):
             if self.found[index].url.lower() == key:
-                self._paint_row(self.list.item(index), self.found[index])
+                self._paint_row(self.list.item(index), self.found[index], index + 1)
         if self.browser is not None:
             state = self.states.get(key)
             try:
@@ -1025,6 +1040,28 @@ class LinksDialog(QDialog):
             self.open_browser(at_url=url)
         else:
             fromchrome.open_link(url)
+
+    def _by_kind(self) -> str:
+        """How many links of each kind, for the line above the list: "3
+        Facebook, 4 Twitter, 5 Instagram, 4 news sites". Platforms first, in
+        the order they were pasted, and everything that is not a platform
+        counted together at the end - a morning is a dozen newspapers and
+        nobody wants a dozen names."""
+        order: list = []
+        counted: dict = {}
+        papers = 0
+        for row in self.found:
+            name = links.platform_of(row.site)
+            if not name:
+                papers += 1
+                continue
+            if name not in counted:
+                order.append(name)
+            counted[name] = counted.get(name, 0) + 1
+        parts = [f"{counted[name]} {name}" for name in order]
+        if papers:
+            parts.append(f"{papers} news site{'s' if papers != 1 else ''}")
+        return ", ".join(parts)
 
     def _plain_count(self, text: str) -> None:
         self.count.setTextFormat(Qt.PlainText)
@@ -1182,6 +1219,47 @@ class LinksDialog(QDialog):
         self._say_with_walls(
             f"{self.made} clipping{'s' if self.made != 1 else ''} added"
             + (f" — {left} still ticked" if left else "") + ".")
+        self._close_if_all_went_through()
+
+    def _clear_all(self) -> None:
+        """Empty the box and the list. Never the clippings: those are in the
+        report already and are not this window's to take back."""
+        if self.thread is not None:
+            return                      # a capture is running; leave it alone
+        self.box.clear()
+        self.states.clear()
+        self.ticks.clear()
+        self.found = []
+        self._at_url = ""
+        self._reread()
+        self.box.setFocus()
+
+    #: How long the window waits, after the last clipping, before it closes
+    #: itself - long enough to read "12 clippings added" and to reach for the
+    #: mouse if it was not wanted.
+    CLOSE_AFTER_MS = 1800
+
+    def _close_if_all_went_through(self) -> None:
+        """Shut the window when the whole message went through.
+
+        Asked for because the window is in the way once the morning is in. It
+        closes only when there is nothing left to look at: every link captured,
+        none failed, none walled, none left ticked. A failure is the one thing
+        somebody has to SEE - a window that closed over "3 are not public"
+        would have thrown away the only notice of it - so anything short of all
+        of them keeps the window open with its count line."""
+        if self.thread is not None or not self.found:
+            return
+        if any(self._state(row).status != "done" for row in self.found):
+            return
+        QTimer.singleShot(self.CLOSE_AFTER_MS, self._close_quietly)
+
+    def _close_quietly(self) -> None:
+        # Nothing may have arrived in the meantime: a link pasted while the
+        # count line was being read, or a capture started again.
+        if self.thread is None and self.found and all(
+                self._state(row).status == "done" for row in self.found):
+            self.close()
 
     def _say_with_walls(self, text: str) -> None:
         """The count line, and when posts hit a sign-in wall, the two ways past

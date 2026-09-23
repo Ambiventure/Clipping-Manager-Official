@@ -211,6 +211,10 @@ class HeadingLayoutCard(QFrame, DesignFile):
 
     changed = Signal()
     designProblem = Signal(str)
+    #: Gather the posts by platform and head each run with the platform's
+    #: name. Asked for here because the heading it prints is set up here; done
+    #: by the window, which owns the list and the history.
+    groupSocial = Signal()
 
     def __init__(self, key: str, subtitle: str = "", parent=None):
         super().__init__(parent)
@@ -312,6 +316,22 @@ class HeadingLayoutCard(QFrame, DesignFile):
         self.align_pick.changed.connect(lambda _v: self._read())
         self.align_pick.setMinimumWidth(120)
         controls.addWidget(self._labelled("Align", self.align_pick))
+
+        # Both panels: a post is headed by its platform in the report and in
+        # the dossier alike.
+        # Short on purpose. This strip wraps when it runs out of room - it
+        # already does at 1180 without this button - and measured at 1366 the
+        # dossier's strip goes to two rows for anything longer than about
+        # "Group posts". The tooltip carries the full sentence.
+        self.group_btn = QPushButton("Group by platform")
+        self.group_btn.setCursor(Qt.PointingHandCursor)
+        self.group_btn.setToolTip(
+            "Put every Facebook post together, every Twitter post together, "
+            "every Instagram post together - each run headed once with the "
+            "platform's name, in the size and colour set here. Newspaper "
+            "stories are not moved. Ctrl+Z puts the order back.")
+        self.group_btn.clicked.connect(self.groupSocial.emit)
+        controls.addWidget(self.group_btn)
 
         # The dossier alone: the press report is one running order, not
         # categories, so there is nothing here for it to order.

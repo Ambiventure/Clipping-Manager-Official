@@ -1312,6 +1312,7 @@ class MainWindow(QMainWindow):
             "Sets the headline printed above each clipping, and the page the "
             "newspad is built on.",
         )
+        self.heading.groupSocial.connect(lambda: self._group_social(self.model))
         layout.addWidget(self.heading)
 
         # A bar for work that takes long enough to wonder about. Above the
@@ -2099,6 +2100,8 @@ class MainWindow(QMainWindow):
         self.board.addRequested.connect(self._add_into_section)
         self.board.exportRequested.connect(self._export_dossier)
         self.board.clearRequested.connect(self._clear_division)
+        self.board.heading.groupSocial.connect(
+            lambda: self._group_social(self.board_model))
         self.board.titleEdited.connect(self._on_board_title)
         self.board.urlEdited.connect(self._on_board_url)
         self.board.cardDeleted.connect(self._on_board_delete)
@@ -4671,6 +4674,7 @@ class MainWindow(QMainWindow):
             layout_style=self.heading.settings(),
             cover_blocks=self.cover.cover_blocks(),
             name_suffix=self._export_suffix(),
+            with_cover=self.cover.wants_cover(),
         )
         if dialog.exec() and dialog.results:
             names = ", ".join(Path(p).name for p in dialog.results)
@@ -4762,6 +4766,34 @@ class MainWindow(QMainWindow):
             os.startfile(str(folder))  # noqa: S606 - Windows shell open
         except Exception:  # noqa: BLE001 - the files are written either way
             pass
+
+    def _group_social(self, pool=None) -> None:
+        """Gather the posts by platform, and head each run with its platform.
+
+        One step in the history: the order and the headings go together (see
+        commands.GroupSocial). Nothing is hidden, nothing is deleted, and a
+        newspaper's story is not moved - only the posts, and only into the
+        place the first post of their platform already held.
+        """
+        pool = pool if pool is not None else self.pool()
+        rows = list(pool.rows)
+        if not rows:
+            self._flash("There is nothing to group.", "info")
+            return
+        order, marks = commands.social_grouping(rows)
+        if not marks:
+            self._flash("No posts to group - these are all newspaper stories.",
+                        "info")
+            return
+        moved = sum(1 for place, row in enumerate(order) if rows[place] is not row)
+        self.stack_for(pool).push(
+            commands.GroupSocial(pool, order, marks,
+                                 f"Grouped {len(marks)} posts by platform"))
+        names = sorted({words for _key, words in marks.values()})
+        self._flash(
+            f"{len(marks)} post{'s' if len(marks) != 1 else ''} grouped under "
+            + ", ".join(names[:4]) + ("…" if len(names) > 4 else "")
+            + (f"; {moved} moved." if moved else "; already in order."), "good")
 
     def _clear_division(self, code: str) -> None:
         """Take every clipping the board is showing off it.

@@ -251,6 +251,7 @@ def build(
     draw_cover_text: bool = True,
     heading: Optional[layout.HeadingStyle] = None,
     cover_blocks: Optional[Sequence] = None,
+    with_cover: bool = True,
     summary=None,
 ) -> Result:
     """Write the newspad as .docx, in the order the user arranged.
@@ -297,7 +298,10 @@ def build(
     # ------------------------------------------------------------ cover page
     # Text first, when there is a layout to write. The picture is the fallback,
     # not the preference: everything on a Word cover should be editable.
+    # NO COVER SHEET AT ALL when the card's switch is off - see build_pdf.
     laid_out = False
+    if not with_cover:
+        cover_blocks, cover_image, draw_cover_text = None, None, False
     if cover_blocks:
         try:
             laid_out = word_cover.add_cover(
@@ -453,7 +457,10 @@ def build(
             link_paragraph = document.add_paragraph()
             link_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _add_hyperlink(link_paragraph, clip.url, clip.url)
-        if opening:
+        if opening and (with_cover or written):
+            # The break is what puts each clipping on a sheet of its own. With
+            # no cover page the FIRST clipping must not carry one, or the file
+            # opens on a blank sheet where the cover used to be.
             opening[0].paragraph_format.page_break_before = True
         written += 1
 

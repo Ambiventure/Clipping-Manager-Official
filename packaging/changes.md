@@ -16,6 +16,39 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.43
+
+Added
+
+  * **Five names of your own for the file.** Beside Standard name there is now
+    My names: pick one and it goes in the box with the date on the end. Edit
+    my names keeps five, and they are there the next morning.
+  * **A switch that turns the cover page off.** On the cover panel, beside
+    Reset: off and the report has no cover sheet at all - the first clipping
+    is page one. What you have set up on the panel is kept either way.
+  * **Group by platform**, on the heading and layout panel. Every Facebook
+    post together, every Twitter post together, every Instagram post together,
+    each run headed once with the platform's name in the size and colour set
+    on that panel. Newspaper stories are not moved, and Ctrl+Z puts the order
+    back. The headings print in the press report and in the dossier alike, and
+    can be renamed - TWITTER to X, say - on the headings list.
+  * **A Clear all in the links window**, and the window closes itself once the
+    whole message has gone through. It stays open if anything failed, so
+    nothing goes unseen.
+  * **Every link is numbered as you paste it**, and the line above the list
+    says what they are: "16 links found: 3 Facebook, 4 Twitter, 5 Instagram,
+    4 news sites".
+  * **A How this works on the Show and Arrange strip** - what each half does,
+    how the rows stack, and why neither of them changes the report.
+
+Changed
+
+  * **Clear all on the sentiment board is at the top**, beside the count of
+    what it would clear. It was down among the export buttons.
+  * **The seven counts on the sentiment board are small coloured pills** on
+    the line that already says how many clippings the division has, instead of
+    a band of tiles taking up most of the first screenful.
+
 ## 2.0.42
 
 Fixed

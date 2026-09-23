@@ -24,8 +24,9 @@ filtering to the regional papers, exporting, and finding the national ones gone
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QHBoxLayout,
+                               QLabel, QPushButton, QScrollArea, QVBoxLayout,
+                               QWidget)
 
 from ..core import arrange
 from . import theme
@@ -38,6 +39,85 @@ AXES = ["reach", "language", "stature", "medium", arrange.BY_NAME]
 
 #: What each axis is called on the strip when it has no label of its own.
 NAMES = {arrange.BY_NAME: "Newspaper"}
+
+#: WHAT THE TWO HALVES DO, for the "i". Written for somebody who has the strip
+#: in front of them and cannot tell which half does what - which is a fair
+#: question, because the two halves look the same and do opposite things.
+HELP = """
+<p style="margin:0 0 10px 0"><b>Two controls that do different things.</b>
+<b>Show</b> decides which clippings you can see. <b>Arrange</b> decides what
+order they are in. Neither one changes the report.</p>
+
+<p style="margin:0 0 4px 0"><b>Show — narrowing down</b></p>
+<ul style="margin:0 0 10px 0">
+<li>Each row is one question: Reach, Language, Size, Medium, Newspaper.</li>
+<li>Click a chip to keep only those. Click it again to let them go.</li>
+<li>Rows <b>stack</b>. Pick <i>Regional</i> on Reach and then <i>Hindi</i> on
+Language and you are left with the clippings that are <b>both</b> — not the
+regional ones plus the Hindi ones.</li>
+<li>Picking two chips in the <b>same</b> row is "either of these": Hindi
+<b>or</b> English.</li>
+<li>A row with nothing clicked is not asking anything, so it hides nothing.</li>
+</ul>
+
+<p style="margin:0 0 4px 0"><b>Arrange — putting them in order</b></p>
+<ul style="margin:0 0 10px 0">
+<li>Pick one. <i>As I arranged them</i> leaves your own order exactly alone.</li>
+<li>Most choices then ask <b>which comes first</b> in a second row. Click
+English, then Punjabi, and that is the order they go in; anything you do not
+click follows behind in its usual order.</li>
+<li>Arranging never hides anything, and hiding never reorders anything.</li>
+</ul>
+
+<p style="margin:0 0 4px 0"><b>What it does not do</b></p>
+<ul style="margin:0 0 10px 0">
+<li><b>The report is not affected.</b> A clipping you have hidden is still
+exported, still numbered, and still on its page. This is a way of looking at
+the morning, not a way of editing it.</li>
+<li>Nothing here deletes or unticks a clipping. To leave one out of the report,
+untick it in the list.</li>
+<li><b>Show all again</b> puts everything back and returns to your own order.</li>
+</ul>
+
+<p style="margin:0"><b>Which papers are which</b> is where you say what counts
+as regional, which are Hindi, which are the big ones. Those are what the chips
+above are made from, and your own edits are kept when the program is
+updated.</p>
+"""
+
+
+class FilterHelp(QDialog):
+    """What Show and Arrange each do. Read-only; nothing here changes a thing."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Show and Arrange — how they work")
+        self.setModal(True)
+        self.resize(560, 560)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 16)
+        outer.setSpacing(12)
+
+        words = QLabel(HELP)
+        words.setWordWrap(True)
+        words.setTextFormat(Qt.RichText)
+        words.setAlignment(Qt.AlignTop)
+        words.setStyleSheet(
+            f"color: {theme.INK}; font-size: 12px; background: transparent;"
+            " border: none;")
+        # Scrolled rather than stretched: the window opens over the strip and
+        # must not grow taller than a laptop screen.
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        area.setWidget(words)
+        area.setStyleSheet("background: transparent;")
+        outer.addWidget(area, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        outer.addWidget(buttons)
 
 _PLAIN = (
     f"QPushButton {{ background: {theme.SURFACE}; color: {theme.NAVY};"
@@ -333,6 +413,11 @@ class FilterBar(QFrame):
         bottom.addWidget(self.said, 1)
 
         tail = FlowLayout(spacing=8, vertical_spacing=5)
+        self.help_btn = _chip("i  How this works",
+                              "What Show does, what Arrange does, and why "
+                              "neither of them changes the report.")
+        self.help_btn.clicked.connect(self._explain)
+        tail.addWidget(self.help_btn)
         self.edit_btn = _chip("Which papers are which",
                               "Say which papers count as regional, which are "
                               "Hindi, which are the big ones. Yours are kept "
@@ -346,6 +431,9 @@ class FilterBar(QFrame):
         tail.addWidget(self.clear_btn)
         bottom.addLayout(tail)
         outer.addLayout(bottom)
+
+    def _explain(self) -> None:
+        FilterHelp(self).exec()
 
     # ------------------------------------------------------------- the lens
     def lens(self) -> arrange.Lens:

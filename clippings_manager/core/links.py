@@ -251,6 +251,47 @@ def is_social(site: str) -> bool:
     return any(host == name or host.endswith("." + name) for name in SOCIAL)
 
 
+#: WHAT THE OFFICE CALLS EACH PLATFORM. Used in two places that have to agree:
+#: the count above the Collect window's list, and the heading printed over that
+#: platform's run of clippings in the report. "Twitter" rather than "X" because
+#: that is the word the office asked for on the report; it is a shipped heading
+#: like the others, so it can be renamed in the headings list and the rename
+#: then shows in both places.
+#:
+#: Not the same thing as sitedata.SITE_NAMES, which words a SIGN-IN - "X
+#: (Twitter)" reads well in "sign in to X (Twitter)" and badly as a heading
+#: across the top of a sheet.
+PLATFORMS = (
+    ("facebook.com", "Facebook"),
+    ("instagram.com", "Instagram"),
+    ("x.com", "Twitter"),
+    ("twitter.com", "Twitter"),
+    ("threads.net", "Threads"),
+    ("threads.com", "Threads"),
+    ("youtube.com", "YouTube"),
+    ("youtu.be", "YouTube"),
+    ("linkedin.com", "LinkedIn"),
+)
+
+
+def platform_of(site: str) -> str:
+    """Which platform a site belongs to, as the office names it - or "" for a
+    newspaper's own site, which is not a platform at all."""
+    host = (site or "").lower().lstrip(".")
+    for name, shown in PLATFORMS:
+        if host == name or host.endswith("." + name):
+            return shown
+    return ""
+
+
+def platform_of_link(url: str) -> str:
+    """The same, from a whole address rather than a site."""
+    rest = (url or "").split("://", 1)[-1]
+    host = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].lower()
+    host = host.split("@")[-1].split(":")[0]
+    return platform_of(host[4:] if host.startswith("www.") else host)
+
+
 def _letters(words: str) -> str:
     return "".join(ch for ch in (words or "").lower() if ch.isalnum())
 

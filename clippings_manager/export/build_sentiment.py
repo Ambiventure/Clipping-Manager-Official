@@ -54,6 +54,23 @@ HEADER_BOTTOM = 44.0
 HEADER_SIZE = 10.0
 CATEGORY_SIZE = 30.0
 CATEGORY_ADVANCE = 36.0
+#: The platform's own line, under the category's. Smaller, because the
+#: category is what the section IS and the platform says which run of it this
+#: is: at the same size the two read as two headings for one page.
+PLATFORM_SIZE = 17.0
+PLATFORM_ADVANCE = 23.0
+
+
+def platform_line(clip) -> str:
+    """The heading a clipping's platform run carries here, or "".
+
+    The words the clipping itself carries win, which is what "Group social by
+    platform" writes onto it and what the press report prints - so a heading
+    renamed once reads the same in both documents. Nothing is worked out from
+    the address here: a dossier is not to start naming platforms that the
+    report has not been told to name.
+    """
+    return str(getattr(clip, "section_title", "") or "").strip()
 TITLE_SIZE = 11.0
 # What the dossier has always done with a clipping title. The panel starts here,
 # so a dossier built without touching it is unchanged.
@@ -639,6 +656,7 @@ def _pdf_link_pill(
 def _pdf_head(
     sheet, typeface: Typeface, options: SentimentOptions, page_width: float,
     banner: str, column: Section, first_in_category: bool,
+    platform: str = "", style=None,
 ) -> float:
     """Draw the page furniture. Returns the y the content may start at."""
     cursor = MARGIN
@@ -654,6 +672,17 @@ def _pdf_head(
             CATEGORY_SIZE, align="left", colour=colour, bold=True,
         )
         cursor += CATEGORY_ADVANCE
+    if platform:
+        # In the colour the headings panel is set to, so the platform lines in
+        # the dossier and in the press report are the same colour.
+        ink = getattr(style, "colour", "") or _category_style(column)[1]
+        _draw_line(
+            sheet, typeface, platform,
+            pymupdf.Rect(MARGIN, cursor, page_width - MARGIN,
+                         cursor + PLATFORM_SIZE * 1.5),
+            PLATFORM_SIZE, align="left", colour=ink, bold=True,
+        )
+        cursor += PLATFORM_ADVANCE
     return cursor
 
 
@@ -754,6 +783,9 @@ def build_pdf(
             continue
 
         first_in_category = True
+        # Each platform named once inside the category, over the first of its
+        # run - the same rule the press report's headings follow.
+        named_here: set = set()
         index = 0
         while index < len(items):
             clip = items[index]
@@ -761,10 +793,15 @@ def build_pdf(
             if progress:
                 progress(done, total, clip.effective_label or "clipping")
 
+            platform = platform_line(clip)
+            if platform in named_here:
+                platform = ""
+            elif platform:
+                named_here.add(platform)
             sheet = document.new_page(width=page_width, height=page_height)
             cursor = _pdf_head(sheet, typeface, options, page_width, banner,
                                column,
-                               first_in_category)
+                               first_in_category, platform, style)
             first_in_category = False
 
             # A title belongs to one clipping, so two titled clippings never share a
@@ -935,7 +972,7 @@ def _docx_run(paragraph, text: str, size: float, colour: str, bold: bool = False
 
 def _docx_head(
     document, options: SentimentOptions, banner: str, column: Section,
-    first_in_category: bool,
+    first_in_category: bool, platform: str = "", style=None,
 ) -> float:
     """Write the page furniture. Returns the vertical space it is expected to eat."""
     used = 0.0
@@ -952,6 +989,12 @@ def _docx_head(
         _docx_run(paragraph, heading, CATEGORY_SIZE, colour, bold=True)
         paragraph.paragraph_format.space_after = Pt(8)
         used += DOCX_CATEGORY_COST
+    if platform:
+        ink = getattr(style, "colour", "") or _category_style(column)[1]
+        paragraph = document.add_paragraph()
+        _docx_run(paragraph, platform, PLATFORM_SIZE, ink, bold=True)
+        paragraph.paragraph_format.space_after = Pt(6)
+        used += PLATFORM_ADVANCE
     return used
 
 
@@ -1105,6 +1148,8 @@ def build_docx(
             continue
 
         first_in_category = True
+        # Each platform named once inside the category - the PDF's rule.
+        named_here: set = set()
         index = 0
         while index < len(items):
             clip = items[index]
@@ -1117,8 +1162,13 @@ def build_docx(
             started = True
             pages += 1
 
+            platform = platform_line(clip)
+            if platform in named_here:
+                platform = ""
+            elif platform:
+                named_here.add(platform)
             used = _docx_head(document, options, banner, column,
-                              first_in_category)
+                              first_in_category, platform, style)
             first_in_category = False
 
             partner: Optional[Clip] = None

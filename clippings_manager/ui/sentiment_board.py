@@ -1006,7 +1006,6 @@ class SentimentBoard(QWidget):
         stack.setSpacing(13)
         stack.addWidget(self._build_heading())
         stack.addWidget(self._build_division_bar())
-        stack.addWidget(self._build_totals())
         self.cover = SentimentCoverCard()
         self.cover.changed.connect(self._mirror_cover_switch)
         self.cover.foldChanged.connect(self._cover_folded)
@@ -1136,17 +1135,52 @@ class SentimentBoard(QWidget):
             "color: " + theme.INK + "; font-size: 13px; font-weight: 800;"
             " letter-spacing: .04em; background: transparent;"
         )
-        hint = QLabel(
-            "Positive, neutral, negative and digital coverage for the division "
-            "you are working on"
-        )
+        # THE ONE THING ON THIS LINE THAT MAY GIVE WAY. Everything else on it -
+        # the counts, the division's own count, Clear all - is a number or a
+        # control and has to stay whole; this sentence says what the board is
+        # for and is read once. Elided, the line still fits a 1180 window,
+        # which is where the counts moving up here would otherwise have pushed
+        # the board wide enough to scroll sideways.
+        hint = ElidedLabel(
+            "Positive, neutral, negative, digital and advertisement coverage "
+            "for the division you are working on", floor=90)
         hint.setObjectName("SubtleHint")
         row.addWidget(title)
-        row.addWidget(hint)
-        row.addStretch(1)
+        row.addWidget(hint, 1)
         self.division_clips = QLabel("0 division clips")
         self.division_clips.setObjectName("CountPill")
         row.addWidget(self.division_clips)
+        # THE COUNTS, WHERE THE COUNT ALREADY WAS. They used to be six tiles
+        # 64 pixels tall across their own band, which is most of a laptop's
+        # first screenful given over to seven numbers that never change while
+        # anybody looks at them. Here they are pills on the line that already
+        # says how many clippings the division has - each still in its own
+        # category's colour, because the colour is how a category is found on
+        # this board.
+        row.addWidget(self._build_totals())
+        # CLEARING THE DIVISION, WHERE IT IS LOOKED FOR. A morning is compiled
+        # division by division and starting the next one means getting the last
+        # one off the board. The button existed already, down among the export
+        # buttons, where nobody found it; it is the same button and the same
+        # question - it asks first and goes on the undo stack - moved up beside
+        # the count of what it would clear.
+        wipe = QPushButton("Clear all")
+        wipe.setObjectName("BoardClearAll")
+        wipe.setCursor(Qt.PointingHandCursor)
+        wipe.setToolTip(
+            "Remove every clipping showing here, so the next division can be "
+            "started. Ctrl+Z brings them back.")
+        wipe.setStyleSheet(
+            f"#BoardClearAll {{ background: transparent;"
+            f" border: 1px solid {theme.DANGER}44; border-radius: 9px;"
+            f" color: {theme.DANGER}; font-size: 11px; font-weight: 800;"
+            f" padding: 3px 10px; }}"
+            f"#BoardClearAll:hover {{ color: #A21622;"
+            f" border-color: {theme.DANGER}; }}"
+        )
+        wipe.clicked.connect(lambda: self.clearRequested.emit(self.active))
+        self.clear_division_btn = wipe
+        row.addWidget(wipe)
         return strip
 
     def _build_export_row(self) -> QWidget:
@@ -1272,26 +1306,9 @@ class SentimentBoard(QWidget):
             " padding: 7px 14px; font-size: 12px; font-weight: 700; }"
             f"QPushButton:hover {{ background: {theme.ORANGE_WASH}; }}"
         )
-        # Clearing the board for a division. A morning is compiled division by
-        # division, and starting the next one means getting the last one off
-        # the board - which otherwise meant selecting a screenful of clippings
-        # and deleting them by hand.
-        wipe = QPushButton("Clear this division")
-        wipe.setCursor(Qt.PointingHandCursor)
-        wipe.setToolTip(
-            "Remove every clipping showing here, so the next division can be "
-            "started. Ctrl+Z brings them back.")
-        wipe.setStyleSheet(
-            f"QPushButton {{ background: {theme.SURFACE};"
-            f" color: {theme.DANGER};"
-            f" border: 1px solid {theme.DANGER}; border-radius: 11px;"
-            " padding: 7px 14px; font-size: 12px; font-weight: 700; }"
-            f"QPushButton:hover {{ background: {theme.SURFACE};"
-            f" border-color: {theme.DANGER}; }}"
-        )
-        wipe.clicked.connect(lambda: self.clearRequested.emit(self.active))
-        self.clear_division_btn = wipe
-        buttons.addWidget(wipe)
+        # Clearing the board for a division is at the TOP of the board now,
+        # beside the count of what it would clear (_build_heading) - it was
+        # here, among the export buttons, and was not found.
 
         burned.clicked.connect(lambda: self.exportRequested.emit("burned"))
         jpegs.clicked.connect(lambda: self.exportRequested.emit("jpeg"))
@@ -1489,21 +1506,25 @@ class SentimentBoard(QWidget):
 
     # -- totals ------------------------------------------------------------
     def _build_totals(self) -> QWidget:
+        """The seven counts as one line of coloured pills.
+
+        Every one of them still hands back a dict with a "count" label in it,
+        under the same names, so everything that writes the numbers goes on
+        working without knowing they are no longer tiles.
+        """
         strip = QWidget()
         strip.setStyleSheet("background: transparent;")
         row = QHBoxLayout(strip)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(11)
+        row.setSpacing(5)
 
-        self.total_tile = self._tile("TOTAL CLIPPINGS", theme.NAVY, theme.NAVY_WASH,
-                                     None)
+        self.total_tile = self._tile("Total", theme.NAVY, theme.NAVY_WASH, None)
         row.addWidget(self.total_tile["frame"])
         self.tiles: dict[str, dict] = {}
         for section in sentiment.COLUMNS:
             style = theme.SENTIMENT_STYLES[section.value]
-            meta = COLUMN_META[section.value]
-            tile = self._tile(style["label"].upper(), style["colour"], style["bg"],
-                              meta["icon"])
+            tile = self._tile(SHORT_NAMES.get(section.value, style["label"]),
+                              style["colour"], style["bg"], None)
             self.tiles[section.value] = tile
             row.addWidget(tile["frame"])
         return strip
@@ -1512,52 +1533,35 @@ class SentimentBoard(QWidget):
 
     @classmethod
     def _tile(cls, label: str, colour: str, wash: str, icon: str | None) -> dict:
-        """One count tile. Scoped by object name so the frame's border and fill
-        stay on the frame instead of being inherited by the labels inside it."""
+        """One count, as a small coloured pill: the number then the category.
+
+        Scoped by object name so the frame's fill stays on the frame instead of
+        being inherited by the labels inside it. `icon` is accepted and ignored
+        - there is no room for a badge on a pill this size, and the colour
+        already says which category it is.
+        """
         cls._tile_serial += 1
         name_id = f"KpiTile{cls._tile_serial}"
         frame = QFrame()
         frame.setObjectName(name_id)
-        frame.setMinimumHeight(64)
         frame.setStyleSheet(
-            f"#{name_id} {{ background: {wash}; border: 1px solid {colour}2E;"
-            f" border-radius: 14px; }}"
+            f"#{name_id} {{ background: {wash}; border: 1px solid {colour}3A;"
+            f" border-radius: 9px; }}"
             f"#{name_id} QLabel {{ background: transparent; border: none; }}"
         )
         outer = QHBoxLayout(frame)
-        outer.setContentsMargins(15, 9, 13, 10)
-        outer.setSpacing(8)
+        outer.setContentsMargins(8, 3, 8, 3)
+        outer.setSpacing(4)
 
-        column = QVBoxLayout()
-        column.setSpacing(0)
         count = QLabel("0")
         count.setStyleSheet(
-            f"color: {colour}; font-size: 23px; font-weight: 800;"
-            f" letter-spacing: -0.01em;"
-        )
+            f"color: {colour}; font-size: 13px; font-weight: 800;")
         caption = QLabel(label)
         caption.setStyleSheet(
-            f"color: {theme.MUTED}; font-size: 10px; font-weight: 700;"
-            f" letter-spacing: .03em;"
-        )
-        column.addWidget(count)
-        column.addWidget(caption)
-        outer.addLayout(column)
-        outer.addStretch(1)
-
-        if icon:
-            badge = QLabel()
-            badge.setFixedSize(26, 26)
-            pixmap = QPixmap(26, 26)
-            pixmap.fill(Qt.transparent)
-            painter = QPainter(pixmap)
-            drawer = getattr(icons, icon, None)
-            if drawer is not None:
-                drawer(painter, QRectF(3, 3, 20, 20), QColor(colour))
-            painter.end()
-            badge.setPixmap(pixmap)
-            outer.addWidget(badge, 0, Qt.AlignVCenter)
-
+            f"color: {colour}; font-size: 10px; font-weight: 700;"
+            f" letter-spacing: .02em;")
+        outer.addWidget(count)
+        outer.addWidget(caption)
         return {"frame": frame, "count": count}
 
     # -- columns -----------------------------------------------------------

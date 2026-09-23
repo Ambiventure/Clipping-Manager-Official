@@ -22,10 +22,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QDialogButtonBox,
     QLabel,
     QLineEdit,
+    QMenu,
     QProgressBar,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +44,74 @@ from .datefield import DayEdit, refuse_future, today_button
 # the way the department writes it. The dossier is named differently on purpose:
 # that one is per division and says so.
 REPORT_NAME = "PRESS MEDIA COVERAGE OVER NORTHERN RAILWAYS"
+
+#: How many names of their own the office may keep. Five because the box is a
+#: menu and a menu of five is read at a glance; more than that and it wants
+#: searching, which is a different control.
+CUSTOM_NAMES = 5
+
+#: Where the five live in export.json. One list, in slot order, with "" for a
+#: slot nobody has filled - so slot 3 stays slot 3 when slot 2 is emptied.
+CUSTOM_KEY = "custom_names"
+
+
+def custom_names() -> list:
+    """The office's own names, always CUSTOM_NAMES long."""
+    kept = load_settings().get(CUSTOM_KEY) or []
+    names = [str(one or "").strip() for one in kept][:CUSTOM_NAMES]
+    return names + [""] * (CUSTOM_NAMES - len(names))
+
+
+def save_custom_names(names: list) -> None:
+    saved = load_settings()
+    saved[CUSTOM_KEY] = [str(one or "").strip() for one in names][:CUSTOM_NAMES]
+    save_settings(saved)
+
+
+class CustomNamesDialog(QDialog):
+    """The five names, to be typed in and corrected.
+
+    Only the words are kept: the date is put on the end when one is chosen, so
+    a name typed today still dates itself right tomorrow. Anything Windows
+    will not have in a file name is taken out when the file is written
+    (clean_name), and the box says so rather than refusing the typing.
+    """
+
+    def __init__(self, names: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("My names for the file")
+        self.setModal(True)
+        self.resize(520, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 16)
+        outer.setSpacing(12)
+
+        note = QLabel(
+            "Five names of your own. Choosing one puts it in the file name box "
+            "with the date on the end, so there is no need to type the date "
+            "here. Leave a line empty and it is not offered.")
+        note.setWordWrap(True)
+        note.setObjectName("CardHint")
+        outer.addWidget(note)
+
+        self.fields: list = []
+        for slot in range(CUSTOM_NAMES):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"{slot + 1}."))
+            field = QLineEdit(names[slot] if slot < len(names) else "")
+            field.setPlaceholderText("e.g. DAILY PRESS CLIPPINGS — DELHI DIVISION")
+            field.setMaxLength(120)
+            row.addWidget(field, 1)
+            self.fields.append(field)
+            outer.addLayout(row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+
+    def names(self) -> list:
+        return [field.text().strip() for field in self.fields]
 
 
 # Windows will not accept these in a file name, and a masthead occasionally
@@ -157,7 +228,7 @@ class ExportDialog(QDialog):
                  report_date=None, cover_image=None, heading: str = "",
                  cover_baked: bool = False, layout_style: dict | None = None,
                  cover_blocks: list | None = None, name_suffix: str = "",
-                 summary=None):
+                 summary=None, with_cover: bool = True):
         super().__init__(parent)
         self.clips = clips
         # The day counted up (export/summary.Summary), for the optional last
@@ -179,6 +250,10 @@ class ExportDialog(QDialog):
         # picture by the cover card. Saying so keeps the builders from printing
         # both lines a second time on top of it.
         self.cover_baked = cover_baked
+        # The cover card's switch. False and neither builder writes a cover
+        # sheet; the box below still shows the picture row, because turning it
+        # back on should find the cover exactly as it was left.
+        self.with_cover = bool(with_cover)
         self._baked_path = str(cover_image or "") if cover_baked else ""
         self.results: list[str] = []
         self.setWindowTitle("Build the newspad")
@@ -252,13 +327,34 @@ class ExportDialog(QDialog):
         # every file was called before this box existed; typing over it renames
         # BOTH files, so the PDF and the Word document go on being a pair.
         name_row = QHBoxLayout()
+        name_row.setSpacing(7)
+        # Which name the date is being put on the end of: "" is the
+        # department's standing one, anything else is one of their five. Kept
+        # so that changing the date re-dates the name they CHOSE, rather than
+        # dropping them back on the standard one.
+        self._name_base = ""
         self.file_name = QLineEdit(self._usual_name())
+        self.file_name.setCursorPosition(0)
         self.file_name.setToolTip(
             "The name both files are saved under. The extension is added for "
             "you, so there is no need to type .pdf or .docx.")
+        # Narrower than it was: the two buttons beside it are what the name is
+        # usually set with, and a box wide enough for the whole standing name
+        # left no room for them. It still scrolls to show a long name.
+        self.file_name.setMinimumWidth(180)
         reset = QPushButton("Standard name")
         reset.setToolTip("Put the department's usual name back.")
         reset.clicked.connect(self._standard_name)
+        self.custom_btn = QToolButton()
+        # No arrow in the words: a QToolButton set to InstantPopup draws one
+        # itself, and the two together read as "My names ▾ ▾".
+        self.custom_btn.setText("My names")
+        self.custom_btn.setCursor(Qt.PointingHandCursor)
+        self.custom_btn.setToolTip(
+            "Five names of your own. Choosing one puts it in the box with the "
+            "date on the end.")
+        self.custom_btn.setPopupMode(QToolButton.InstantPopup)
+        self.custom_btn.clicked.connect(self._show_custom_menu)
         # Change the date and the suggested name follows it - unless the name
         # has been typed over, in which case it is theirs and is left alone.
         self._name_is_ours = True
@@ -267,7 +363,9 @@ class ExportDialog(QDialog):
         name_row.addWidget(QLabel("File name"))
         name_row.addWidget(self.file_name, 1)
         name_row.addWidget(reset)
+        name_row.addWidget(self.custom_btn)
         layout.addLayout(name_row)
+        self._build_custom_menu()
 
         # --- folder --------------------------------------------------------
         folder_row = QHBoxLayout()
@@ -360,10 +458,61 @@ class ExportDialog(QDialog):
     # ------------------------------------------------------------- choosing
     def _usual_name(self) -> str:
         stamp = self.date.date().toPython()
-        return f"{REPORT_NAME} {stamp.strftime('%d.%m.%Y')}{self.name_suffix}"
+        base = getattr(self, "_name_base", "") or REPORT_NAME
+        return f"{base} {stamp.strftime('%d.%m.%Y')}{self.name_suffix}"
 
     def _standard_name(self) -> None:
+        self._name_base = ""
+        self._name_is_ours = True
         self.file_name.setText(self._usual_name())
+        # Show the START of the name. The box is narrower than the standing
+        # name, and setText leaves the view at the end of it, so what was on
+        # screen was "…E OVER NORTHERN RAILWAYS 23.09.2026" - the tail of a
+        # name nobody could see the front of.
+        self.file_name.setCursorPosition(0)
+
+    # ----------------------------------------------------- the office's five
+    def _build_custom_menu(self) -> None:
+        """The menu under My names. Rebuilt whenever the five change, so a name
+        typed in the editor is on the menu the moment it is saved."""
+        menu = QMenu(self)
+        names = custom_names()
+        for slot, name in enumerate(names, 1):
+            if name:
+                action = menu.addAction(f"{slot}.  {name}")
+                action.triggered.connect(
+                    lambda _checked=False, words=name: self._use_custom(words))
+            else:
+                action = menu.addAction(f"{slot}.  (empty)")
+                action.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Edit my names…").triggered.connect(self._edit_custom)
+        self.custom_btn.setMenu(menu)
+
+    def _show_custom_menu(self) -> None:
+        self.custom_btn.showMenu()
+
+    def _use_custom(self, words: str) -> None:
+        self._name_base = words
+        self._name_is_ours = True      # so the date keeps following the box
+        self.file_name.setText(self._usual_name())
+        self.file_name.setCursorPosition(0)
+
+    def _edit_custom(self) -> None:
+        box = CustomNamesDialog(custom_names(), self)
+        if box.exec() != QDialog.Accepted:
+            return
+        names = box.names()
+        save_custom_names(names)
+        self._build_custom_menu()
+        # A name that was chosen and has now been retyped follows its own
+        # change; one that was emptied falls back to the standing name.
+        if self._name_base and self._name_base not in names:
+            was = self._name_base
+            self._name_base = next(
+                (new for old, new in zip(custom_names(), names) if old == was and new),
+                "")
+            self.file_name.setText(self._usual_name())
         self._name_is_ours = True
 
     def _may_replace(self, folder: Path, base: str) -> bool:
@@ -460,7 +609,8 @@ class ExportDialog(QDialog):
 
         base = clean_name(self.file_name.text())
         if not base:
-            base = f"{REPORT_NAME} {stamp.strftime('%d.%m.%Y')}{self.name_suffix}"
+            base = f"{getattr(self, '_name_base', '') or REPORT_NAME} "\
+                   f"{stamp.strftime('%d.%m.%Y')}{self.name_suffix}"
         # Before anything is written - the settings included - so Cancel leaves
         # everything exactly as it was.
         if not self._may_replace(folder, base):
@@ -517,6 +667,7 @@ class ExportDialog(QDialog):
                     draw_cover_text=not self.cover_baked,
                     heading=style,
                     summary=self._summary_wanted(),
+                    with_cover=self.with_cover,
                 )
                 warnings.extend(result.warnings)
                 made.append(result.path)
@@ -533,6 +684,7 @@ class ExportDialog(QDialog):
                     heading=style,
                     cover_blocks=self.cover_blocks,
                     summary=self._summary_wanted(),
+                    with_cover=self.with_cover,
                 )
                 warnings.extend(result.warnings)
                 made.append(result.path)

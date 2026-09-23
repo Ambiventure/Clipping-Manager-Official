@@ -900,6 +900,25 @@ class CoverCard(QFrame, DesignFile):
         header.addWidget(self.saved_note)
         header.addStretch(1)
 
+        # WHETHER THE REPORT HAS A COVER PAGE AT ALL. Not the same question as
+        # which template or which picture: a report sent round inside an office
+        # often wants no cover sheet, and the only way to get one before this
+        # was to build the report and throw its first page away. Off, no cover
+        # page is written - not a blank one and not a plain one - and the first
+        # clipping is page one. Everything set up below is kept either way, so
+        # switching it back on the next morning brings the same cover back.
+        # The dossier's cover card has had this switch since it was written
+        # (sentiment_cover_card.enable_box); this is the same thing, worded the
+        # same way, on the press report's.
+        self.print_cover = QCheckBox("Enable Cover Page")
+        self.print_cover.setChecked(True)
+        self.print_cover.setCursor(Qt.PointingHandCursor)
+        self.print_cover.setToolTip(
+            "Off: the report has no cover sheet and starts at the first "
+            "clipping. What is set up below is kept either way.")
+        self.print_cover.toggled.connect(self._cover_printing_changed)
+        header.addWidget(self.print_cover)
+
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.setObjectName("CoverReset")
         self.reset_btn.setCursor(Qt.PointingHandCursor)
@@ -1670,7 +1689,22 @@ class CoverCard(QFrame, DesignFile):
         """Only for the fallback path: Option 2 bakes its own heading."""
         return self.option2.title.strip() if self.template == 2 else ""
 
+    def _cover_printing_changed(self, on: bool) -> None:
+        """Grey what is below when there is to be no cover page, so nobody sets
+        up a cover that is never going to print."""
+        body = getattr(self, "body", None)
+        if body is not None:
+            body.setEnabled(on)
+        if not self._loading:
+            self.save()
+
+    def wants_cover(self) -> bool:
+        """Whether the report is to carry a cover page at all."""
+        return bool(self.print_cover.isChecked())
+
     def cover_image(self) -> Optional[str]:
+        if not self.wants_cover():
+            return None
         if self.cover_path and Path(self.cover_path).exists():
             return self.cover_path
         return None
@@ -1681,6 +1715,8 @@ class CoverCard(QFrame, DesignFile):
         Returns ``None`` when there is nothing to place - Option 1 with no artwork -
         and the caller then falls back to the plain cover page it has always drawn.
         """
+        if not self.wants_cover():
+            return None
         if count is not None:
             self._count = count
         try:
@@ -1698,6 +1734,7 @@ class CoverCard(QFrame, DesignFile):
     def _state(self) -> dict:
         return {
             "template": self.template,
+            "print_cover": self.wants_cover(),
             "cover": self.cover_path,
             "heading": self.option2.title,
             "marker": (
@@ -1794,6 +1831,9 @@ class CoverCard(QFrame, DesignFile):
         try:
             self.cover_path = words(data.get("cover"))
             self.template = template
+            # Missing means yes: every cover.json written before this switch
+            # existed belongs to a report that had a cover page.
+            self.print_cover.setChecked(bool(data.get("print_cover", True)))
             self.marker = marker
             self.text = text
             self.option2 = fresh

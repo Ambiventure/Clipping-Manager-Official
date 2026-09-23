@@ -704,6 +704,97 @@ class Arrange(Reorder):
         super().undo()
 
 
+def platform_for(clip) -> str:
+    """Which platform a clipping's post is on, as the office names it.
+
+    The site it was captured from first, because that is what the capture
+    wrote down; the address as a fallback, for a clipping whose outlet was
+    cleared or which came in from an older report.
+    """
+    from ..core import links
+
+    return (links.platform_of(getattr(clip, "outlet", "") or "")
+            or links.platform_of_link(getattr(clip, "url", "") or ""))
+
+
+def social_grouping(rows: list) -> tuple:
+    """The rows with each platform's posts gathered together, and the heading
+    each one is to carry. Returns (new order, {clip id: (key, words)}).
+
+    Each platform's run is gathered at the place its FIRST post already
+    holds, and the posts inside a run keep the order they were in. Everything
+    that is not a post - the newspapers, the electronic coverage - stays
+    exactly where it is. So a list of "3 Facebook, 2 Twitter, 3 Instagram, 2
+    Facebook, 2 Instagram, 3 Twitter" comes out as five Facebook, five
+    Twitter, five Instagram, in that order, because Facebook's first post came
+    first.
+    """
+    from ..core import sections as section_list
+
+    named = []
+    for row in rows:
+        clip = getattr(row, "clip", None)
+        named.append(platform_for(clip) if clip is not None else "")
+
+    order: list = []
+    marks: dict = {}
+    done: set = set()
+    for place, name in enumerate(named):
+        if not name:
+            order.append(rows[place])
+            continue
+        if name in done:
+            continue                        # gathered with the first of its run
+        done.add(name)
+        for index, other in enumerate(named):
+            if other != name:
+                continue
+            row = rows[index]
+            order.append(row)
+            clip = getattr(row, "clip", None)
+            if clip is not None:
+                marks[row.id] = (section_list.key_for(name),
+                                 section_list.tidy(name))
+    return order, marks
+
+
+class GroupSocial(Arrange):
+    """Group the posts by platform and head each run with the platform's name.
+
+    Both halves in one step, because they are one idea: a heading printed once
+    over a run means nothing if the run is not together, and posts gathered
+    with no heading do not say what they are. One Ctrl+Z takes back both.
+    """
+
+    def __init__(self, model: "ClipModel", rows: list, marks: dict, text: str):
+        self.marks = dict(marks)
+        self.was_marks = {}
+        for clip_id in self.marks:
+            clip = model.by_id(clip_id)
+            if clip is not None:
+                self.was_marks[clip_id] = (getattr(clip, "section_key", ""),
+                                           getattr(clip, "section_title", ""))
+        before = {row.id: place for place, row in enumerate(model.rows)}
+        moved = [row.id for place, row in enumerate(rows)
+                 if before.get(row.id, place) != place]
+        super().__init__(model, rows, text, moved_ids=moved)
+
+    def _mark(self, marks: dict) -> None:
+        for clip_id, (key, words) in marks.items():
+            clip = self.model.by_id(clip_id)
+            if clip is not None:
+                clip.section_key = key
+                clip.section_title = words
+
+    def redo(self) -> None:
+        self._mark(self.marks)
+        super().redo()
+
+    def undo(self) -> None:
+        super().undo()
+        self._mark(self.was_marks)
+
+
 class SetPriority(Arrange):
     """A priority bubble: the level, and the place in the list it means.
 

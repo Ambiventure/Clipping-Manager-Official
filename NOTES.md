@@ -5166,3 +5166,62 @@ Facebook posts through their share links, four X posts (Northern Railway's own
 among them), five Instagram posts and reels, and four newspaper stories. The
 glued pair in the middle of the message - two Instagram links with no space
 between them - was found as two, which is core/links doing its job.
+
+
+## The export, the board and the links window (2.0.43)
+
+Six things asked for together. The one with a design decision in it is the
+grouping.
+
+**Grouping posts by platform is a button, not a rule.** The office's own
+example was "3 Facebook, 2 Twitter, 3 Instagram, then 2 Facebook, 2 Instagram
+and 3 Twitter", wanted as five, five and five with the platform named once over
+each run. Doing that automatically at export would have broken the promise the
+export box makes - "in exactly the order shown in the list" - so page 7 of the
+report would no longer have been item 7 of the list. Asked, the office chose a
+button. `commands.GroupSocial` does both halves in ONE step, because they are
+one idea: a heading printed once over a run means nothing if the run is not
+together, and posts gathered with no heading do not say what they are. One
+Ctrl+Z takes back both.
+
+`social_grouping` gathers each platform's run at the place its FIRST post
+already held, keeps the order inside a run, and does not move a newspaper's
+story at all. The heading is `Clip.section_key` + `section_title`, which is the
+machinery that already prints a heading once per run (`layout.section_banners`),
+so the press report needed nothing new. The six platform headings ship on the
+headings list (`core/sections.SHIPPED`) so they can be renamed once for every
+report after it - TWITTER is the office's word, and x.com is X.
+
+The dossier does not use `section_banners` - it heads its pages by category -
+so `build_sentiment` grew a platform line under the category heading, drawn on
+the first clipping of each platform run inside that category, in both the PDF
+and the Word file. It reads the words off the clipping and works nothing out
+from the address: a dossier must not start naming platforms the report has not
+been told to name.
+
+**No cover page at all** is a switch on the cover panel, which the dossier's
+cover panel has had all along. `with_cover=False` means no sheet is written -
+not a blank one, not the plain count-and-date one - so `_number_pages` had to
+learn where to start counting (`first=0`), the Word file had to stop putting a
+page break before its first clipping, and the report's record had to say
+`cover=False` or a reader would count the first clipping as furniture.
+
+**The board's counts** were six tiles 64 pixels tall across their own band -
+most of a laptop's first screenful for seven numbers. They are pills now, on
+the line that already carries the division's count, each still in its category's
+colour. Everything that writes the numbers was left alone: `_tile` still hands
+back a dict with a "count" label in it. Moving them up made that line long
+enough to push the board sideways at 1180, so the sentence beside the title
+elides - it is the only thing on the line that is not a number or a control.
+
+**The links window** numbers every link by where it is in the list rather than
+by what the sender typed, because the sender's numbering is often missing and
+more often wrong once two glued links have been split apart; and the line above
+the list counts them by site. It closes itself about two seconds after the last
+clipping, but ONLY when every link went through: a window that closed over "3
+are not public" would have thrown away the only notice of it.
+
+**The heading and layout panel wraps** when it runs out of room - it already
+did at 1180 before any of this - and measured at 1366 the dossier's strip goes
+to two rows for a grouping button labelled anything longer than about "Group
+posts". Hence "Group by platform", with the sentence in the tooltip.
