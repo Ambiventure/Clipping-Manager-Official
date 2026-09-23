@@ -5131,3 +5131,38 @@ again only where that hid something new. A page with no headline to build a
 cutting round is now named by its own `<h1>` where it has one, then by what it
 tells a site to print when it is shared, and only then by the wording on its
 tab.
+
+
+## A link from Facebook's Share button (2.0.42)
+
+The office's own WhatsApp list, tried the morning after 2.0.41 went out: 16
+links, 13 captured, and the three that failed were all Facebook - all three of
+the form `facebook.com/share/p/1JsEoxaa6y/`, which is what Facebook's Share
+button gives and therefore most of what arrives. Each was put down as "not
+public" although the post was public and there that minute (Indian Express,
+Obc Prabhat, Rahul Baba ki Masti).
+
+**A share link stands for a post without naming it.** The plugin needs the
+post's own address and refuses the short one. Measured on that Indian Express
+link, signed out:
+
+  * `plugins/post.php?href=<the share link>` -> "no longer available"
+  * `href=<the page's own canonical address>`, which is the form with the
+    post's words and number in it (`/posts/against-all-odds-…/1674736980676764/`)
+    and is also what its `og:url` says -> **also** "no longer available"
+  * `href=<where the browser came to rest>`, the `pfbid…` form -> the post
+
+So the address to ask for is the one the BROWSER ends on, not the one the page
+calls itself. `embedcard.needs_resolving` marks the forms worth opening for
+(`/share/p|v|r/` and `fb.watch`), `webshot._resolve` opens the link on the page
+that is about to do the capture anyway and reads `location.href` until it stops
+looking like a share link (six seconds, asked every 0.6), and
+`embedcard.resolved` tidies it. Whatever the page shows meanwhile - the post,
+or a wall - is not looked at: only where the browser was left. A share link
+that does not move is captured exactly as it was sent, as before.
+
+The list then came back 16 of 16 with nobody signed in to anything: three
+Facebook posts through their share links, four X posts (Northern Railway's own
+among them), five Instagram posts and reels, and four newspaper stories. The
+glued pair in the middle of the message - two Instagram links with no space
+between them - was found as two, which is core/links doing its job.

@@ -81,13 +81,46 @@ _THREADS_POST = re.compile(r"(?i)/@([A-Za-z0-9._]{1,40})/post/([A-Za-z0-9_-]{5,3
 #: itself uses, /feed/update/urn:li:activity:1234567890123.
 _LINKEDIN_POST = re.compile(r"(?i)(?:activity[:-]|ugcPost[:-])(\d{10,25})\b")
 #: A Facebook address that names one post rather than a person or a page:
-#: /posts/…, /permalink/…, ?story_fbid=…, /videos/…, /photo(s)/…, /share/p/…,
-#: /reel/…, /notes/…, and the /watch/?v= form.
+#: /posts/…, /permalink/…, ?story_fbid=…, /videos/…, /photo(s)/…, /reel/…,
+#: /notes/…, and the /watch/?v= form. NOT the share links below: they stand
+#: for a post rather than naming one, and the plugin cannot take them.
 _FACEBOOK_POST = re.compile(
     r"""(?xi)
       /posts?/ | /permalink | story_fbid= | /videos?/ | /photos?/ | /photo\b
-    | /share/(?:p|v|r)/ | /reel/ | /notes?/ | /watch | /media/set | fbid=
+    | /reel/ | /notes?/ | /watch | /media/set | fbid=
     """)
+
+#: WHAT A SHARE BUTTON GIVES, which is most of what arrives on WhatsApp:
+#: "facebook.com/share/p/1JsEoxaa6y/", and "fb.watch/xxxx" for a video. It
+#: stands for a post without naming it, and handing it to the plugin gets
+#: "this post is no longer available" even when the post is public and there
+#: this minute - measured on three of the office's own links. Opening it once
+#: says which post it is; needs_resolving marks the ones worth opening for.
+_SHORTLINK = re.compile(
+    r"(?i)^https?://(?:[a-z0-9-]+\.)*(?:facebook\.com/share/[pvr]/|fb\.watch/)")
+
+
+def needs_resolving(url: str) -> bool:
+    """Whether this address stands for a post rather than naming one, so the
+    post it stands for has to be found before a card can be asked for."""
+    return bool(_SHORTLINK.match((url or "").strip()))
+
+
+def resolved(here: str) -> str:
+    """The address a share link came to rest at, tidied - or "" when it did
+    not move, so nothing was learnt.
+
+    It is where the BROWSER ended up that is wanted, not what the page calls
+    itself: measured on the office's own share link, the page's own canonical
+    address and its og:url are the form with the post's words and number in it
+    ("/posts/against-all-odds-…/1674736980676764/"), and the plugin refuses
+    that as firmly as it refuses the share link. The address the browser is
+    left on is the pfbid form, and the plugin draws that.
+    """
+    here = (here or "").strip()
+    if not here or needs_resolving(here) or not _host(here):
+        return ""
+    return _trimmed(here)
 
 #: The sites whose posts have a public card here. A site not in it is captured
 #: the way it always was.

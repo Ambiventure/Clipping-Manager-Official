@@ -1000,6 +1000,29 @@ def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
     is a few seconds old (see _look_again).
     """
     card = embedcard.card_for(url)
+    if card is None and embedcard.needs_resolving(url):
+        # A share link. Opened once, on the page that is about to do the
+        # capture anyway, to see which post it stands for; whatever the page
+        # then shows - the post, or a wall - the address it came to rest at is
+        # the post's own, and that is what the card is asked for. Nothing is
+        # signed in to, and if it does not move, the link is captured as it is.
+        real = _resolve(page, url)
+        if real:
+            card = embedcard.card_for(real)
+            if card is not None:
+                notes_first = {"stood_for": real}
+                try:
+                    shot = _capture_at(page, card.url, url, settle, card=card)
+                except ShotError as bad:
+                    if bad.kind not in ("card-gone", "not-a-story", "gone"):
+                        raise
+                    try:
+                        shot = _capture_at(page, real, url, settle)
+                    except ShotError:
+                        raise bad from None
+                    notes_first.update(card_first=card.url, card_failed=str(bad))
+                shot.notes.update(notes_first)
+                return shot
     if card is None:
         # No card for this one. It is still opened the way a computer would
         # ask for it, so a link copied on a phone does not bring a page laid
@@ -1022,6 +1045,37 @@ def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
             raise bad from None
     shot.notes.update(notes_of)
     return shot
+
+
+#: How long a share link is given to arrive at the post it stands for, and
+#: how often it is asked. A redirect through the site's own page takes about a
+#: second; anything slower than this is not worth holding a list of twelve up
+#: for, and the link is then captured as it was sent.
+RESOLVE_SECONDS = 6.0
+RESOLVE_WAIT = 0.6
+
+
+def _resolve(page: _Wire, url: str) -> str:
+    """Which post a share link stands for: the address the browser comes to
+    rest at. "" when it does not move, or cannot be opened."""
+    try:
+        page.call("Emulation.setDeviceMetricsOverride", seconds=CALL_SECONDS,
+                  width=PAGE_WIDE, height=PAGE_TALL, deviceScaleFactor=1,
+                  mobile=False)
+        page.call("Page.navigate", url=url, seconds=PAGE_SECONDS)
+    except ShotError:
+        return ""
+    until = time.time() + RESOLVE_SECONDS
+    while time.time() < until:
+        time.sleep(RESOLVE_WAIT)
+        try:
+            here = _json(_evaluate(page, _WHICH_PAGE, CALL_SECONDS)) or {}
+        except (_ScriptFailed, ShotError):
+            return ""
+        found = embedcard.resolved(str(here.get("href") or ""))
+        if found:
+            return found
+    return ""
 
 
 def _capture_at(page: _Wire, opening: str, keep: str,

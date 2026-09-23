@@ -16,6 +16,17 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.42
+
+Fixed
+
+  * **A link from Facebook's Share button is captured.** Most of the Facebook
+    links that arrive on WhatsApp are the short "facebook.com/share/p/…" kind,
+    and every one of them was being put down as "not public" even when the
+    post was there and public. The short link stands for a post without naming
+    it, so the program now opens it once to see which post it is, and asks for
+    that post's card. Still with nobody signed in to anything.
+
 ## 2.0.41
 
 Changed
