@@ -50,23 +50,30 @@ INSIDE_NAME = "Browser inside the app"
 CHROME_NAME = "My Chrome"
 #: Kept under its old name for anything that still asks for it.
 INSIDE = INSIDE_NAME
-SIGN_IN_TIP = ("X and Facebook only show a post to somebody signed in. Sign in "
-               "opens a browser window of the program's own, where you sign in "
-               "once; after that those posts are captured in the background. "
-               "Your everyday Chrome is not touched, and the program never "
-               "sees your password. Chrome will not lend the program the "
-               "sign-in you already have - for that, choose My Chrome.")
-INSIDE_TIP = ("The browser inside the program. Sign in there once - X, "
-              "Facebook, Instagram - and every capture after that is signed in, "
-              "with nothing on the screen while twelve links are captured. It has "
-              "no ad-blocker, and it clears \"Ad-Blocker Detected\" boxes and "
-              "cookie notices itself. Your everyday Chrome is not touched. "
-              "Double-click a link to look at it there and capture it as you see "
-              "it; right-click Browser inside the app for sign-ins and what the "
-              "sites have saved.")
+SIGN_IN_TIP = ("A post on X, Facebook, Instagram, Threads or LinkedIn is "
+               "captured with nobody signed in to anything: the program asks "
+               "the site for the post's own public card - the one a newspaper "
+               "quoting it would put in its page - so there is no wall and no "
+               "feed round it. Signing in is only for a post that is not "
+               "public at all, and for a paper that wants an account before it "
+               "shows a story. Your everyday Chrome is not touched, and the "
+               "program never sees your password.")
+INSIDE_TIP = ("The browser inside the program. Posts are captured without "
+              "signing in to anything - the program asks each site for the "
+              "post's own public card - with nothing on the screen while twelve "
+              "links are captured. It has no ad-blocker, and it clears "
+              "\"Ad-Blocker Detected\" boxes and cookie notices itself. Your "
+              "everyday Chrome is not touched. Double-click a link to look at it "
+              "there and capture it as you see it; right-click Browser inside the "
+              "app for sign-ins and what the sites have saved.")
 CHROME_TIP = fromchrome.TAKE_TIP
 NEEDS_SIGN_IN = "{count} {needs} a sign-in: {choices}."
+#: A post the site will not show anybody: taken down, or never public. No
+#: sign-in of the program's own reaches it, so the only thing worth offering
+#: is the Chrome they are already signed in to.
+NOT_PUBLIC = "{count} {is_} not public: {choices}."
 WALLED_WHY = "needs a sign-in"
+NOT_PUBLIC_WHY = "not public"
 AD_BLOCK_ROW = "   · your Chrome may show an Ad-Blocker Detected box"
 
 #: Remembered in the export settings file, like the phone-bar tidy switch.
@@ -148,6 +155,10 @@ class LinkState:
     why: str = ""
     clip_id: object = None
     how: str = ""
+    #: Why it failed, in one word, as core/webshot named it - so the count
+    #: line can tell a post with no public card from a page that would not
+    #: open at all.
+    kind: str = ""
 
 
 class Catcher(QObject):
@@ -928,6 +939,13 @@ class LinksDialog(QDialog):
     def _walled(self) -> list:
         return [row for row in self.found if self._state(row).status == "walled"]
 
+    def _not_public(self) -> list:
+        """The posts whose card came back saying there is no public post - and
+        whose own page, tried after it, said no more."""
+        return [row for row in self.found
+                if self._state(row).status == "failed"
+                and (self._state(row).kind or "") == "card-gone"]
+
     def _refresh_states(self, repaint: bool = True) -> None:
         """A clipping made from a link that has since been undone or deleted
         gives the link back, ticked; one redone takes it again - in the
@@ -1109,6 +1127,7 @@ class LinksDialog(QDialog):
             self._retry.append(found)
         else:
             state.status, state.why, state.clip_id = "failed", caught.why, None
+            state.kind = caught.kind or ""
         self._repaint(found.url)
 
     @staticmethod
@@ -1169,6 +1188,15 @@ class LinksDialog(QDialog):
         it as links that do it."""
         walled = self._walled()
         if not walled:
+            gone = self._not_public()
+            if gone and sys.platform == "win32":
+                many = len(gone)
+                self.count.setTextFormat(Qt.RichText)
+                self.count.setText(html.escape(text) + "  " + NOT_PUBLIC.format(
+                    count=many, is_="are" if many != 1 else "is",
+                    choices=(f"<a href='chrome-gone'>take "
+                             f"{'them' if many != 1 else 'it'} from my Chrome</a>")))
+                return
             self._plain_count(text)
             return
         site = sitedata.site_of(walled[0].site)
@@ -1183,6 +1211,11 @@ class LinksDialog(QDialog):
             count=many, needs="need" if many != 1 else "needs", choices=choices))
 
     def _count_link(self, href: str) -> None:
+        if href == "chrome-gone":
+            gone = self._not_public()
+            if gone:
+                self._take_from_chrome(gone)
+            return
         walled = self._walled()
         if not walled:
             return

@@ -5059,3 +5059,75 @@ named (three were never named), Hindi correct; 18.09 253 clippings, 158 named;
 the burned dossier 12 clippings, 10 names off the bands, 12 bands cropped,
 0 inked pixels lost; 47 sample documents compared against 2.0.39, only our own
 report reads differently.
+
+
+## Capturing a post without signing in to anything (2.0.41)
+
+The morning used to begin with a sign-in. A link to a post on X, Facebook or
+Instagram opens, for anybody signed out, a page that is mostly a wall, so the
+program asked the office to sign in - in the browser inside the app, or by
+taking the picture from their own Chrome. That put somebody's account into the
+program, and it broke the day a site signed them out.
+
+**Every one of those sites already publishes the post a second way.** It is
+what a newspaper quoting a post puts inside its own page: X's
+`platform.twitter.com/embed/Tweet.html?id=`, Facebook's
+`plugins/post.php?href=`, Instagram's `/p/CODE/embed/captioned/`, Threads' and
+LinkedIn's equivalents. It is meant to be read by anybody, it is served to a
+browser that has never signed in to anything, and it carries the post alone -
+the writer, the words, the picture, the date - with no feed, no wall and no
+banner. `core/embedcard.py` turns a post's link into that address; plain text
+work, no network, and it says nothing for a link that names a person, a page
+or a search rather than one post.
+
+Measured signed out, in the program's own hidden Chrome with no account of any
+kind: a page's Facebook post whole, Hindi and photograph and reaction counts
+included; three Instagram reels with their captions; X with its writer and
+date. A morning's list of five mixed links - three posts, two stories - came
+back five of five, none of them signed in, about 2.8 s each.
+
+**Only the address OPENED changes.** The cutting keeps the post's own link and
+its own site, because that is what the report prints and what somebody clicks
+a year later. `capture_over` opens the card, `_capture_at` files the shot under
+the link that was sent, and the site is put back afterwards - the card's own
+host is platform.twitter.com, which is nobody's idea of where the post was.
+
+**The window is the lever, not the site's width parameter.** Facebook's plugin
+ignores `width` when the card is opened on its own - measured at 500, 620 and
+750, all one size - and fills whatever window it is given. At the program's
+usual 820 an upright photograph came out with a black band down each side, and
+X's card, which stops at 550, came out with white to the right of it. Each
+card now draws in a window of its own width (`embedcard.WINDOWS`), and `_cut`
+takes that width rather than PAGE_WIDE.
+
+**A card is not a news page**, so `CLEAR_CLUTTER` stops at the top of one: the
+rules below it are written for a story with adverts round it, and they read a
+card wrongly - X's card is one `<article>` laid over the page, which the
+pinned-over-the-page rule hides. What is taken off a card is named: a cookie
+notice, and Instagram's own comment box and "View more on Instagram" button,
+which are controls for somebody reading on the site rather than part of the
+post being quoted. `FIND_BLOCK` cuts a card to everything painted on it -
+every picture, and every element with writing of its own - which is tighter
+than the body and works the same on all five sites.
+
+**Where there is no public post behind the address** - taken down, or shown
+only to the writer's friends - the card says so in the site's own words, in the
+middle of the card rather than its first line ("Instagram / Instagram / The
+link to this photo may be broken"), so the whole of its writing goes back and
+`embedcard.gone` reads it. The post's own page is then tried after it, the old
+way, because somebody who IS signed in may still be shown it; only if that
+fails too is anybody told, and what they are told is that the post is not
+public, not that they need to sign in. A card that comes to nothing for any
+other reason is treated the same way, so a site that changes the shape of its
+cards one morning cannot send the whole office off to sign in to it.
+
+Signing in still exists, for a post that is not public and for a paper that
+wants an account before it shows a story. It is no longer how the morning
+starts.
+
+Also: the clutter is cleared once more, after the pictures arrive, which is
+when a late cookie bar or newsletter box appears - and the cutting is measured
+again only where that hid something new. A page with no headline to build a
+cutting round is now named by its own `<h1>` where it has one, then by what it
+tells a site to print when it is shared, and only then by the wording on its
+tab.

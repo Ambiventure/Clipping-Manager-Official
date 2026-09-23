@@ -58,6 +58,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from . import embedcard
+
 #: How wide the page is laid out, in CSS pixels. See the note above.
 PAGE_WIDE = 820
 PAGE_TALL = 1500
@@ -127,6 +129,12 @@ POST_NEEDS_SIGN_IN = ("that post could not be read. Either it needs you to be "
                       "signed in - sign in to it in the browser inside the "
                       "app, or take it from your Chrome - or the post has been "
                       "taken down.")
+#: The card came, and said there is no public post behind the address. Said
+#: only after the post's own page has been tried as well, so by the time
+#: anybody reads it both ways have been.
+NO_PUBLIC_POST = ("that post is not public - it has been taken down, or it was "
+                  "only ever shown to the writer's friends. Open it in your "
+                  "browser to see, and take the picture from there.")
 NOT_A_STORY = "nothing on that page looked like a story"
 UNREADABLE = "the page could not be read"
 #: For a page captured in the background: it was sent to a blank page to
@@ -696,6 +704,13 @@ def refusal(found: dict) -> Optional[ShotError]:
         return ShotError(DID_NOT_OPEN, kind="gone")
     if found.get("blocked"):
         return ShotError(str(found["blocked"]), kind="sign-in")
+    # A CARD WITH NO POST BEHIND IT. The site served the card and drew its own
+    # words on it instead of the post: taken down, or never public. It is not
+    # a sign-in wall - nobody signed in would see it either - so it is its own
+    # answer, and capture_over tries the post's own page before anybody is
+    # told, because somebody signed in may still be shown a friends-only post.
+    if found.get("card") and embedcard.gone(str(found.get("cardText") or "")):
+        return ShotError(NO_PUBLIC_POST, kind="card-gone")
     try:
         width, height = float(found["width"]), float(found["height"])
     except (KeyError, TypeError, ValueError):
@@ -703,6 +718,13 @@ def refusal(found: dict) -> Optional[ShotError]:
     if width < 80 or height < 80:
         host = (found.get("site") or "").lower()
         social = any(host == name or host.endswith("." + name) for name in SOCIAL_SITES)
+        # A CARD THAT CAME TO NOTHING is never answered with "sign in". The
+        # card is served to anybody, so a sign-in would not have helped; and a
+        # site that changes the shape of its card one morning must not send
+        # the whole office off to sign in to it. Called card-gone, which is
+        # what capture_over tries the post's own page for.
+        if found.get("card"):
+            return ShotError(NO_PUBLIC_POST, kind="card-gone")
         if social:
             return ShotError(POST_NEEDS_SIGN_IN, kind="sign-in")
         return ShotError(NOT_A_STORY, kind="not-a-story")
@@ -804,14 +826,18 @@ class _LookAgain(Exception):
     it is prepared and looked at again (capture_over)."""
 
 
-def _cut(page: _Wire, url: str, notes: dict, as_is: bool, patient=None) -> Shot:
+def _cut(page: _Wire, url: str, notes: dict, as_is: bool, patient=None,
+         window: int = 0) -> Shot:
     """From a prepared page to a Shot: clear, find, wait, fit, shoot, check.
 
     `as_is` is the page somebody is looking at: its layout width is never
     changed and its videos are left alone. `patient`, when given, is asked
     whether a page that gives only itself to cut is worth another look; if it
-    says so, nothing is pictured and _LookAgain is raised.
+    says so, nothing is pictured and _LookAgain is raised. `window` is how wide
+    the page is laid out - PAGE_WIDE for a news page, and the card's own width
+    for a post's card, which fills whatever it is given.
     """
+    window = window or PAGE_WIDE
     from .blockjs import (CHECK_KEPT, CLEAR_CLUTTER, POSTER_FOR_PLAYER, SCROLL_TO,
                           WAIT_BLOCK)
 
@@ -822,7 +848,15 @@ def _cut(page: _Wire, url: str, notes: dict, as_is: bool, patient=None) -> Shot:
     notes["poster"] = _soft(page, POSTER_FOR_PLAYER, call=False)
     notes["waited"] = _json(_soft(page, WAIT_BLOCK, _clip_of(found), BLOCK_WAIT_MS,
                                   seconds=BLOCK_WAIT_MS / 1000 + SCRIPT_SECONDS))
-    if notes["waited"].get("late") or str(notes["poster"]).startswith("poster"):
+    # CLEARED AGAIN, NOW THE PICTURES ARE IN. A cookie bar, a newsletter box or
+    # an advert that needed its own picture arrives with them, after the first
+    # clearing and after the cutting was measured. Cheap, and it hides nothing
+    # it hid before; where it did hide something new, the cutting is measured
+    # again, because the page under it has moved.
+    later = _json(_soft(page, CLEAR_CLUTTER, {"asIs": as_is}), default={})
+    notes["cleared_later"] = later.get("fresh", 0) if isinstance(later, dict) else 0
+    if (notes["waited"].get("late") or str(notes["poster"]).startswith("poster")
+            or notes["cleared_later"]):
         found = _find(page)
 
     # Measured once, before any fitting: how wide the page's window is inside
@@ -832,8 +866,8 @@ def _cut(page: _Wire, url: str, notes: dict, as_is: bool, patient=None) -> Shot:
     # was set to 820 x 1500 before it was opened; a page somebody is looking at
     # keeps its own size unless its cutting is taller than its window.
     base_tall = PAGE_TALL if not as_is else int(start.get("ih") or PAGE_TALL)
-    current = (PAGE_WIDE, PAGE_TALL) if not as_is else (0, 0)
-    client_w = int(start.get("cw") or PAGE_WIDE)
+    current = (window, PAGE_TALL) if not as_is else (0, 0)
+    client_w = int(start.get("cw") or window)
     shot_data = b""
     moved = 0.0
     for attempt in (1, 2):
@@ -844,10 +878,10 @@ def _cut(page: _Wire, url: str, notes: dict, as_is: bool, patient=None) -> Shot:
         need_w = int(math.ceil(clip["x"] + clip["width"]))
         wide = current[0]
         if not as_is:
-            wide = PAGE_WIDE
+            wide = window
             if need_w > client_w:
                 wide = min(max(need_w, int(found.get("docWidth") or need_w))
-                           + (PAGE_WIDE - client_w), WIDEST)
+                           + (window - client_w), WIDEST)
         tall = max(base_tall, int(math.ceil(clip["height"])) + 40)
         want = (wide, tall if (not as_is or tall != base_tall) else 0)
         if want != current:
@@ -942,6 +976,16 @@ def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
     """One page, as a cutting, over any DevTools wire - headless Chrome's or
     the embedded browser's parked page. Raises ShotError, never anything else.
 
+    A LINK TO A POST OPENS THE POST'S PUBLIC CARD (core/embedcard), not the
+    post's own page: the card is the same post as the site hands a newspaper
+    quoting it, it is served to a browser that has never signed in to
+    anything, and it carries the post alone - no feed, no wall, no "open in
+    the app". Nobody has to sign in to anything to capture the morning. Only
+    the address OPENED changes: the cutting keeps the post's own link, and its
+    own site, which is what the report prints. Where the card says there is no
+    public post behind the address, the post's own page is tried after it, the
+    old way, because somebody who IS signed in may still be shown it.
+
     The page is opened at 820 pixels, prepared (its structure, its lazy
     pictures, its fonts), cleared of adverts and walls, measured, fitted and
     pictured inside the window. A page that stops answering is sent to a blank
@@ -955,10 +999,40 @@ def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
     nothing to cut, only itself, or a sign-in wall is looked at again once it
     is a few seconds old (see _look_again).
     """
+    card = embedcard.card_for(url)
+    if card is None:
+        # No card for this one. It is still opened the way a computer would
+        # ask for it, so a link copied on a phone does not bring a page laid
+        # out for a phone with "open in the app" across the top of it.
+        return _capture_at(page, embedcard.desktop_form(url), url, settle)
+    notes_of = {}
+    try:
+        shot = _capture_at(page, card.url, url, settle, card=card)
+    except ShotError as bad:
+        if bad.kind not in ("card-gone", "not-a-story", "gone"):
+            raise
+        # The card came to nothing. The post's own page is tried once, the way
+        # it was tried before there were cards: a post shown only to friends
+        # is there for somebody signed in, and a site that changes the shape
+        # of its cards one morning must not take the morning with it.
+        notes_of = {"card_first": card.url, "card_failed": str(bad)}
+        try:
+            shot = _capture_at(page, url, url, settle)
+        except ShotError:
+            raise bad from None
+    shot.notes.update(notes_of)
+    return shot
+
+
+def _capture_at(page: _Wire, opening: str, keep: str,
+                settle: float = SETTLE_SECONDS, card=None) -> Shot:
+    """`opening` is opened; the cutting is filed under `keep`. The two differ
+    only for a post captured through its public card."""
     from .blockjs import PREPARE_PAGE
 
     began = time.time()
-    notes: dict = {}
+    notes: dict = {"card": card.note} if card is not None else {}
+    window = card.window if card is not None else PAGE_WIDE
     looked: set = set()
     try:
         try:
@@ -967,16 +1041,17 @@ def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
                 if not _unstick(page):
                     raise ShotError(LEFT_STUCK, kind="stopped", unopened=True)
             page.call("Emulation.setDeviceMetricsOverride", seconds=CALL_SECONDS,
-                      width=PAGE_WIDE, height=PAGE_TALL, deviceScaleFactor=SHARPNESS,
+                      width=window, height=PAGE_TALL, deviceScaleFactor=SHARPNESS,
                       mobile=False)
-            page.call("Page.navigate", url=url, seconds=PAGE_SECONDS)
+            page.call("Page.navigate", url=opening, seconds=PAGE_SECONDS)
             time.sleep(max(0.5, settle))
             for step in range(1, MOVES + 1):
                 notes["prepare"] = _json(_soft(page, PREPARE_PAGE, PREPARE_LIMITS,
                                                seconds=PREPARE_SECONDS))
                 patient = (lambda: _look_again(page, notes, looked)) if step < MOVES else None
                 try:
-                    shot = _cut(page, url, notes, as_is=False, patient=patient)
+                    shot = _cut(page, keep, notes, as_is=False, patient=patient,
+                                window=window)
                     break
                 except _LookAgain:
                     notes.setdefault("looked_again", []).append("page")
@@ -995,6 +1070,11 @@ def capture_over(page: _Wire, url: str, settle: float = SETTLE_SECONDS) -> Shot:
             raise
         _unstick(page)
         raise ShotError(STOPPED, kind="stopped") from None
+    if card is not None:
+        # The card's own address is platform.twitter.com; the post is X's.
+        # The cutting is filed under the site the office was sent.
+        shot.site = card.site
+        shot.kind = "post"
     shot.notes["seconds"] = round(time.time() - began, 2)
     return shot
 

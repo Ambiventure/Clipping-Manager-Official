@@ -59,6 +59,16 @@ BODY_RUN = 620
 #: Nothing taller than this is ever captured, whatever the page looks like.
 MOST_TALL = 2200
 
+#: The address of a post's public card - what core/embedcard asks a site for
+#: when a link points at a post. A twin of embedcard.is_card, in the page's own
+#: language; test_embedcard holds the two to the same answers. A card is never
+#: a wall, never carries an advert, and is cut to its own edges.
+CARD_PAGE = (r"/^https:\/\/platform\.twitter\.com\/embed\/"
+             r"|\/plugins\/post\.php"
+             r"|instagram\.com\/(?:p|reel|tv)\/[^\/]+\/embed"
+             r"|threads\.(?:net|com)\/@[^\/]+\/post\/[^\/]+\/embed"
+             r"|linkedin\.com\/embed\/feed\/update\//i")
+
 #: Shared by every script that changes the page: what an attribute was before
 #: the first change, kept on the element itself so it can be put back.
 _KEEP = r"""
@@ -179,6 +189,43 @@ CLEAR_CLUTTER = r"""
 ((opts) => {
   opts = opts || {};
   /*KEEP*/
+  /*CARD*/
+  // A CARD IS ALREADY ONLY THE POST. It is what a site hands a newspaper to
+  // put in its own page: one post, no feed, no rail, no advert, nothing
+  // pinned over it. Everything below is written for a news page and would
+  // read a card wrongly - X's card is one <article> laid over the page, which
+  // the pinned-over-the-page rule hides, and the "open in the app" strip at
+  // the foot of Instagram's card is part of the card the office is quoting,
+  // not a banner over somebody's reading. So on a card this stops here, and
+  // the only thing looked for is the cookie notice a site may still draw over
+  // it (never the card itself, which is why it is asked for by name).
+  if (card) {
+    const notices = [];
+    const drop = (el, why) => {
+      const r = el.getBoundingClientRect();
+      // Never anything big: the post itself is the big thing on a card, and
+      // a rule that could hide it is not worth having.
+      if (r.width < 3 || r.height < 3 || r.height > 120) return;
+      setStyle(el, 'display', 'none');
+      el.setAttribute('data-clip-hidden', why);
+      notices.push(why + ' ' + el.tagName.toLowerCase());
+    };
+    for (const el of document.querySelectorAll(
+        '[data-cookiebanner], [id*="cookie" i][role="dialog"], [class*="cookie-banner" i]')) {
+      if (el.getBoundingClientRect().height < innerHeight * 0.5) drop(el, 'cookie notice');
+    }
+    // A card's own controls. Instagram ends its card with a box to write a
+    // comment in and its logo again, and puts a "View more on Instagram"
+    // button under the picture: both are for somebody reading it on the site,
+    // and neither is part of the post being quoted. Asked for by the names
+    // Instagram gives them, so nothing else can be caught by them, and the
+    // card's "this post is not available" box (EmbedIsBroken) is left alone -
+    // its words are how the program knows there is no post.
+    for (const el of document.querySelectorAll('.Footer, .PrimaryCTA')) {
+      drop(el, "the card's own button");
+    }
+    return JSON.stringify({ card: true, names: notices, fresh: notices.length });
+  }
   const words = el => (el.innerText || '').trim();
   const vis = el => { const r = el.getBoundingClientRect(); return r.width > 2 && r.height > 2; };
   const short = el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
@@ -479,6 +526,7 @@ CLEAR_CLUTTER = r"""
 FIND_BLOCK = r"""
 (() => {
   /*KEEP*/
+  /*CARD*/
   const seen = r => r.width > 2 && r.height > 2;
   const area = r => r.width * r.height;
   const words = el => (el.innerText || '').trim();
@@ -587,7 +635,7 @@ FIND_BLOCK = r"""
     .sort((a, b) => (a.boxed - b.boxed) || (a.bare - b.bare) || (area(b.r) - area(a.r)));
   const head = heads[0];
 
-  if ((wall || social) && !own && !(head && !social)) {
+  if (!card && (wall || social) && !own && !(head && !social)) {
     return JSON.stringify({
       blocked: social
         ? 'that post could not be read. Either it needs you to be signed in - sign in to it in '
@@ -605,7 +653,38 @@ FIND_BLOCK = r"""
   const rails = [];
   const notes = [];
 
-  if (head && !(social && own)) {
+  if (card) {
+    // THE CARD, CUT TO ITS OWN EDGES. Its page holds nothing else, so the
+    // cutting is everything painted on it: every picture, and every element
+    // with writing of its own. Taking the body instead left the card sitting
+    // in whatever width the window happened to be - X draws 550 of the 820 -
+    // with the rest white down one side.
+    kind = 'post';
+    const ink = [];
+    const walk = (el, depth) => {
+      if (depth > 24) return;
+      for (const c of el.children) {
+        const r = c.getBoundingClientRect();
+        const st = getComputedStyle(c);
+        if (!seen(r) || st.visibility === 'hidden' || st.display === 'none'
+            || parseFloat(st.opacity) === 0) continue;
+        if (c.matches('img, video, svg, canvas, picture, iframe')) { ink.push(r); continue; }
+        let own = '';
+        for (const n of c.childNodes) if (n.nodeType === 3) own += n.nodeValue;
+        if (own.trim()) ink.push(r);
+        walk(c, depth + 1);
+      }
+    };
+    walk(document.body, 0);
+    const face = document.body.getBoundingClientRect();
+    box = ink.length ? union(ink) : { left: face.left, right: face.right, top: face.top, bottom: face.bottom };
+    // Never wider or taller than the card's own page.
+    box.left = Math.max(box.left, face.left); box.right = Math.min(box.right, face.right);
+    box.top = Math.max(box.top, face.top);
+    title = words(document.body).split('\n').filter(Boolean).slice(0, 2).join(' ');
+    kept.push({ name: 'post', el: document.body });
+    notes.push('card, ' + ink.length + ' painted');
+  } else if (head && !(social && own)) {
     kind = 'story';
     title = words(head.el);
     const hr = head.r;
@@ -803,7 +882,23 @@ FIND_BLOCK = r"""
     kind = 'page';
     const r = document.body.getBoundingClientRect();
     box = { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
-    title = (document.title || '').trim();
+    // WHAT THE PAGE CALLS ITSELF. Its own <h1> first, even a short one - the
+    // headline picked for the cutting had to be longer than fifteen letters
+    // to be the thing a cutting is built round, but as a NAME a short one is
+    // still the page's own and still better than the tab's wording. Then
+    // what the page tells a site to print when it is shared (og:title), which
+    // is the headline without the paper's name on the end. The tab's own
+    // words last: they are the headline with " - The Times of India" after
+    // it, or just the paper's name.
+    const named = [...document.querySelectorAll('h1')]
+      .map(el => ({ el, r: el.getBoundingClientRect() }))
+      .filter(h => seen(h.r) && words(h.el))
+      .sort((a, b) => area(b.r) - area(a.r))[0];
+    const shared = document.querySelector(
+      'meta[property="og:title"], meta[name="twitter:title"]');
+    title = (named ? words(named.el) : '')
+      || (shared && (shared.content || '').trim())
+      || (document.title || '').trim();
   }
 
   // Padding last. Where the page edge eats it, the shortfall is handed back
@@ -890,6 +985,12 @@ FIND_BLOCK = r"""
     site: location.hostname.replace(/^www\./, ''),
     href: location.href,
     page_title: document.title || '',
+    // A card with no post behind it says so in the site's own words, and
+    // says it in the middle of the card rather than in its first line
+    // ("Instagram / Instagram / The link to this photo may be broken"), so
+    // the whole of its writing goes back and core/embedcard reads it.
+    card: card || undefined,
+    cardText: card ? words(document.body).slice(0, 400) : undefined,
   });
 })()
 """
@@ -1014,6 +1115,8 @@ RESTORE_PAGE = r"""
 
 
 def _finish(script: str) -> str:
+    script = script.replace("/*CARD*/", f"const CARD_PAGE = {CARD_PAGE};\n"
+                            "  const card = CARD_PAGE.test(location.href);")
     return (script.replace("/*KEEP*/", _KEEP)
             .replace("BODY_RUN", str(BODY_RUN))
             .replace("MOST_TALL", str(MOST_TALL)))

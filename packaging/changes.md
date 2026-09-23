@@ -16,6 +16,34 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.41
+
+Changed
+
+  * **A post is captured without signing in to anything.** X, Facebook,
+    Instagram, Threads and LinkedIn all publish a post a second way - the card
+    a newspaper quoting it puts in its own page - and that is what the program
+    now asks for. No wall, no feed round the edge, no "open in the app" bar,
+    and nothing of yours in the program.
+  * **The cutting is the post and nothing else**, drawn at the width the site
+    draws its own card at, so an upright photograph no longer comes out with a
+    black band down each side.
+  * **The link on the clipping is still the post's own**, exactly as it was
+    sent. Only what the program opens has changed.
+  * A link copied on a phone opens the way a computer asks for it, so no page
+    offers to open itself in an app.
+
+Fixed
+
+  * **A post that is not public is now said to be that**, instead of being put
+    down as needing a sign-in that would not have helped. If it was only ever
+    shown to the writer's friends, or has been taken down, the count line
+    offers to take it from your own Chrome.
+  * Adverts and cookie notices are cleared once more, after a page's pictures
+    arrive - which is when the late ones appear.
+  * A page with no headline of its own is now named by its own heading where it
+    has one, rather than by the wording on its tab.
+
 ## 2.0.40
 
 Added
