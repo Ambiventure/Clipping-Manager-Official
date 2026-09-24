@@ -5423,3 +5423,52 @@ inside the rounded navy one, which is what "many unwanted edges" was. It is one
 shape now, translucent, and only as wide as its words - a wrapped label's
 sizeHint is its MINIMUM, so the sentence is measured as one line and capped at
 456 rather than pinned at 680 whatever it said.
+
+
+## Why the reader kept saying nothing (2.0.48)
+
+The office reported "nothing is read" on pictures that are perfectly clear.
+Measured on their own files, there were four faults, and one of them was
+hiding the other three.
+
+**`headline()` carried its own copy of the search.** It duplicated the
+two-band logic that `headline_with()` has, so everything added to
+`headline_with` was never reached by the reading the program actually does -
+which goes through `headline()`. One path now.
+
+**A narrow clipping was refused outright.** `_prepare` handed back None below
+240 pixels across, so a cutting trimmed to one column was never read at all.
+Tesseract wants about 1200 across whatever it starts at and the line below
+already enlarges everything else; there was no reason for a floor above the
+point where there is nothing to enlarge (40).
+
+**Only the top of the picture was ever read.** Two bands, 40% and 72%. A
+cutting whose headline sits beside the photograph, or a strip with its words at
+the foot, came back empty from both. The whole picture is now read as a last
+resort - slower, and a worse headline, so only after the other two have said
+nothing.
+
+**And it read the picture as it ARRIVED.** `read_into` used `clip.image_bytes`,
+which is before the trim and the turn. A photograph that came in sideways and
+was turned upright in the program was still read sideways: measured, gibberish
+where the upright picture reads "gupta rides hydrogen train, says next stop
+del" at 96. It reads `clip.render()` now - the picture as the report shows it.
+
+For a picture nobody has turned, the other three ways up are tried, but only
+when reading it as it lies gave nothing or scored under 55, and another way up
+only replaces it when it is clearly better (15 points). Measured on the
+office's cuttings: the right way up comes back at 96 and the wrong ways up at
+0, 26, 39 and 75 - the 39 being confident-looking nonsense off a sideways
+cutting, which is why the line is drawn above it rather than at 30.
+
+Measured after, on every picture the office has sent in: the real cuttings read
+exactly as before at 96 and 97, and the three that came back with NOTHING now
+read at 94, 72 and 63.
+
+**The search field is pinned.** It used to sit on the page and scroll away,
+while its results hang off the window - so the panel had to chase the field
+down the screen and then flip above it when the field neared the foot, which
+read as a glitch. Pinned above the page, the field never moves, the panel
+always hangs downwards, and it has the window's whole height to fill. The panel
+also stays open when a result is opened, with the query still in the box: the
+next thing after looking at one result is almost always the next result.

@@ -56,6 +56,19 @@ TOP_BAND = 0.40
 DEEPER_BAND = 0.72
 TARGET_WIDTH = 1200
 MIN_WIDTH = 240
+#: Under this there is no picture to enlarge - see _prepare. It replaced
+#: MIN_WIDTH as the floor, which was turning away narrow cuttings entirely.
+TINY_WIDTH = 40
+#: A reading this poor is treated as doubtful, and is what makes the program
+#: try the picture the other ways up. Measured over the office's own cuttings:
+#: the right way up they come back at 96, and the wrong way up at 0, 26, 39
+#: and 75 - and the 39 is confident-looking nonsense off a sideways cutting,
+#: which is exactly the case this exists for. So the line is drawn above it.
+POOR_READING = 55.0
+#: ...and another way up only REPLACES what we have when it is clearly better,
+#: not merely better. A wrong way up can score 75 on a cutting whose columns
+#: happen to read as lines, so a one-point win is not evidence of anything.
+CLEARLY_BETTER = 15.0
 
 # A line counts as part of the headline only if it is nearly as tall as the
 # tallest line found. This is set high on purpose, and the reason is stability
@@ -479,7 +492,53 @@ def headline_with(api, data: bytes) -> Headline:
     found = _read_band(api, data, TOP_BAND)
     if not found.text:
         found = _read_band(api, data, DEEPER_BAND)
-    return found
+    if not found.text:
+        # THE WHOLE PICTURE, AS A LAST RESORT. The two bands above are the top
+        # of the cutting, which is where a headline is - but not always: a
+        # cutting turned on its side, one whose headline sits beside the
+        # photograph rather than over it, or a page furniture strip with the
+        # words down at the foot, all come back empty from both. Reading the
+        # whole thing is slower and gives a worse headline, so it is only ever
+        # asked after the other two have said nothing at all.
+        found = _read_band(api, data, 1.0)
+    if found.text and found.confidence >= POOR_READING:
+        return found
+    # AND THE OTHER THREE WAYS UP. A photograph taken on a phone arrives
+    # sideways and a scan is sometimes fed in upside down; read as it lies,
+    # either gives nothing or gives nonsense, which is the "nothing is read on
+    # a picture I can read perfectly well" the office saw.
+    #
+    # Only from here, and only ever to REPLACE nothing: a picture that already
+    # read well never reaches this line, so a good reading can never be
+    # swapped for a worse one. Measured, the right way up wins every time -
+    # 96 against 0, 26, 39 and 75 on the office's own cuttings - but the rule
+    # is "better than what we have", not "best of four", so the cost of being
+    # wrong is a reading where there was none.
+    best = found
+    for turn in _TURNS:
+        try:
+            other = _read_band(api, _turned(data, turn), TOP_BAND)
+        except Exception:  # noqa: BLE001 - one way up that will not read
+            continue
+        if other.text and other.confidence >= best.confidence + CLEARLY_BETTER:
+            best = other
+    return best
+
+
+#: The three other ways up, as PIL names them.
+_TURNS = (90, 180, 270)
+
+
+def _turned(data: bytes, degrees: int) -> bytes:
+    """The same picture, turned. Used only to rescue one that read as nothing."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(data))
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    out = io.BytesIO()
+    image.rotate(degrees, expand=True).save(out, "PNG")
+    return out.getvalue()
 
 
 def _prepare(data: bytes, portion: float = TOP_BAND):
@@ -490,9 +549,18 @@ def _prepare(data: bytes, portion: float = TOP_BAND):
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
     image = strip_band(image)
-    band = image.crop((0, 0, image.width,
-                       max(60, int(image.height * portion))))
-    if band.width < MIN_WIDTH:
+    band = (image if portion >= 1.0 else
+            image.crop((0, 0, image.width,
+                        max(60, int(image.height * portion)))))
+    # A NARROW PICTURE IS ENLARGED, NOT REFUSED. This used to hand back None
+    # below 240 across, and a clipping cut narrow - one column of a page, a
+    # single-column brief - was then never read at all, which is the "nothing
+    # is read" on a picture anybody can read with their eyes. Tesseract wants
+    # about 1200 across whatever it started at, and enlarging is exactly what
+    # the line below already does for everything else; there was no reason for
+    # a floor beyond it. Under about 40 across there is nothing to enlarge, so
+    # that is where it now stops.
+    if band.width < TINY_WIDTH or band.height < TINY_WIDTH // 4:
         return None
     scale = TARGET_WIDTH / band.width
     if abs(scale - 1.0) > 0.05:
@@ -511,13 +579,11 @@ def headline(data: bytes) -> Headline:
     api = _open()
     if api is None or not data:
         return Headline()
-    found = _read_band(api, data, TOP_BAND)
-    if not found.text:
-        # Nothing but furniture in the top of the picture. On a whole page
-        # rather than a cutting the headline can be further down, and coming
-        # back with nothing is worse than a second look.
-        found = _read_band(api, data, DEEPER_BAND)
-    return found
+    # ONE PATH, headline_with's. This used to carry its own copy of the
+    # two-band search, so anything added to headline_with - the whole-picture
+    # last resort, the other three ways up - was never reached by the reading
+    # the program actually does, which goes through here.
+    return headline_with(api, data)
 
 
 def _read_band(api, data: bytes, portion: float) -> Headline:
@@ -602,6 +668,36 @@ def _headline_block(lines: list) -> list:
     return [(rows[i][0], rows[i][2], rows[i][3]) for i in sorted(taken)]
 
 
+def _as_printed(clip) -> bytes:
+    """The clipping as the report shows it - trimmed and turned.
+
+    It used to be read from the bytes it arrived as, which is the picture
+    BEFORE any of that. A clipping turned ninety degrees was read on its side
+    and came back with nothing; one trimmed down to its headline was read with
+    everything the trim took off still in the way, and the headline the reader
+    picked was whatever the old top of the picture held.
+
+    Falls back to the bytes it arrived as, because a picture that will not
+    render is still worth a try.
+    """
+    raw = getattr(clip, "image_bytes", b"") or b""
+    if not raw:
+        return raw
+    crop = getattr(clip, "crop", None)
+    turned = int(getattr(clip, "rotation", 0) or 0) % 360
+    if (crop is None or crop.is_identity) and not turned:
+        return raw                      # nothing was done to it
+    try:
+        image = clip.render()
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        out = io.BytesIO()
+        image.save(out, "PNG")
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 - a picture we cannot render reads as it came
+        return raw
+
+
 def read_into(clip, force: bool = False) -> Headline:
     """Read a clipping's headline and remember it on the clipping.
 
@@ -636,7 +732,7 @@ def read_into(clip, force: bool = False) -> Headline:
     if clip.ocr_engine and not force:
         return Headline(clip.ocr_text, clip.headline_confidence,
                         clip.ocr_engine)
-    found = headline(getattr(clip, "image_bytes", b"") or b"")
+    found = headline(_as_printed(clip))
     clip.ocr_text = found.text
     clip.headline_confidence = found.confidence
     # Stamped even when nothing was read, so a clipping that cannot be read is

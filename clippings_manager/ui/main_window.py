@@ -777,6 +777,9 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
 
         standard = QWidget()
+        # Built here because the strip below is laid out before the panel that
+        # creates the rest of it, and this has to be in hand to be pinned.
+        self.find_bar = findbar.FindBar()
         standard_layout = QVBoxLayout(standard)
         standard_layout.setContentsMargins(0, 0, 0, 0)
         standard_layout.setSpacing(0)
@@ -835,6 +838,9 @@ class MainWindow(QMainWindow):
         self.body_scroll.setSizePolicy(QSizePolicy.Expanding,
                                        QSizePolicy.Expanding)
         self.list.follow_content(True)
+        # The search field sits above the page and does not scroll with it -
+        # see where it is built.
+        standard_layout.addWidget(self.find_bar)
         standard_layout.addWidget(self.body_scroll, 1)
         self.list.hide()
         self.pages.addWidget(standard)
@@ -1316,15 +1322,20 @@ class MainWindow(QMainWindow):
         self.heading.groupSocial.connect(lambda: self._group_social(self.model))
         layout.addWidget(self.heading)
 
-        # FINDING ONE CLIPPING ON A PAGE OF A HUNDRED AND SIXTY. Under the
-        # layout card, above the list it searches. It only finds: nothing is
-        # hidden, reordered or unticked, which is what the Show and Arrange
-        # strip is for.
-        self.find_bar = findbar.FindBar()
+        # FINDING ONE CLIPPING ON A PAGE OF A HUNDRED AND SIXTY. It only
+        # finds: nothing is hidden, reordered or unticked, which is what the
+        # Show and Arrange strip is for.
+        #
+        # PINNED ABOVE THE PAGE, not laid on it. On the page it scrolled away
+        # with everything else, and its results - which hang off the window
+        # rather than off the page - had to chase it down the screen and then
+        # flip above it when they ran out of room, which read as a glitch.
+        # Pinned, the field is always in the same place, the results always
+        # hang downwards, and they have the whole window to fill.
         self.find_bar.serve(lambda: list(self.pool().rows),
                             lambda row_id: self.pool().number_of(row_id))
         self.find_bar.picked.connect(self._go_to_clip)
-        layout.addWidget(self.find_bar)
+        self.find_bar.shiftWanted.connect(self._shift_found_to)
 
         # A bar for work that takes long enough to wonder about. Above the
         # status strip, so the sentence and the bar read as one thing.
@@ -2061,6 +2072,13 @@ class MainWindow(QMainWindow):
         self.list.labelEdited.connect(self._on_label_edited)
         self.list.urlEdited.connect(self._on_url_edited)
         self.list.readEdited.connect(self._ocr_corrected)
+        # The results panel rides with the field as the page scrolls. Wired
+        # here rather than where the bar is built: the page it scrolls in does
+        # not exist yet at that point, so the connection was quietly made to
+        # nothing and the panel stayed behind.
+        page = getattr(self, "body_scroll", None)
+        if page is not None:
+            self.find_bar.follow(page)
         self.list.previewRequested.connect(self.open_preview)
         self.list.reorderRequested.connect(self._on_reorder)
         self.list.selectionToggled.connect(self._on_selection_toggled)
@@ -3719,6 +3737,45 @@ class MainWindow(QMainWindow):
         self.move_note.show()
         self._place_floating()
         self._move_note_timer.start()
+
+    def _shift_found_to(self, row_ids: list, number: int) -> None:
+        """The ticked search results, copied into another newspad.
+
+        The same copy the selection bar and the preview make - the clippings
+        stay where they are - so a cutting that belongs in two reports is
+        found once and sent once.
+        """
+        pool = self.pool()
+        which = "sentiment" if pool is getattr(self, "board_model", None) else "standard"
+        try:
+            self.save_session()
+        except Exception:  # noqa: BLE001
+            pass
+        sent, trouble = 0, ""
+        for clip_id in list(row_ids):
+            row = pool.row_for(clip_id)
+            if row is None or row.clip is None:
+                continue
+            try:
+                newspads.deliver(
+                    number, row.clip, pool=which,
+                    thumb_png=getattr(row, "thumb_png", b"") or b"",
+                    source_name=f"Newspad {self.newspad}")
+                sent += 1
+            except newspads.HandoverError as bad:
+                trouble = str(bad)
+                break
+            except Exception as bad:  # noqa: BLE001
+                trouble = f"{type(bad).__name__}: {bad}"
+                break
+        if trouble and not sent:
+            self._flash(trouble, "bad")
+            return
+        said = (f"{sent} found clipping{'s' if sent != 1 else ''} copied into "
+                f"Newspad {number} — still here too.")
+        if trouble:
+            said += f" The rest stopped: {trouble}"
+        self._flash(said, "good" if not trouble else "bad")
 
     def _go_to_clip(self, row_id: int) -> None:
         """Scroll the list to a clipping and open it - what picking a search

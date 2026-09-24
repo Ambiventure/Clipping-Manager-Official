@@ -16,6 +16,32 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.48
+
+Fixed
+
+  * **The reader gives an answer far more often.** It used to come back with
+    nothing on pictures anybody could read, for three separate reasons, all of
+    them now dealt with:
+      - a clipping cut narrow was turned away before it was even tried;
+      - only the top of a picture was ever read, so a headline anywhere else
+        was never found - the whole picture is now read as a last resort;
+      - and a clipping was read from the picture as it ARRIVED, not as it
+        prints, so one turned upright in the program was still read on its
+        side. A photograph that arrives sideways is now also tried the other
+        three ways up, but only when reading it as it lies gave nothing.
+  * **The search box stays where it is.** It is pinned above the list now
+    rather than scrolling away with it, so the results always drop below it
+    with the whole window to fill.
+  * **And the results stay open when you look at one**, with what you typed
+    still in the box, so you can work down them one after another.
+
+Added
+
+  * **Tick boxes on the search results**, a **Select all**, and a **Shift to**
+    that puts copies of the ticked ones into another newspad - so the clippings
+    a search finds can be sent on without hunting for them again in the list.
+
 ## 2.0.47
 
 Added

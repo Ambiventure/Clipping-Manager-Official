@@ -30,9 +30,10 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame,
-                               QHBoxLayout, QLabel, QLineEdit, QScrollArea,
-                               QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFrame,
+                               QHBoxLayout, QLabel, QLineEdit, QMenu,
+                               QPushButton, QScrollArea, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -245,10 +246,12 @@ class Result(QFrame):
     """One clipping in the results: its number, its picture, what it says."""
 
     picked = Signal(int)
+    ticked = Signal()
 
     def __init__(self, number: int, row, which: str, says: str, parent=None):
         super().__init__(parent)
         self.row_id = row.id
+        self.number = number
         self.setObjectName("FindResult")
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(
@@ -260,6 +263,11 @@ class Result(QFrame):
         line = QHBoxLayout(self)
         line.setContentsMargins(9, 7, 11, 7)
         line.setSpacing(10)
+
+        self.tick = QCheckBox()
+        self.tick.setToolTip("Pick this one out, to send it somewhere")
+        self.tick.toggled.connect(lambda _on: self.ticked.emit())
+        line.addWidget(self.tick)
 
         tag = QLabel(f"{number}")
         tag.setFixedWidth(30)
@@ -292,7 +300,10 @@ class Result(QFrame):
         line.addLayout(words, 1)
 
     def mousePressEvent(self, event):  # noqa: N802 - Qt name
-        if event.button() == Qt.LeftButton:
+        # The tick box is its own control: clicking it picks the clipping OUT,
+        # it does not open it.
+        if (event.button() == Qt.LeftButton
+                and not self.tick.geometry().contains(event.position().toPoint())):
             self.picked.emit(self.row_id)
         super().mousePressEvent(event)
 
@@ -301,6 +312,8 @@ class FindBox(QFrame):
     """The translucent panel of results, floating over the page."""
 
     picked = Signal(int)
+    #: (row ids, newspad number) - put copies of the ticked results there.
+    shiftWanted = Signal(list, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -316,11 +329,44 @@ class FindBox(QFrame):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 9, 10, 10)
         outer.setSpacing(7)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
         self.said = QLabel()
         self.said.setStyleSheet(
             f"color: {theme.MUTED}; font-size: 11px; font-weight: 700;"
             " background: transparent; border: none;")
-        outer.addWidget(self.said)
+        head.addWidget(self.said, 1)
+
+        self.all_btn = QPushButton("Select all")
+        self.all_btn.setCursor(Qt.PointingHandCursor)
+        self.all_btn.setToolTip("Tick every one of these results.")
+        self.all_btn.clicked.connect(self._tick_all)
+        head.addWidget(self.all_btn)
+
+        # SHIFT TO, on the results themselves. Searching for the stories that
+        # belong in a second newspad and then having to find them again in the
+        # list to send them is the long way round; from here the ones that came
+        # up ARE the selection.
+        self.shift_btn = QPushButton("Shift to: ▾")
+        self.shift_btn.setCursor(Qt.PointingHandCursor)
+        self.shift_btn.setToolTip(
+            "Put a copy of the ticked results into another newspad. They stay "
+            "here as well.")
+        self.shift_menu = QMenu(self)
+        self.shift_menu.aboutToShow.connect(self._fill_shift)
+        self.shift_btn.setMenu(self.shift_menu)
+        head.addWidget(self.shift_btn)
+        for button in (self.all_btn, self.shift_btn):
+            button.setStyleSheet(
+                f"QPushButton {{ background: {theme.SURFACE};"
+                f" border: 1px solid {theme.HAIRLINE_STRONG};"
+                f" border-radius: 9px; padding: 3px 10px; font-size: 11px;"
+                f" font-weight: 700; color: {theme.NAVY}; }}"
+                f"QPushButton:hover {{ border-color: {theme.NAVY}; }}"
+                "QPushButton:disabled { color: #9AA6B8; }"
+                "QPushButton::menu-indicator { image: none; width: 0; }")
+        outer.addLayout(head)
 
         self.area = QScrollArea()
         self.area.setWidgetResizable(True)
@@ -335,6 +381,48 @@ class FindBox(QFrame):
         self.area.setWidget(self.holder)
         outer.addWidget(self.area, 1)
         self.hide()
+
+    #: Every result on show, in order.
+    def results(self) -> list:
+        return [self.column.itemAt(i).widget()
+                for i in range(self.column.count())
+                if isinstance(self.column.itemAt(i).widget(), Result)]
+
+    def chosen(self) -> list:
+        """The row ids that have been ticked."""
+        return [r.row_id for r in self.results() if r.tick.isChecked()]
+
+    def _tick_all(self) -> None:
+        results = self.results()
+        wanted = not all(r.tick.isChecked() for r in results) if results else False
+        for result in results:
+            result.tick.setChecked(wanted)
+
+    def _count_changed(self) -> None:
+        many = len(self.chosen())
+        self.shift_btn.setEnabled(bool(many))
+        self.all_btn.setText("Select all" if not self.results()
+                             or not all(r.tick.isChecked()
+                                        for r in self.results())
+                             else "Select none")
+        self.shift_btn.setText(
+            f"Shift {many} to: ▾" if many else "Shift to: ▾")
+
+    def _fill_shift(self) -> None:
+        from ..core import newspads
+
+        self.shift_menu.clear()
+        here = newspads.active()
+        for number in range(1, newspads.COUNT + 1):
+            found = newspads.summary(number)
+            words = newspads.describe(number, *(found or ()))
+            if number == here:
+                action = self.shift_menu.addAction(f"{words}   (this one)")
+                action.setEnabled(False)
+                continue
+            action = self.shift_menu.addAction(words)
+            action.triggered.connect(
+                lambda _c=False, n=number: self.shiftWanted.emit(self.chosen(), n))
 
     def show_results(self, found: list, numbers) -> None:
         while self.column.count() > 1:
@@ -352,7 +440,9 @@ class FindBox(QFrame):
         for row, which, says in found:
             result = Result(numbers(row.id), row, which, says, self.holder)
             result.picked.connect(self.picked.emit)
+            result.ticked.connect(self._count_changed)
             self.column.insertWidget(self.column.count() - 1, result)
+        self._count_changed()
         self.show()
         self.raise_()
 
@@ -435,6 +525,8 @@ class FindBar(QWidget):
 
     #: A clipping was picked out of the results (a row id).
     picked = Signal(int)
+    #: (row ids, newspad number) - copies of the ticked results, sent on.
+    shiftWanted = Signal(list, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -497,12 +589,15 @@ class FindBar(QWidget):
             top = self.window()
             self.box = FindBox(top)
             self.box.picked.connect(self._chose)
+            self.box.shiftWanted.connect(self.shiftWanted.emit)
             top.installEventFilter(self)
         return self.box
 
     def _chose(self, row_id: int) -> None:
+        # THE BOX STAYS OPEN, and so does what was typed. Looking at one result
+        # is almost never the end of it - the next thing is the next result -
+        # and closing the box meant typing the words again every time.
         self.picked.emit(row_id)
-        self.close_box()
 
     def close_box(self) -> None:
         if self.box is not None:
@@ -519,16 +614,49 @@ class FindBar(QWidget):
         self._place()
 
     def _place(self) -> None:
-        """Under the field, as wide as it, and never past the window's foot."""
+        """Against the field, as wide as it, and always inside the window.
+
+        Under the field while there is room for it there, and above the field
+        when there is not - which is what happens once the page has been
+        scrolled far enough to carry the field towards the foot. Pinned at a
+        floor and allowed to overflow, it hung off the bottom of the window
+        with its last results out of reach.
+        """
         if self.box is None or not self.box.isVisible():
             return
         top = self.window()
-        here = self.field.mapTo(top, QPoint(0, self.field.height() + 6))
         width = max(320, self.field.width())
-        room = max(120, top.height() - here.y() - 24)
-        tall = min(room, 74 + 62 * max(1, self.box.column.count() - 1))
-        self.box.setGeometry(here.x(), here.y(), width, tall)
+        wanted = 74 + 62 * max(1, self.box.column.count() - 1)
+
+        below = self.field.mapTo(top, QPoint(0, self.field.height() + 6))
+        room_below = top.height() - below.y() - 14
+        # Always downwards. The field is pinned above the page now, so there
+        # is always room under it - and it never moves, so the panel never has
+        # to chase it or flip over it, which is what read as a glitch.
+        tall = max(80, min(room_below, wanted))
+        self.box.setGeometry(below.x(), below.y(), width, tall)
         self.box.raise_()
+
+    def follow(self, scroller) -> None:
+        """Keep the panel under the field while the page scrolls.
+
+        The field scrolls away with the page it sits on; the panel is a child
+        of the WINDOW, so it does not move on its own and was left behind. It
+        follows now - and because the room it is given is measured from wherever
+        the field has got to, it grows taller as the field goes up the screen,
+        which is exactly when more of it can be seen.
+        """
+        for bar in (scroller.verticalScrollBar(), scroller.horizontalScrollBar()):
+            if bar is not None:
+                bar.valueChanged.connect(lambda _v: self._place())
+
+    def moveEvent(self, event):  # noqa: N802 - Qt name
+        self._place()
+        super().moveEvent(event)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt name
+        self._place()
+        super().resizeEvent(event)
 
     def eventFilter(self, watched, event):
         if watched is self.window() and event.type() in (
