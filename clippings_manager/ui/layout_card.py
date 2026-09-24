@@ -112,8 +112,12 @@ DOSSIER_DEFAULTS = {
 }
 
 
-#: Pasted phone screenshots lose their status and navigation bars as a
-#: crop. On unless switched off: the bars are never the clipping.
+#: A pasted picture loses the blank border round it as a crop - the picture
+#: itself is never altered. On unless switched off.
+#:
+#: It used to take a phone's status and navigation bars off as well, and that
+#: is gone: see core/tidy.tidy_box. The key keeps its old name so an office
+#: that switched the tidy-up off still finds it off.
 TIDY_KEY = "tidy_screenshots"
 
 
@@ -291,7 +295,7 @@ class HeadingLayoutCard(QFrame, DesignFile):
         # Not a layout value: a preference, kept in the export settings file
         # that every newspad shares, and only shown here. The layout values
         # are HeadingStyle's own keywords and nothing else may sit among them.
-        self.tidy_box = QCheckBox("Trim phone bars")
+        self.tidy_box = QCheckBox("Trim blank edges")
         self.tidy_box.setToolTip(
             "A pasted phone screenshot loses its status bar, its navigation "
             "bar and any blank margin, as a crop - the picture is untouched, "

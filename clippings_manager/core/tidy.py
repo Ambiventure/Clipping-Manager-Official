@@ -53,12 +53,42 @@ BAR_ROW_SHARE = 0.55
 BAR_MARKS_LEAST, BAR_MARKS_MOST = 0.0005, 0.30
 #: Only a phone's own screenshot has bars cut off: taller than wide, and wide.
 PHONE_LEAST_WIDTH = 480
+#: AND SHAPED LIKE A PHONE. "Taller than wide" is not enough: a newspaper
+#: cutting is usually taller than wide too, and one of the office's own - a
+#: Times of India story 493 x 700 - was read as a phone screenshot and had the
+#: first line of its headline cut off as a status bar. A white band with a few
+#: dark marks in it is exactly what a headline's first line looks like. A phone
+#: screen is far longer than that: 16:9 is 1.78 and today's are 19.5:9 (2.17)
+#: to 21:9 (2.33). The cutting is 1.42, which is not a phone by any of them.
+PHONE_LEAST_TALL, PHONE_MOST_TALL = 1.60, 2.60
+#: How far back from the first ink a margin is cut, as a fraction of the side.
+#: The glyphs' edges fade into the paper, and a cut placed exactly on the first
+#: pixel that counts as ink shaves the tops off the letters.
+MARGIN_SAFETY = 0.004
+#: What counts as ink when a margin is being measured - stricter than the
+#: TOLERANCE above, so the faint edge of a letter is ink and is kept.
+INK_TOLERANCE = 8
 #: Work on a picture no wider than this; the answer is in fractions anyway.
 WORK_WIDTH = 480
 
 
-def tidy_box(image: Image.Image) -> Optional[CropRect]:
-    """The crop that takes the bars and the blank margins off, or None."""
+def tidy_box(image: Image.Image, bars: bool = False) -> Optional[CropRect]:
+    """The crop that takes the blank margins off, or None.
+
+    `bars` also takes a phone's status and navigation bars off, and NOTHING IN
+    THE PROGRAM ASKS FOR IT. The office's clippings are cuttings, not phone
+    screens - in a year's use not one of them has carried a status bar - and
+    the rule cost them a headline: a white band with a few dark marks in it is
+    what a status bar looks like AND what the first line of a headline looks
+    like, and a 493 x 700 cutting is "taller than wide" just as a phone is.
+    Switching "Trim phone bars" off was the office's own workaround before this.
+
+    Telling the two apart properly means recognising a battery and a signal
+    meter, which every phone draws its own way and which are a dozen pixels
+    across on a pasted picture - a great deal of machinery for something that
+    has never once been needed. So the code stays, proven and tested, and the
+    program simply never turns it on.
+    """
     width, height = image.size
     if width < 120 or height < 120:
         return None
@@ -67,20 +97,30 @@ def tidy_box(image: Image.Image) -> Optional[CropRect]:
         work = work.resize((WORK_WIDTH, max(1, round(height * WORK_WIDTH / width))),
                            Image.Resampling.BILINEAR)
     w, h = work.size
-    phone = height > width and width >= PHONE_LEAST_WIDTH
+    tall = height / width if width else 0.0
+    phone = (width >= PHONE_LEAST_WIDTH
+             and PHONE_LEAST_TALL <= tall <= PHONE_MOST_TALL)
     posterised = ImageOps.posterize(work, 5)
 
     # Bars first. Found on any picture, cut only off a phone's; where one is
     # found, the edge is the bar's and no margin is looked for there.
     top_bar = _bar(posterised, from_top=True)
     bottom_bar = _bar(posterised, from_top=False)
+    phone = phone and bars
     top = top_bar if phone else 0
     bottom = bottom_bar if phone else 0
 
     left, m_top, right, m_bottom = _margins(work)
-    if not top_bar:
+    # A BAR ONLY SPEAKS FOR ITS EDGE WHEN IT IS BEING CUT. The rule is "where a
+    # bar is found the edge is the bar's, and no margin is looked for there" -
+    # but a bar is only cut off a phone's screenshot, so on anything else a
+    # bar that was FOUND and not cut was silently cancelling the margin as
+    # well, and the edge came away untrimmed. Measured on the office's Times of
+    # India cutting: its headline's first line reads as a bar, the cutting is
+    # not a phone, and the white margin above it was therefore left on.
+    if not (top_bar and phone):
         top = m_top
-    if not bottom_bar:
+    if not (bottom_bar and phone):
         bottom = m_bottom
 
     box = CropRect(left=round(left / w, 6), top=round(top / h, 6),
@@ -92,12 +132,12 @@ def tidy_box(image: Image.Image) -> Optional[CropRect]:
     return box
 
 
-def tidy_crop(image_bytes: bytes) -> Optional[CropRect]:
+def tidy_crop(image_bytes: bytes, bars: bool = False) -> Optional[CropRect]:
     """The same, for a clipping's bytes. Never raises."""
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
             image.load()
-            return tidy_box(image)
+            return tidy_box(image, bars=bars)
     except Exception:  # noqa: BLE001 - a picture that will not open is left alone
         return None
 
@@ -116,10 +156,15 @@ def _margins(work: Image.Image) -> tuple:
             return None
         plain = Image.new("RGB", work.size, corner)
         marks = ImageChops.difference(work, plain).convert("L").point(
-            lambda v: 255 if v > TOLERANCE else 0)
+            lambda v: 255 if v > INK_TOLERANCE else 0)
         return marks.getbbox()          # the box of everything NOT that colour
 
     def kept(band: int, span: int) -> int:
+        # Back off from the first ink before anything is decided. A letter's
+        # edge fades into the paper, so the first pixel dark enough to count is
+        # already inside the glyph; cutting there takes the tops off the
+        # letters, which is what the office saw.
+        band = max(0, band - max(2, round(span * MARGIN_SAFETY)))
         share = band / span
         return band if LEAST_MARGIN <= share <= MOST_MARGIN else 0
 

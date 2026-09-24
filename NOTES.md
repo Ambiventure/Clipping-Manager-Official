@@ -5319,3 +5319,57 @@ to it. Four things it is careful about:
 
 The clipping's own newspad is saved first, so a picture the window has not yet
 written to disk is not the one thing the copy is missing.
+
+
+## The headline that was cut off, and the stamp that hid a repeat (2.0.46)
+
+**"Trim phone bars" was eating headlines, and it is gone.** The office sent a
+Times of India cutting whose first line came back sliced. Measured on their own
+picture (493 x 700): the first ink is at row 24 and the tidy-up cut at row 40 -
+sixteen rows into solid black type. `_margins` was right; `_bar` was wrong. A
+status bar is "a band at the top that is one colour with a few small marks in
+it", and that is exactly a headline's first line; the only thing keeping the
+rule off ordinary pictures was "taller than wide", which a newspaper cutting
+usually is.
+
+The office's own verdict settled it: they had already found that unticking the
+switch imported the picture correctly, and said that in a year of use no
+clipping has ever carried a phone bar. So `tidy_box` takes a `bars` argument
+that defaults to **False** and nothing in the program passes True. The code and
+its tests stay - one line turns it back on - but the program never asks. Doing
+it properly would mean recognising a battery and a signal meter, which every
+phone draws its own way and which are a dozen pixels across on a pasted
+picture: a great deal of machinery for something never once needed.
+
+Two more faults came out of the same picture:
+
+  * **A bar that was FOUND but not cut still cancelled the margin.** The rule
+    is "where a bar is found the edge is the bar's, and no margin is looked for
+    there" - but bars were only ever cut on a phone's screenshot, so on
+    anything else the edge came away untrimmed. Now a bar only speaks for its
+    edge when it is actually being cut.
+  * **A margin cut exactly on the first inked pixel shaves the letters**, whose
+    edges fade into the paper. It now backs off a few pixels and counts fainter
+    ink as ink (`MARGIN_SAFETY`, `INK_TOLERANCE`).
+
+The tidy-up only ever touches PASTED pictures (`source_file == "clipboard"`)
+and only ever as a crop; a PDF, a Word file or a photograph added from disk has
+never been near it, and the picture itself is never altered.
+
+**A stamped copy was not seen as a repeat.** The office sent the same Rajasthan
+Patrika cutting twice, one copy stamped with a black band carrying the paper,
+the city and the date. `ocr.strip_band` would not look past 35% of a picture
+and that band is 48.5% of it, so the band stayed: the reader read the stamp
+instead of the story (nothing at all, against the story's own headline on the
+plain copy), and the prints measured 32 and 33 apart - passing both gates by a
+single point, on nothing but luck.
+
+At 0.50 the band comes off, both copies read
+"इंडियन रेलवे ट्रैक से जुड़े रोचक तथ्य", the prints fall to 18 and 20, and the
+pair is found. Measured for harm: of 28 real pictures in the sample folders,
+**none** is changed by the new limit, and test_duplicates (58), test_duprule
+(50) and test_dupswap (31) are unchanged. What the new limit could reach is a
+cutting whose top 35-50% is a dark photograph ending in a clean light edge;
+that would be measured and read from below the photograph. `strip_band` is used
+only for MEASURING and READING - never for the picture or the report - so the
+cost there is a little less precision in matching, not a clipping.

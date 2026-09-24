@@ -16,6 +16,31 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.46
+
+Fixed
+
+  * **A clipping no longer loses the top of its headline.** "Trim phone bars"
+    was cutting the first line off a cutting: a white band with a few dark
+    marks in it is what a phone's status bar looks like, and it is also what a
+    headline's first line looks like. **The program does not trim phone bars at
+    all any more** - in a year's use no clipping has ever carried one. The
+    switch is still there, now called "Trim blank edges", and it does what is
+    actually wanted: it takes the blank border off a pasted picture.
+  * **And a blank edge is never cut into the words**, whatever it is trimming.
+  * **The same cutting stamped with a masthead band is seen as a repeat.** A
+    black band carrying the paper, the city and the date can be half the
+    picture; the program would only look past a third of one, so the stamped
+    copy read as the stamp instead of the story and was never matched.
+
+Added
+
+  * **Shift to:** on the selection bar. Tick any number of clippings and copy
+    them all into another newspad in one press - they stay here as well. It
+    takes the place of "Merge into one", which is on every card's own menu.
+  * **A button for each newspad in the preview window** - N2, N3, N4 - instead
+    of a menu. One press sends a copy, and a small bubble says where it went.
+
 ## 2.0.45
 
 Added

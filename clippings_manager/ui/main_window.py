@@ -1918,8 +1918,9 @@ class MainWindow(QMainWindow):
         row.addWidget(QLabel("selected"))
         row.addSpacing(6)
 
-        self.batch_merge = QPushButton("Merge into one")
-        self.batch_merge.setObjectName("BatchMerge")
+        # MERGE IS NOT HERE ANY MORE. It is on every card's own menu, which is
+        # where merging two cuttings is decided - looking at them - and the
+        # room on this bar was wanted for Shift to.
         self.batch_name = QPushButton("Set newspaper")
         self.batch_top = QPushButton("Top")
         self.batch_up = QPushButton("Up")
@@ -1943,6 +1944,22 @@ class MainWindow(QMainWindow):
             lambda: self._fill_move_menu(self.batch_move_menu,
                                          self._selected_ids()))
         self.batch_move_to.setMenu(self.batch_move_menu)
+        # INTO ANOTHER NEWSPAD, all of them at once. Building a second newspad
+        # means putting the same twenty cuttings in it, and doing that one
+        # clipping at a time through the preview is twenty windows. Like
+        # "Move to", a button with a menu rather than a combo box: a combo on
+        # this bar would take the wheel from the list scrolling under it.
+        self.batch_shift_to = QPushButton("Shift to: ▾")
+        self.batch_shift_to.setObjectName("BatchShift")
+        self.batch_shift_to.setToolTip(
+            "Put a copy of every ticked clipping into another newspad. They "
+            "stay here as well - this copies, it does not take them away - and "
+            "they are there when you switch to that newspad.")
+        self.batch_shift_menu = QMenu(self)
+        self.batch_shift_menu.setToolTipsVisible(True)
+        self.batch_shift_menu.aboutToShow.connect(
+            lambda: self._fill_shift_menu(self.batch_shift_menu))
+        self.batch_shift_to.setMenu(self.batch_shift_menu)
         # No Rotate here: turning a picture is something done to one clipping
         # while looking at it, and every card has its own button for it.
         # "Exclude" reads "Include" when every ticked clipping is already out -
@@ -1953,8 +1970,9 @@ class MainWindow(QMainWindow):
         self.batch_close = QPushButton("✕")
         self.batch_close.setFixedWidth(30)
         for button in (
-            self.batch_merge, self.batch_name, self.batch_top, self.batch_up,
+            self.batch_name, self.batch_top, self.batch_up,
             self.batch_down, self.batch_bottom, self.batch_move_to,
+            self.batch_shift_to,
             self.batch_exclude, self.batch_delete, self.batch_close,
         ):
             button.setCursor(Qt.PointingHandCursor)
@@ -2129,7 +2147,6 @@ class MainWindow(QMainWindow):
         self.float_undo.setEnabled(False)
         self.float_redo.setEnabled(False)
 
-        self.batch_merge.clicked.connect(self._merge_selected)
         self.batch_name.clicked.connect(lambda: self._bulk_field("newspaper"))
         self.batch_top.clicked.connect(lambda: self._batch_move("top"))
         self.batch_up.clicked.connect(lambda: self._batch_move("up"))
@@ -3871,6 +3888,11 @@ class MainWindow(QMainWindow):
             f"Copied into Newspad {number}'s {where} — {held} clipping"
             f"{'s' if held != 1 else ''} there now. It is still here too.",
             "good")
+        # Said on the preview as well, because the preview covers the window:
+        # a message on the status line behind it is read by nobody.
+        told = getattr(getattr(self, "preview", None), "told", None)
+        if callable(told) and self.preview.isVisible():
+            told(f"Sent to Newspad {number}")
 
     def _preview_pool(self):
         """Whichever pool the open preview belongs to."""
@@ -4564,7 +4586,6 @@ class MainWindow(QMainWindow):
         source = listed if listed is not None else self.model
         ticked = len(source.selected)
         self.batch_count.setText(str(ticked))
-        self.batch_merge.setVisible(ticked >= 2)
         self._sync_exclude_button()
         # Somewhere else to go only when there is more than one file - or,
         # for a board category, always: the other three categories.
@@ -4863,6 +4884,70 @@ class MainWindow(QMainWindow):
             f"{len(marks)} post{'s' if len(marks) != 1 else ''} grouped under "
             + ", ".join(names[:4]) + ("…" if len(names) > 4 else "")
             + (f"; {moved} moved." if moved else "; already in order."), "good")
+
+    def _fill_shift_menu(self, menu) -> None:
+        """The newspads a selection can be copied into, filled as it opens so
+        the counts are what is on disk now."""
+        menu.clear()
+        here = self.newspad
+        for number in range(1, newspads.COUNT + 1):
+            found = newspads.summary(number)
+            words = newspads.describe(number, *(found or ()))
+            if number == here:
+                action = menu.addAction(f"{words}   (this one)")
+                action.setEnabled(False)
+                continue
+            action = menu.addAction(words)
+            action.triggered.connect(
+                lambda _checked=False, n=number: self._shift_selection_to(n))
+
+    def _shift_selection_to(self, number: int) -> None:
+        """Every ticked clipping copied into another newspad, in one go.
+
+        A copy, like the preview's own buttons: the clippings stay where they
+        are, because the whole point is a cutting that belongs in two reports.
+        Each keeps the list it is in, so board clippings arrive on that
+        newspad's board and the report's on its list.
+        """
+        ids = self._selected_ids()
+        if not ids:
+            return
+        pool = self.pool()
+        which = "sentiment" if pool is getattr(self, "board_model", None) else "standard"
+        # Saved first, so a picture the window has not written to disk yet is
+        # not the one thing the copies are missing.
+        try:
+            self.save_session()
+        except Exception:  # noqa: BLE001
+            pass
+        sent = 0
+        trouble = ""
+        for clip_id in ids:
+            row = pool.row_for(clip_id)
+            if row is None or row.clip is None:
+                continue
+            try:
+                newspads.deliver(
+                    number, row.clip, pool=which,
+                    thumb_png=getattr(row, "thumb_png", b"") or b"",
+                    source_name=f"Newspad {self.newspad}")
+                sent += 1
+            except newspads.HandoverError as bad:
+                trouble = str(bad)
+                break
+            except Exception as bad:  # noqa: BLE001
+                trouble = f"{type(bad).__name__}: {bad}"
+                break
+        if trouble and not sent:
+            self._flash(trouble, "bad")
+            return
+        where = "board" if which == "sentiment" else "list"
+        said = (f"{sent} clipping{'s' if sent != 1 else ''} copied into "
+                f"Newspad {number}'s {where} — still here too.")
+        if trouble:
+            said += f" The rest stopped: {trouble}"
+        self._flash(said, "good" if not trouble else "bad")
+        self._show_move_note(said, above_bar=True)
 
     def _clear_division(self, code: str) -> None:
         """Take every clipping the board is showing off it.

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import io
 
-from PySide6.QtCore import QEvent, QSize, QStringListModel, Qt, Signal
+from PySide6.QtCore import (QEvent, QSize, QStringListModel, Qt, QTimer,
+                            Signal)
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -396,7 +397,8 @@ class PreviewDialog(QDialog):
             " border-top-left-radius: 13px; border-bottom-left-radius: 13px;"
             " border-top-right-radius: 0; border-bottom-right-radius: 0; }"
             "#PreviewRail QToolButton { background: transparent; border: none;"
-            " border-radius: 9px; padding: 0; }"
+            " border-radius: 9px; padding: 0; color: #E8EDF5;"
+            " font-size: 12px; font-weight: 800; letter-spacing: .02em; }"
             "#PreviewRail QToolButton:hover {"
             " background: rgba(255, 255, 255, 0.16); }"
             "#PreviewRail QToolButton:pressed {"
@@ -419,20 +421,71 @@ class PreviewDialog(QDialog):
         self.copy_btn.clicked.connect(self._copy_picture)
         column.addWidget(self.copy_btn)
 
-        self.send_btn = QToolButton(rail)
-        self.send_btn.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
-        self.send_btn.setCursor(Qt.PointingHandCursor)
-        self.send_btn.setIcon(icon_pixmap("layers", "#E8EDF5", 19))
-        self.send_btn.setIconSize(QSize(19, 19))
-        self.send_btn.setPopupMode(QToolButton.InstantPopup)
-        self.send_btn.setToolTip(
-            "Put a copy of this clipping into another newspad. It stays here "
-            "too, and it is there when you switch to that newspad.")
-        self.send_btn.clicked.connect(self._offer_newspads)
-        column.addWidget(self.send_btn)
+        # ONE BUTTON PER NEWSPAD, rather than a menu. Sending a clipping on is
+        # something done over and over while a second newspad is built, and a
+        # menu costs a press and a read every time; N2, N3, N4 is one press and
+        # no reading. The newspad that is open is not offered - the clipping is
+        # already in it.
+        line = QFrame(rail)
+        line.setFixedHeight(1)
+        line.setStyleSheet("background: rgba(255, 255, 255, 0.16);"
+                           " border: none;")
+        column.addWidget(line)
+
+        from ..core import newspads
+
+        self.newspad_btns = {}
+        here = newspads.active()
+        for number in range(1, newspads.COUNT + 1):
+            if number == here:
+                continue
+            button = QToolButton(rail)
+            button.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setText(f"N{number}")
+            button.setToolTip(
+                f"Put a copy of this clipping into Newspad {number}. It stays "
+                "here too, and it is there when you switch to that newspad.")
+            button.clicked.connect(
+                lambda _checked=False, n=number: self._send_to(n))
+            self.newspad_btns[number] = button
+            column.addWidget(button)
         rail.adjustSize()
         rail.raise_()
         return rail
+
+    #: How long the bubble stays up after a clipping is sent.
+    TOLD_FOR_MS = 1500
+
+    def told(self, words: str) -> None:
+        """A small pale bubble over the picture, for a second and a half.
+
+        Said here rather than on the window's status line: the preview covers
+        the window, so a message put there while this is open is read by
+        nobody.
+        """
+        bubble = getattr(self, "_bubble", None)
+        if bubble is None:
+            bubble = QLabel(self._rail.parentWidget())
+            bubble.setObjectName("PreviewTold")
+            bubble.setAlignment(Qt.AlignCenter)
+            bubble.setStyleSheet(
+                "#PreviewTold { background: rgba(250, 250, 248, 0.97);"
+                " color: #1A1F2B; border: 1px solid rgba(0, 0, 0, 0.10);"
+                " border-radius: 15px; padding: 8px 16px;"
+                " font-size: 12px; font-weight: 700; }")
+            self._bubble = bubble
+            self._bubble_timer = QTimer(self)
+            self._bubble_timer.setSingleShot(True)
+            self._bubble_timer.timeout.connect(bubble.hide)
+        bubble.setText(words)
+        bubble.adjustSize()
+        holder = bubble.parentWidget()
+        bubble.move(max(0, (holder.width() - bubble.width()) // 2),
+                    max(0, holder.height() - bubble.height() - 26))
+        bubble.show()
+        bubble.raise_()
+        self._bubble_timer.start(self.TOLD_FOR_MS)
 
     def eventFilter(self, watched, event):
         rail = getattr(self, "_rail", None)
@@ -455,30 +508,6 @@ class PreviewDialog(QDialog):
     def _copy_picture(self) -> None:
         if self.row is not None:
             self.copyRequested.emit(self.row.id)
-
-    def _offer_newspads(self) -> None:
-        """The other newspads, by name and by what is in them.
-
-        The one that is open is shown and cannot be chosen: it is where the
-        clipping already is, and writing into its saved work behind the
-        window's back would be undone by the window's next save.
-        """
-        from ..core import newspads
-
-        menu = QMenu(self.send_btn)
-        here = newspads.active()
-        for number in range(1, newspads.COUNT + 1):
-            found = newspads.summary(number)
-            words = newspads.describe(number, *(found or ()))
-            if number == here:
-                action = menu.addAction(f"{words}   (this one)")
-                action.setEnabled(False)
-                continue
-            action = menu.addAction(words)
-            action.triggered.connect(
-                lambda _checked=False, n=number: self._send_to(n))
-        menu.exec(self.send_btn.mapToGlobal(
-            self.send_btn.rect().bottomLeft()))
 
     def _send_to(self, number: int) -> None:
         if self.row is not None:

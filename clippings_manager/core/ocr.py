@@ -329,7 +329,26 @@ def close() -> None:
 BAND_DARK = 110
 BAND_LIGHT = 145
 BAND_CLEAR_ROWS = 6
-BAND_LIMIT = 0.35            # never eat more than this much of the picture
+#: Never eat more than this much of the picture.
+#:
+#: It was 0.35, and the office sent in a pair it could not see past: the same
+#: Rajasthan Patrika cutting twice, one copy stamped with a black band carrying
+#: the paper, the city and the date. That band is 48.5% of the picture, so the
+#: stripper gave up, the band stayed, and the two were never matched - the
+#: reader read the stamp instead of the story ("" against the story's own
+#: headline), and the prints measured 32 and 33 apart, on the very edge of both
+#: gates.
+#:
+#: With it at 0.50 the band comes off and both copies read the story's own
+#: headline, the prints fall to 18 and 20, and the pair is found. The six clear
+#: rows the search still insists on are what keeps this honest: a dark
+#: PHOTOGRAPH at the top of a cutting does not end in a clean light edge, and
+#: what is left has to be a real cutting - see BAND_LEAVES.
+BAND_LIMIT = 0.50
+#: And what remains after a band is taken off is never less than this much of
+#: the picture. A stamp is furniture above the cutting; if taking it would
+#: leave less than half, it was not a stamp.
+BAND_LEAVES = 0.45
 
 
 def strip_band(image):
@@ -366,6 +385,9 @@ def strip_band(image):
         else:
             clear = 0
     if cut <= 0:
+        return image
+    # What is left has to be a cutting, not a sliver.
+    if (height - cut) < height * BAND_LEAVES:
         return image
     return image.crop((0, cut, width, height))
 
