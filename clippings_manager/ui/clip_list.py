@@ -33,6 +33,9 @@ class ClipList(QListView):
     groupAction = Signal(str, str)         # action name, group identity
     labelEdited = Signal(int, str)         # clip id, new headline
     urlEdited = Signal(int, str)           # clip id, new address
+    #: (clip id, words) - a reading corrected by hand. Its own signal, because
+    #: what the picture says is not what the report prints.
+    readEdited = Signal(int, str)
     previewRequested = Signal(int)
     reorderRequested = Signal(list, int)   # clip ids, target position
     selectionToggled = Signal(int, bool, bool)   # clip id, additive, ranged
@@ -290,7 +293,7 @@ class ClipList(QListView):
             self.commit_editor()
             return
 
-        if hit.name in ("label", "url"):
+        if hit.name in ("label", "url", "read"):
             self._open_editor(index, entry, hit.name)
             return
         if hit.name == "thumb":
@@ -387,6 +390,9 @@ class ClipList(QListView):
         if field == "url":
             editor.setText(entry.row.clip.url)
             editor.setPlaceholderText("Web address — prints under the image")
+        elif field == "read":
+            editor.setText(str(getattr(entry.row.clip, "ocr_text", "") or ""))
+            editor.setPlaceholderText("What the reader made of this picture")
         else:
             editor.setText(entry.row.clip.effective_label)
             editor.setPlaceholderText("Headline — prints above the image")
@@ -470,6 +476,8 @@ class ClipList(QListView):
         # neither guesses at the other from what was typed.
         if field == "url":
             self.urlEdited.emit(clip_id, text)
+        elif field == "read":
+            self.readEdited.emit(clip_id, text)
         else:
             self.labelEdited.emit(clip_id, text)
 

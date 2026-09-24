@@ -24,6 +24,10 @@ ROW_HEIGHT = 92
 FIELD_HEIGHT = 32
 FIELD_GAP = 6
 ROW_HEIGHT_TWO = ROW_HEIGHT + FIELD_HEIGHT + FIELD_GAP
+#: And with the read box as well.
+ROW_HEIGHT_THREE = ROW_HEIGHT_TWO + FIELD_HEIGHT + FIELD_GAP
+#: The two round buttons beside the read box.
+READ_BTN = 24
 ROW_GAP = 8
 CARD_RADIUS = 14
 BRACKET_WIDTH = 26          # the curly-bracket spine down the left of a group
@@ -58,6 +62,8 @@ class RowGeometry:
     thumb: QRect
     label: QRect
     sub: QRect
+    #: What the reader made of the picture. Empty when there is nothing read.
+    read: QRect = field(default_factory=QRect)
     # The address box. Empty when the clipping has no address, in which case
     # nothing is drawn there and nothing is clickable there either.
     url: QRect = field(default_factory=QRect)
@@ -81,6 +87,10 @@ class RowGeometry:
             *([Hit("label", self.label,
                    "The headline that prints above the image")]
               if not self.label.isNull() and self.label.isValid() else []),
+            *([Hit("read", self.read,
+                   "What the reader made of this picture - correct it here "
+                   "and the duplicate check and the search both improve")]
+              if not self.read.isNull() and self.read.isValid() else []),
         ]
 
 
@@ -93,7 +103,7 @@ ADD_URL_H = 17
 
 def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
              show_title: bool = True, show_url: bool = False,
-             english: bool = False) -> RowGeometry:
+             english: bool = False, show_read: bool = False) -> RowGeometry:
     """Lay out one clipping row inside the rectangle Qt hands the delegate.
 
     A clipping shows the boxes it has something to put in: a headline, an
@@ -103,7 +113,9 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
     """
     frame = option_rect.adjusted(LEFT_INSET, 0, -RIGHT_INSET, 0)
     left = frame.left() + (BRACKET_WIDTH if in_group else 0)
-    height = ROW_HEIGHT_TWO if (show_title and show_url) else ROW_HEIGHT
+    boxes = sum((bool(show_title), bool(show_url), bool(show_read)))
+    height = (ROW_HEIGHT_THREE if boxes >= 3
+              else ROW_HEIGHT_TWO if boxes == 2 else ROW_HEIGHT)
     card = QRect(
         left,
         frame.top(),
@@ -172,12 +184,28 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
     if not (show_title or show_url):
         show_title = True          # something has to be there to type into
 
-    top = card.top() + (16 if not (show_title and show_url) else 14)
+    top = card.top() + (16 if boxes < 2 else 14)
     label = QRect()
     url = QRect()
+    read = QRect()
     if show_title:
         label = QRect(label_left, top, label_width, FIELD_HEIGHT)
         top = label.bottom() + FIELD_GAP
+    # The read box keeps room on its right for its two round buttons, so they
+    # sit beside it rather than over it however narrow the window gets.
+    if show_read:
+        pads = READ_BTN * 2 + 6 + 8
+        read = QRect(label_left, top, max(60, label_width - pads), FIELD_HEIGHT)
+        mid = read.center().y()
+        buttons.append(Hit(
+            "reread", QRect(read.right() + 8, mid - READ_BTN // 2,
+                            READ_BTN, READ_BTN),
+            "Read the headline off this picture again"))
+        buttons.append(Hit(
+            "use_read", QRect(read.right() + 8 + READ_BTN + 6,
+                              mid - READ_BTN // 2, READ_BTN, READ_BTN),
+            "Put these words into the headline that prints"))
+        top = read.bottom() + FIELD_GAP
     if show_url:
         url = QRect(label_left, top, label_width, FIELD_HEIGHT)
         top = url.bottom() + FIELD_GAP
@@ -201,6 +229,7 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
                     max(0, sub.width() - ADD_URL_W - 8), sub.height())
 
     return RowGeometry(
+        read=read,
         card=card,
         check=check,
         grip=grip,

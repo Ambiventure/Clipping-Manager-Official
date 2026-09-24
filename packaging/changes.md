@@ -16,6 +16,36 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.47
+
+Added
+
+  * **A search box above the list.** Two letters are enough. It looks in the
+    printed headline, the headline read off the picture, the newspaper, the
+    edition and the link, and shows what it found in a translucent panel with
+    each clipping's number, its picture and the words that matched. Picking one
+    goes to it. **It only finds** - nothing is hidden, reordered or unticked.
+  * **And it takes the operators you already know**: `hydrogen train` for both
+    words, `hydrogen OR train` for either, `"vande bharat"` for a phrase,
+    `-cricket` to leave something out, and `paper:jagran`, `read:kavach`,
+    `link:`, `headline:`, `edition:` for one field only. The **i** beside the
+    box explains all of it. A misread headline is still found: anything four
+    letters or longer is matched forgivingly, so `hydrogen` finds `hydr0gen`.
+  * **The headline read off the picture is now a box you can see and correct**,
+    on the clipping in the list and in the preview window. Two round buttons
+    beside it: read the picture again, and put those words into the headline
+    that prints. Correcting it makes the duplicate check and the search better,
+    because both read the same field.
+  * **The export bar says what was last done** to the newspad - a clipping
+    copied, a file imported, something deleted - and Ctrl+Z steps it back to
+    the one before.
+
+Changed
+
+  * **The message bubble is smaller and quieter**: one shape rather than a box
+    inside a box, only as wide as its words, slightly see-through, and gone
+    after three and a half seconds instead of six.
+
 ## 2.0.46
 
 Fixed

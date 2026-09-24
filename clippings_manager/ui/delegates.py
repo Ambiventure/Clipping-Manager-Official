@@ -20,6 +20,16 @@ from .model import ENTRY_CLIP, ENTRY_GROUP, Entry
 HOVER_NONE = (-1, "")
 
 
+def reading_for(clip) -> bool:
+    """Whether the read box is shown for this clipping.
+
+    Only where there is something read. An empty box on every one of a
+    hundred and sixty rows is the clutter rowlayout warns about, and the
+    reading arrives on its own the first time the duplicate check runs.
+    """
+    return bool(str(getattr(clip, "ocr_text", "") or "").strip())
+
+
 def fields_for(clip) -> tuple[bool, bool]:
     """Which of the two boxes a clipping shows: (headline, address).
 
@@ -67,7 +77,10 @@ class EntryDelegate(QStyledItemDelegate):
                 rowlayout.GROUP_HEIGHT + rowlayout.GROUP_GAP * 2,
             )
         title, address = fields_for(entry.row.clip)
-        height = (rowlayout.ROW_HEIGHT_TWO if (title and address)
+        boxes = sum((bool(title), bool(address),
+                     bool(reading_for(entry.row.clip))))
+        height = (rowlayout.ROW_HEIGHT_THREE if boxes >= 3
+                  else rowlayout.ROW_HEIGHT_TWO if boxes == 2
                   else rowlayout.ROW_HEIGHT)
         return QSize(option.rect.width(), height + rowlayout.ROW_GAP)
 
@@ -88,6 +101,7 @@ class EntryDelegate(QStyledItemDelegate):
             is_last=entry.last_in_group or not entry.can_merge,
             show_title=title, show_url=address,
             english=copied.needs_english(entry.row.clip),
+            show_read=reading_for(entry.row.clip),
         )
 
     # -------------------------------------------------------------- painting
@@ -431,6 +445,13 @@ class EntryDelegate(QStyledItemDelegate):
                 "Headline — leave blank for a clean clipping",
                 theme.QINK,
             )
+        if not geo.read.isNull() and geo.read.isValid():
+            self._paint_field(
+                painter, geo.read, clip, selected, "READ",
+                str(getattr(clip, "ocr_text", "") or ""),
+                "Nothing read from this picture yet",
+                QColor("#5B6B86"),
+            )
         if not geo.url.isNull() and geo.url.isValid():
             self._paint_field(
                 painter, geo.url, clip, selected, "URL", clip.url,
@@ -622,6 +643,19 @@ class EntryDelegate(QStyledItemDelegate):
             icons.rotate(painter, box, theme.QNAVY if hovered else theme.QMUTED)
             return
 
+        # The two round buttons beside the read box. Round, so they are not
+        # mistaken for the square action buttons on the right of the row -
+        # these belong to the box they sit against, not to the clipping.
+        if name in ("reread", "use_read"):
+            painter.setPen(QPen(theme.QNAVY if hovered else theme.QHAIRLINE, 1))
+            painter.setBrush(QColor(theme.NAVY_WASH) if hovered
+                             else QColor("#F4F6FA"))
+            painter.drawEllipse(rect.adjusted(0.5, 0.5, -0.5, -0.5))
+            box = QRectF(rect.center().x() - 6.5, rect.center().y() - 6.5, 13, 13)
+            drawer = icons.rotate if name == "reread" else icons.check
+            drawer(painter, box, theme.QNAVY if hovered else theme.QMUTED)
+            return
+
         # pill buttons: Split, Merge and English
         font = painter.font()
         font.setPixelSize(11)
@@ -669,4 +703,8 @@ class EntryDelegate(QStyledItemDelegate):
     def label_rect(self, option_rect: QRect, entry: Entry,
                    field: str = "label") -> QRect:
         geometry = self.geometry_for(option_rect, entry)
-        return geometry.url if field == "url" else geometry.label
+        if field == "url":
+            return geometry.url
+        if field == "read":
+            return geometry.read
+        return geometry.label

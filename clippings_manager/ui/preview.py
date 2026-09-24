@@ -149,6 +149,11 @@ class PreviewDialog(QDialog):
     #: (row id, newspad number) - put a COPY of this clipping into that
     #: newspad's saved work. The window does it; this only asks.
     sendToNewspad = Signal(int, int)
+    #: Read this clipping's headline off the picture again (a row id). The
+    #: reading is slow and needs the engine, so the window does it.
+    rereadRequested = Signal(int)
+    #: (row id, words) - what was read off the picture, edited by hand.
+    ocrEdited = Signal(int, str)
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
@@ -701,6 +706,51 @@ class PreviewDialog(QDialog):
         # row because addresses are long, and its own field because until now
         # the only way to see one was on a clipping that had no headline - which
         # the 360 Degree document's clippings do have.
+        # WHAT THE READER MADE OF THE PICTURE, in a box of its own.
+        #
+        # It was already being read - the duplicate check matches on it and the
+        # search looks in it - and it was the one thing about a clipping that
+        # could not be seen or corrected. A misread headline quietly stopped a
+        # repeat being found and a search finding anything, with nothing on
+        # screen to say so.
+        #
+        # It is NOT the headline that prints. That is the box above, which
+        # somebody types; this is what the picture says, and the second button
+        # is how one becomes the other.
+        read_row = QHBoxLayout()
+        read_row.setSpacing(8)
+        self.ocr_edit = self._field(
+            "Headline read from the picture", read_row, 1)
+        self.ocr_edit.setPlaceholderText(
+            "Not read yet — press the round button to read it")
+        self.ocr_edit.setToolTip(
+            "What the reader made of this picture. The duplicate check and "
+            "the search both use it, so correcting a misreading here makes "
+            "both of them better.")
+        self.reread_btn = self._round_button(
+            "rotate", "Read this picture again",
+            "Read the headline off the picture again. Worth doing when what "
+            "is in the box is nonsense - a crooked scan often reads better "
+            "after it has been straightened or trimmed.")
+        self.reread_btn.clicked.connect(self._reread)
+        self.use_read_btn = self._round_button(
+            "check", "Use this as the headline",
+            "Put these words into the headline box above, which is the one "
+            "that prints above the clipping in the report.")
+        self.use_read_btn.clicked.connect(self._use_reading)
+        # Level with the box, not with its caption.
+        pads = QVBoxLayout()
+        pads.setContentsMargins(0, 0, 0, 0)
+        pads.setSpacing(0)
+        pads.addSpacing(17)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        buttons.addWidget(self.reread_btn)
+        buttons.addWidget(self.use_read_btn)
+        pads.addLayout(buttons)
+        read_row.addLayout(pads, 0)
+        body.addLayout(read_row)
+
         link_row = QHBoxLayout()
         link_row.setSpacing(12)
         self.link = self._field(
@@ -837,6 +887,49 @@ class PreviewDialog(QDialog):
         column.addWidget(edit)
         return edit
 
+    #: The round buttons beside the read box.
+    ROUND = 30
+
+    def _round_button(self, icon: str, tip_short: str, tip: str):
+        """One small round button, dark like the panel it sits on."""
+        button = QToolButton()
+        button.setFixedSize(self.ROUND, self.ROUND)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setIcon(icon_pixmap(icon, "#DCE5F2", 15))
+        button.setIconSize(QSize(15, 15))
+        button.setToolTip(tip)
+        button.setAccessibleName(tip_short)
+        button.setStyleSheet(
+            f"QToolButton {{ background: rgba(255, 255, 255, 0.07);"
+            f" border: 1px solid rgba(255, 255, 255, 0.16);"
+            f" border-radius: {self.ROUND // 2}px; padding: 0; }}"
+            "QToolButton:hover { background: rgba(255, 255, 255, 0.15); }"
+            "QToolButton:pressed { background: rgba(255, 255, 255, 0.22); }"
+            "QToolButton:disabled { background: rgba(255, 255, 255, 0.03);"
+            " border-color: rgba(255, 255, 255, 0.08); }")
+        return button
+
+    def _reread(self) -> None:
+        if self.row is not None:
+            self.rereadRequested.emit(self.row.id)
+
+    def _use_reading(self) -> None:
+        """What the picture said becomes what the report prints."""
+        words = self.ocr_edit.text().strip()
+        if not words or self.row is None:
+            return
+        self.label_edit.setText(words)
+        self._emit_label()
+        self.told("Put into the headline")
+
+    def _ocr_typed(self, words: str) -> None:
+        """A correction typed into the read box. It is the clipping's own
+        reading from then on - the duplicate check and the search both read
+        the same field, so a correction helps both."""
+        self.use_read_btn.setEnabled(bool(words.strip()))
+        if self.row is not None:
+            self.ocrEdited.emit(self.row.id, words)
+
     def _combo(self, label, layout, stretch) -> QComboBox:
         column = self._labelled(label, layout, stretch)
         combo = QComboBox()
@@ -972,6 +1065,12 @@ class PreviewDialog(QDialog):
             self.next_btn.setEnabled(position < total)
 
         self.label_edit.setText(clip.title_text)
+        was = self.ocr_edit.blockSignals(True)
+        try:
+            self.ocr_edit.setText(str(getattr(clip, "ocr_text", "") or "").strip())
+        finally:
+            self.ocr_edit.blockSignals(was)
+        self.use_read_btn.setEnabled(bool(self.ocr_edit.text().strip()))
         self.link.setText(clip.url)
         self._fill(self.newspaper, self.model.name_index.newspaper_names, clip.newspaper)
         self._fill(self.edition, self.model.name_index.edition_names, clip.edition)
@@ -1017,8 +1116,8 @@ class PreviewDialog(QDialog):
             where = ("Caption copied" if clip.name_source == "copied"
                      else "Caption in the document")
             notes.append(f"{where}: {clip.caption_raw}")
-        if clip.ocr_text:
-            notes.append(f"Read from the image: {clip.ocr_text}")
+        # What the picture says has a box of its own now, right above this
+        # one, so repeating it here was the same sentence twice on one panel.
         if notes:
             self.notice.setText("\n".join(notes))
             self.notice.show()
@@ -1083,6 +1182,7 @@ class PreviewDialog(QDialog):
         # per letter typed.
         self.section.currentIndexChanged.connect(self._section_picked)
         self.label_edit.textEdited.connect(self._emit_label)
+        self.ocr_edit.textEdited.connect(self._ocr_typed)
         self.link.textEdited.connect(lambda text: self._emit("url", text))
         self._connected = True
 

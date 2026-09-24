@@ -71,8 +71,8 @@ TIDIED_NOTE = (" The phone's bars were trimmed off - Trim… then Whole picture 
                "puts them back.")
 from .. import version
 from ..core.session import SessionStore, decode_clip, encode_clip
-from . import (collect, commands, datefield, dropped, export_dialog, icons,
-               reader, theme, webclip, win_drop, zoom)
+from . import (collect, commands, datefield, dropped, export_dialog, findbar,
+               icons, reader, theme, webclip, win_drop, zoom)
 from .clip_list import ClipList
 from .cover_card import CoverCard
 from .fluid import ElidedLabel, FlowLayout, ShrinkingCombo
@@ -1316,6 +1316,16 @@ class MainWindow(QMainWindow):
         self.heading.groupSocial.connect(lambda: self._group_social(self.model))
         layout.addWidget(self.heading)
 
+        # FINDING ONE CLIPPING ON A PAGE OF A HUNDRED AND SIXTY. Under the
+        # layout card, above the list it searches. It only finds: nothing is
+        # hidden, reordered or unticked, which is what the Show and Arrange
+        # strip is for.
+        self.find_bar = findbar.FindBar()
+        self.find_bar.serve(lambda: list(self.pool().rows),
+                            lambda row_id: self.pool().number_of(row_id))
+        self.find_bar.picked.connect(self._go_to_clip)
+        layout.addWidget(self.find_bar)
+
         # A bar for work that takes long enough to wonder about. Above the
         # status strip, so the sentence and the bar read as one thing.
         self.work_bar = QProgressBar()
@@ -1790,8 +1800,25 @@ class MainWindow(QMainWindow):
 
         self.ready = QLabel()
         self.ready.setObjectName("FooterCount")
-        row.addWidget(self.ready)
-        row.addStretch(1)
+        self.ready.setWordWrap(True)
+        # It wraps rather than pushing the bar wide - "ready for export" goes
+        # onto a second line long before the buttons are shoved off the edge.
+        self.ready.setMinimumWidth(96)
+        row.addWidget(self.ready, 0)
+
+        # WHAT WAS LAST DONE TO THIS NEWSPAD, between the count and the export
+        # buttons. The undo stack already knows it and already steps back on
+        # Ctrl+Z - undoText() is the thing that WOULD be undone, which is the
+        # last thing done - so this is that sentence and nothing more. It takes
+        # the room the stretch used to, and elides instead of pushing the
+        # buttons off a narrow window.
+        self.last_action = ElidedLabel(floor=70)
+        self.last_action.setObjectName("FooterLast")
+        self.last_action.setAlignment(Qt.AlignCenter)
+        self.last_action.setStyleSheet(
+            f"#FooterLast {{ color: {theme.SLATE_TEXT_LIGHT}; font-size: 11px;"
+            f" background: transparent; border: none; }}")
+        row.addWidget(self.last_action, 1)
 
         self.btn_docx_out = QPushButton("Word (.docx)")
         self.btn_docx_out.setObjectName("NavyOutline")
@@ -1984,20 +2011,35 @@ class MainWindow(QMainWindow):
         # list, so a move reported only there would look like nothing happened.
         self.move_note = QFrame(parent)
         self.move_note.setObjectName("BatchNote")
+        # NO FRAME OF ITS OWN. A QFrame draws a box by default, and the box
+        # sat inside the rounded navy as a second, squarer edge - the
+        # "unwanted edges" on a bubble that should be one shape.
+        self.move_note.setFrameShape(QFrame.NoFrame)
+        self.move_note.setAttribute(Qt.WA_TranslucentBackground, False)
         self.move_note.setStyleSheet(
-            f"#BatchNote {{ background: {theme.NAVY}; border-radius: 16px; }}"
-            f"QLabel {{ color: white; font-size: 12px; font-weight: 600;"
-            f" background: transparent; }}")
+            # Translucent, but not so much that white type on it stops being
+            # readable: at 0.93 over the page's own pale grey the text keeps
+            # well past the 4.5:1 it needs.
+            f"#BatchNote {{ background: rgba(16, 32, 63, 0.93);"
+            f" border: 1px solid rgba(255, 255, 255, 0.10);"
+            f" border-radius: 13px; }}"
+            f"#BatchNote QLabel {{ color: #EEF2F8; font-size: 11.5px;"
+            f" font-weight: 600; background: transparent; border: none; }}")
         note_row = QHBoxLayout(self.move_note)
-        note_row.setContentsMargins(16, 10, 16, 10)
+        note_row.setContentsMargins(13, 8, 13, 8)
         self.move_note_text = QLabel()
         self.move_note_text.setWordWrap(True)
+        # Narrow enough to read in one glance. Left to itself the bubble ran
+        # the width of the window and the sentence became three long lines.
+        self.move_note_text.setMaximumWidth(430)
         note_row.addWidget(self.move_note_text)
         self.move_note.hide()
         self._move_note_above = False
         self._move_note_timer = QTimer(self)
         self._move_note_timer.setSingleShot(True)
-        self._move_note_timer.setInterval(6000)
+        # Shorter than it was: six seconds is long enough to feel like
+        # something left behind.
+        self._move_note_timer.setInterval(3600)
         self._move_note_timer.timeout.connect(self._hide_move_note)
 
     # -------------------------------------------------------------- wiring
@@ -2018,6 +2060,7 @@ class MainWindow(QMainWindow):
         self.list.groupAction.connect(self._on_group_action)
         self.list.labelEdited.connect(self._on_label_edited)
         self.list.urlEdited.connect(self._on_url_edited)
+        self.list.readEdited.connect(self._ocr_corrected)
         self.list.previewRequested.connect(self.open_preview)
         self.list.reorderRequested.connect(self._on_reorder)
         self.list.selectionToggled.connect(self._on_selection_toggled)
@@ -2112,6 +2155,8 @@ class MainWindow(QMainWindow):
         self._offer_timer.timeout.connect(self._refresh_filter_choices)
         self.undo_stack.indexChanged.connect(lambda _i: self._offer_timer.start())
         self.board_undo.indexChanged.connect(lambda _i: self._offer_timer.start())
+        self.undo_stack.indexChanged.connect(lambda _i: self._say_last_action())
+        self.board_undo.indexChanged.connect(lambda _i: self._say_last_action())
 
         self.mode_switch.changed.connect(self.set_mode)
         self.board.assignRequested.connect(self._assign_sentiment)
@@ -3146,6 +3191,12 @@ class MainWindow(QMainWindow):
             return
         stack = self.stack_for(model)
         view = self._list_for(model)
+        if name == "reread":
+            self._reread_headline(clip_id)
+            return
+        if name == "use_read":
+            self._use_reading(clip_id)
+            return
         if name == "delete":
             stack.push(commands.RemoveClips(model, [clip_id]))
             self._flash("Clipping deleted — Ctrl+Z brings it back.", "info")
@@ -3669,6 +3720,58 @@ class MainWindow(QMainWindow):
         self._place_floating()
         self._move_note_timer.start()
 
+    def _go_to_clip(self, row_id: int) -> None:
+        """Scroll the list to a clipping and open it - what picking a search
+        result does. The clipping is not selected or ticked: finding one is
+        not the same as choosing it."""
+        pool = self.pool()
+        if pool.row_for(row_id) is None:
+            return
+        view = self.list if self.mode == "standard" else None
+        if view is not None:
+            try:
+                # The list is one long page of entries; the clipping's own
+                # entry is the one carrying its row.
+                model = view.model()
+                for place in range(model.rowCount()):
+                    index = model.index(place, 0)
+                    entry = index.data(Qt.UserRole)
+                    row = getattr(entry, "row", None)
+                    if row is not None and getattr(row, "id", None) == row_id:
+                        view.scrollTo(index)
+                        break
+            except Exception:  # noqa: BLE001 - a view that cannot, still opens
+                pass
+        self.open_preview(row_id)
+
+    def _say_last_action(self) -> None:
+        """The last thing done on the interface that is open.
+
+        Straight off that interface's own undo stack, so it is always the
+        step Ctrl+Z would take back, and one Ctrl+Z later it is the step
+        before it. Each interface has its own stack, so the board and the
+        press report each report their own work.
+        """
+        line = getattr(self, "last_action", None)
+        if line is None:
+            return
+        stack = self.stack_for(self.pool())
+        said = ""
+        try:
+            if stack is not None and stack.canUndo():
+                said = str(stack.undoText() or "").strip()
+        except Exception:  # noqa: BLE001 - a caption is never worth a crash
+            said = ""
+        if said:
+            # The commands name themselves in the past tense already
+            # ("Grouped 5 posts by platform", "All clippings cleared").
+            line.setText(f"Last: {said[0].upper()}{said[1:]}")
+            line.setToolTip(f"The last thing done here: {said}. Ctrl+Z takes "
+                            "it back, and this then says the one before it.")
+        else:
+            line.setText("")
+            line.setToolTip("Nothing has been done to this newspad yet.")
+
     def _hide_move_note(self, *_args) -> None:
         note = getattr(self, "move_note", None)
         if note is not None and note.isVisible():
@@ -3824,6 +3927,72 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.Yes
 
     # ------------------------------------------------------------- preview
+    def _reread_headline(self, clip_id: int) -> None:
+        """Read this clipping's headline off its picture again.
+
+        As it PRINTS - trim and turn and all - because that is the picture the
+        report shows and the one a second reading should be of: a crooked scan
+        straightened, or a strip of the neighbouring column trimmed away, is
+        exactly why somebody presses this.
+        """
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        if row is None or row.clip is None:
+            return
+        from ..core import ocr
+
+        if not ocr.available():
+            self._flash(f"The reader is not available ({ocr.why_not()}).", "bad")
+            return
+        was = str(getattr(row.clip, "ocr_text", "") or "")
+        try:
+            ocr.read_into(row.clip, force=True)
+        except Exception as bad:  # noqa: BLE001 - one clipping, never the morning
+            self._flash(f"That picture could not be read ({bad}).", "bad")
+            return
+        now = str(getattr(row.clip, "ocr_text", "") or "").strip()
+        preview = getattr(self, "preview", None)
+        if preview is not None and preview.isVisible():
+            preview.ocr_edit.setText(now)
+            preview.use_read_btn.setEnabled(bool(now))
+            preview.told("Read again" if now else "Nothing could be read")
+        pool.refresh_all()
+        self.touch_session()
+        if not now:
+            self._flash("Nothing could be read off that picture.", "info")
+        elif now == was.strip():
+            self._flash("Read again — the same words came back.", "info")
+        else:
+            self._flash(f"Read again: {now[:70]}", "good")
+
+    def _use_reading(self, clip_id: int) -> None:
+        """What the picture said becomes the headline the report prints.
+
+        On the undo stack like any other change to a clipping: it is an edit
+        to what will be printed, and one Ctrl+Z takes it back.
+        """
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        if row is None or row.clip is None:
+            return
+        words = str(getattr(row.clip, "ocr_text", "") or "").strip()
+        if not words:
+            self._flash("There is nothing read off that picture yet.", "info")
+            return
+        self.stack_for(pool).push(
+            commands.EditLabel(pool, clip_id, words))
+        self._flash(f"Headline set from the picture: {words[:60]}", "good")
+
+    def _ocr_corrected(self, clip_id: int, words: str) -> None:
+        """A reading corrected by hand. Kept on the clipping, so the duplicate
+        check and the search both use the corrected words."""
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        if row is None or row.clip is None:
+            return
+        row.clip.ocr_text = words
+        self.touch_session()
+
     def _copy_clip_picture(self, clip_id: int) -> None:
         """This clipping's picture, as it prints, on the clipboard.
 
@@ -3929,6 +4098,8 @@ class MainWindow(QMainWindow):
             self.preview.jumpRequested.connect(self.open_preview)
             # The review of the list the previewed clipping is in.
             self.preview.copyRequested.connect(self._copy_clip_picture)
+            self.preview.rereadRequested.connect(self._reread_headline)
+            self.preview.ocrEdited.connect(self._ocr_corrected)
             self.preview.sendToNewspad.connect(self._send_clip_to_newspad)
             self.preview.reviewRequested.connect(
                 lambda: self.review_duplicates(pool=self._preview_pool()))
@@ -4558,6 +4729,7 @@ class MainWindow(QMainWindow):
         )
         self.btn_pdf_out.setEnabled(included > 0)
         self.btn_docx_out.setEnabled(included > 0)
+        self._say_last_action()
         self.clear_all_btn.setVisible(total > 0)
         if getattr(self, "board", None) is not None:
             self.board.set_rows(self.board_model.rows)
@@ -7175,7 +7347,18 @@ class MainWindow(QMainWindow):
         # still there because the move was refused and the ticks stayed.
         note = getattr(self, "move_note", None)
         if note is not None and note.isVisible():
-            note.setFixedWidth(max(240, min(680, self.width() - 16)))
+            # HUGS ITS OWN WORDS. It used to be pinned at up to 680 wide
+            # whatever it said, so a short sentence sat in the middle of a
+            # wide navy slab. The label wraps at 430, so the bubble is that
+            # plus its padding - or less, when the sentence is shorter.
+            # HUGS ITS OWN WORDS. It used to be pinned at up to 680 wide
+            # whatever it said, so a short sentence sat in the middle of a wide
+            # navy slab. A wrapped label's sizeHint is its MINIMUM, not its
+            # natural width, so the sentence is measured as one line and capped.
+            words = self.move_note_text.text()
+            natural = self.move_note_text.fontMetrics().boundingRect(words).width()
+            note.setFixedWidth(max(240, min(456, self.width() - 16,
+                                            natural + 30)))
             note.adjustSize()
             x = max(8, (self.width() - note.width()) // 2)
             if self.batch.isVisible():

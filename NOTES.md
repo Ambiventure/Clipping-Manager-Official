@@ -5373,3 +5373,53 @@ cutting whose top 35-50% is a dark photograph ending in a clean light edge;
 that would be measured and read from below the photograph. `strip_band` is used
 only for MEASURING and READING - never for the picture or the report - so the
 cost there is a little less precision in matching, not a clipping.
+
+
+## Finding a clipping, and seeing what the reader read (2.0.47)
+
+**The search takes operators, and it does not need a library.** The office
+asked for something that behaves like a search box - AND, OR, phrases,
+exclusions - and asked which library to bring in. None: a full-text engine
+(Whoosh and the like) wants an index, a good deal of bundle weight and its own
+fight with PyInstaller, for a list of a hundred and sixty rows that is already
+in memory. `ui/findbar.parse` is about sixty lines and gives the same syntax
+with no dependency at all.
+
+  * words next to each other are joined by "and";
+  * `OR` in capitals splits the query into sides - so `a b OR c` is
+    `(a and b) or c`, which is how a search box groups them;
+  * `"a phrase"` is asked for exactly, in that order;
+  * `-word` must NOT be there;
+  * `paper:`, `headline:`, `read:`, `edition:`, `link:` ask one field only.
+
+`OR` has to be capitals so a headline with the word "or" in it stays a
+headline. Text is folded before it is compared - case, punctuation, and the
+Devanagari matras, because a reading taken off a picture loses them - and
+anything four letters or longer that did not match plainly is tried again
+forgivingly with rapidfuzz, which is already in the build. A quoted phrase is
+never guessed at.
+
+**What the reader read is now a field.** It was already being kept, and the
+duplicate check and the search both use it, but it was the one thing about a
+clipping nobody could see or correct: a misread headline quietly stopped a
+repeat being found, with nothing on screen to say so. It is a box on the row
+and a box in the preview, with two round buttons - read the picture again, and
+put these words into the headline that prints. Corrections are kept on the
+clipping, so both the check and the search improve together.
+
+The box only appears where there IS a reading. An empty box on every one of a
+hundred and sixty rows is the clutter `rowlayout` warns about, so a row grows
+to three boxes only when it has three things to say.
+
+**The export bar's last-action line is the undo stack, said out loud.**
+`undoText()` is the thing that would be undone, which is the last thing done,
+and it steps back on Ctrl+Z without being told. Each interface has its own
+stack, so the board and the press report each report their own work. It elides,
+and the count beside it wraps, so neither ever reaches the export buttons -
+measured at 1240, 900 and 760.
+
+**The bubble** was a QFrame, which draws a box by default: a squarer edge
+inside the rounded navy one, which is what "many unwanted edges" was. It is one
+shape now, translucent, and only as wide as its words - a wrapped label's
+sizeHint is its MINIMUM, so the sentence is measured as one line and capped at
+456 rather than pinned at 680 whatever it said.
