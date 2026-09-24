@@ -446,11 +446,18 @@ class EntryDelegate(QStyledItemDelegate):
                 theme.QINK,
             )
         if not geo.read.isNull() and geo.read.isValid():
+            # SET TO BE READ. It was a pale slate at the same size as the rest,
+            # and a reading is the one field somebody actually has to READ -
+            # they are checking it word by word against the picture. A point
+            # larger, and dark enough to be read at a glance: #334155 is about
+            # 10:1 on the box, against the 5.8:1 it had. Still not the near
+            # black the printed headline uses, because the two are different
+            # things and should not look like one field repeated.
             self._paint_field(
                 painter, geo.read, clip, selected, "READ",
                 str(getattr(clip, "ocr_text", "") or ""),
                 "Nothing read from this picture yet",
-                QColor("#5B6B86"),
+                QColor("#334155"), size=14,
             )
         if not geo.url.isNull() and geo.url.isValid():
             self._paint_field(
@@ -460,7 +467,7 @@ class EntryDelegate(QStyledItemDelegate):
             )
 
     def _paint_field(self, painter, rect: QRect, clip, selected, tag: str,
-                     text: str, placeholder: str, ink) -> None:
+                     text: str, placeholder: str, ink, size: int = 13) -> None:
         # The tag is inside the box, at the left, so it reads as part of the
         # field rather than as another line of the card. Without it the two
         # boxes are the same shape and there is nothing to say which is which.
@@ -491,7 +498,7 @@ class EntryDelegate(QStyledItemDelegate):
         painter.drawText(tag_rect, Qt.AlignCenter, tag)
 
         font = painter.font()
-        font.setPixelSize(13)
+        font.setPixelSize(size)
         font.setBold(bool(text.strip()))
         painter.setFont(font)
         metrics = QFontMetrics(font)

@@ -727,6 +727,10 @@ class PreviewDialog(QDialog):
             "What the reader made of this picture. The duplicate check and "
             "the search both use it, so correcting a misreading here makes "
             "both of them better.")
+        # Set to be read, for the same reason as the box on the row: this is
+        # the one field somebody checks word by word against the picture.
+        self.ocr_edit.setStyleSheet(
+            "font-size: 14px; font-weight: 600; letter-spacing: .1px;")
         self.reread_btn = self._round_button(
             "rotate", "Read this picture again",
             "Read the headline off the picture again. Worth doing when what "

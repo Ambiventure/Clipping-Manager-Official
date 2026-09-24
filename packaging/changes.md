@@ -16,6 +16,25 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.49
+
+Changed
+
+  * **The reading of a clipping is set to be read.** The box that shows what
+    was read off the picture was a pale grey at the same size as everything
+    else, which is the wrong way round - it is the one line anybody has to
+    check word by word against the clipping. It is a size larger and dark
+    enough to read at a glance now, both in the list and in the preview.
+
+Added
+
+  * **The search box offers what you looked for lately.** Click it while it is
+    empty and the last few searches drop down; pick one and it runs again.
+    Typing simply carries on as before and puts the offer away. Right-click
+    the box to forget them.
+
+---
+
 ## 2.0.48
 
 Fixed

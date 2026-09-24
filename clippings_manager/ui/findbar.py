@@ -28,9 +28,11 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import (QEvent, QPoint, QStringListModel, Qt, QTimer,
+                            Signal)
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFrame,
+from PySide6.QtWidgets import (QCheckBox, QCompleter, QDialog,
+                               QDialogButtonBox, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QMenu,
                                QPushButton, QScrollArea, QToolButton,
                                QVBoxLayout, QWidget)
@@ -50,6 +52,46 @@ MOST_RESULTS = 40
 #: How long after the last keystroke the search runs. Long enough that typing
 #: a word does not search five times.
 AFTER_TYPING_MS = 140
+#: How many searches back the field remembers, and where they are kept. Install
+#: wide, beside the rest of the settings, because a search is about the
+#: clippings rather than about one newspad - the same story is looked for in
+#: whichever newspad it is being compiled into.
+RECENT_KEPT = 8
+RECENT_KEY = "recent_searches"
+#: The padding the offer's own panel carries, which has to be added back when
+#: it is sized - see offer_recent.
+OFFER_PAD = 4
+
+
+def recent() -> list:
+    """What was searched for lately, newest first."""
+    try:
+        from .export_dialog import load_settings
+
+        kept = load_settings().get(RECENT_KEY) or []
+    except Exception:  # noqa: BLE001 - no settings yet is no history
+        return []
+    out = []
+    for one in kept:
+        words = str(one or "").strip()
+        if words and words not in out:
+            out.append(words)
+    return out[:RECENT_KEPT]
+
+
+def remember(wanted: str) -> None:
+    """Keep one search, at the front, without repeating it."""
+    words = str(wanted or "").strip()
+    if len(fold(words).replace(" ", "")) < LEAST_LETTERS:
+        return
+    try:
+        from .export_dialog import load_settings, save_settings
+
+        kept = [one for one in recent() if one.casefold() != words.casefold()]
+        save_settings({**load_settings(),
+                       RECENT_KEY: [words, *kept][:RECENT_KEPT]})
+    except Exception:  # noqa: BLE001 - a convenience, never a crash
+        pass
 
 #: Devanagari vowel signs, nukta and virama - the marks that make one spelling
 #: of a word two. Folded away so a headline read off a picture, which often
@@ -572,8 +614,39 @@ class FindBar(QWidget):
         self._timer.setSingleShot(True)
         self._timer.setInterval(AFTER_TYPING_MS)
         self._timer.timeout.connect(self._look)
-        self.field.textChanged.connect(lambda _t: self._timer.start())
+        self.field.textChanged.connect(self._typed)
         self.field.returnPressed.connect(self._look)
+
+        # WHAT WAS LOOKED FOR LATELY, offered on a press in an empty field.
+        # The same search is run over and over across a morning - one story
+        # chased through four divisions' files - and typing it again each time
+        # is what is being saved.
+        #
+        # A completer rather than a dropped-down menu, and driven by hand
+        # rather than attached to the field: a menu takes the keyboard while
+        # it is up, so a press followed straight away by typing - which is
+        # what anybody does - would lose the first letters into the menu. A
+        # completer's popup leaves the keys with the field. Driven by hand
+        # because attached it would also pop up WHILE typing, over the results
+        # panel, which is two floating things at once over the same spot.
+        self._recent_list = QStringListModel([], self)
+        self._recent = QCompleter(self._recent_list, self)
+        self._recent.setWidget(self.field)
+        self._recent.setCaseSensitivity(Qt.CaseInsensitive)
+        self._recent.activated.connect(self._use_recent)
+        offer = self._recent.popup()
+        offer.setStyleSheet(
+            f"QAbstractItemView {{ background: {theme.SURFACE};"
+            f" border: 1px solid {theme.HAIRLINE_STRONG}; border-radius: 10px;"
+            f" padding: {OFFER_PAD}px; outline: none; font-size: 12.5px;"
+            f" color: {theme.NAVY}; }}"
+            "QAbstractItemView::item { padding: 7px 9px; border-radius: 7px; }"
+            f"QAbstractItemView::item:selected {{ background: #E8F0FE;"
+            f" color: {theme.NAVY}; }}")
+        offer.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.field.installEventFilter(self)
+        #: Kept only while the query is worth keeping - see _look.
+        self._remembered = ""
 
         self.box = None
         self._rows = lambda: []
@@ -612,6 +685,54 @@ class FindBar(QWidget):
         box = self._ensure_box()
         box.show_results(found, self._numbers)
         self._place()
+        # Remembered only when it found something. A search that matched
+        # nothing is not worth offering back, and half a word typed on the way
+        # to a whole one would otherwise fill the list.
+        if found and wanted != self._remembered:
+            self._remembered = wanted
+            remember(wanted)
+
+    def offer_recent(self) -> None:
+        """What was looked for lately, under the field."""
+        kept = recent()
+        if not kept or self.field.text().strip():
+            return
+        self._recent_list.setStringList(kept)
+        self._recent.setCompletionPrefix("")
+        self._recent.complete()
+        # SIZED HERE. A completer measures its popup from the rows alone and
+        # knows nothing of the padding the stylesheet puts round them, so it
+        # comes up a few pixels short and hangs a scrollbar beside four items.
+        offer = self._recent.popup()
+        row = offer.sizeHintForRow(0)
+        if row > 0:
+            offer.setFixedHeight(row * len(kept) + 2 * OFFER_PAD
+                                 + 2 * offer.frameWidth())
+
+    def hide_recent(self) -> None:
+        popup = self._recent.popup()
+        if popup is not None and popup.isVisible():
+            popup.hide()
+
+    def _typed(self, _text: str = "") -> None:
+        # Typing puts the offer away: from the first letter the field is
+        # searching, and the results belong under it.
+        self.hide_recent()
+        self._timer.start()
+
+    def _use_recent(self, words: str) -> None:
+        self.hide_recent()
+        self.field.setText(words)
+        self._look()
+
+    def _forget_recent(self) -> None:
+        self._recent_list.setStringList([])
+        try:
+            from .export_dialog import load_settings, save_settings
+
+            save_settings({**load_settings(), RECENT_KEY: []})
+        except Exception:  # noqa: BLE001
+            pass
 
     def _place(self) -> None:
         """Against the field, as wide as it, and always inside the window.
@@ -662,4 +783,21 @@ class FindBar(QWidget):
         if watched is self.window() and event.type() in (
                 QEvent.Resize, QEvent.Move):
             self._place()
+        # Pressed while empty: offer what was searched for lately. Only on a
+        # press, and only while empty, so it never gets in the way of typing.
+        if (watched is self.field
+                and event.type() == QEvent.MouseButtonPress
+                and not self.field.text().strip()):
+            QTimer.singleShot(0, self.offer_recent)
+        # And a way to clear them, on the field's own right-click menu, where
+        # the rest of what can be done to the field already is.
+        if watched is self.field and event.type() == QEvent.ContextMenu:
+            menu = self.field.createStandardContextMenu()
+            menu.addSeparator()
+            forget = menu.addAction("Forget recent searches")
+            forget.setEnabled(bool(recent()))
+            forget.triggered.connect(self._forget_recent)
+            menu.exec(event.globalPos())
+            menu.deleteLater()
+            return True
         return super().eventFilter(watched, event)
