@@ -16,6 +16,35 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.50
+
+Fixed
+
+  * **A reading you typed yourself is no longer thrown away.** Turning a
+    clipping, trimming it, or starting a duplicate check all cleared what the
+    reader had worked out - which is right for a reading the machine made, and
+    was quietly deleting corrections somebody had typed by hand. A typed
+    reading now stays, is never read over, and is trusted when two clippings
+    are compared on their words.
+  * **Hindi in the reading is set large enough to read.** Devanagari carries
+    its vowel signs above and below the line, so at the size the English is
+    set at it comes out smaller and the signs close up. It is set a size
+    larger now, in the list and in the preview, and English is unchanged.
+
+Changed
+
+  * **The search results are plainly their own panel.** They used to be the
+    same grey as the page with a hairline round them; they now sit on a
+    shadow under a navy heading, so nothing on them reads as part of the list
+    behind.
+
+Added
+
+  * **The recent searches can be cleared from the list itself** - the last
+    line of the drop-down empties it.
+
+---
+
 ## 2.0.49
 
 Changed

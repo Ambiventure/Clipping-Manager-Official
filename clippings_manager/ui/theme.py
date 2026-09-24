@@ -277,6 +277,28 @@ def load_fonts() -> str:
 # preference, not the test - the test is whether a font covers Devanagari.
 PREFERRED_DEVANAGARI = ("Noto Sans Devanagari", "Nirmala UI", "Mangal")
 
+#: How much bigger Devanagari has to be set to read as large as Latin beside
+#: it. A Devanagari letter carries its vowel signs ABOVE and BELOW the line -
+#: the matras - so at any given size the part that tells one letter from
+#: another is a smaller share of the height than a Latin letter's is, and the
+#: signs themselves close up. Measured on the office's own readings at 14px:
+#: the Hindi looked a size and a half smaller than the English on the line
+#: under it, and three pixels is what brings the two level.
+DEVANAGARI_LIFT = 3
+#: The Devanagari block. Vowel signs and the nukta are inside it, so one test
+#: covers a whole line whether or not it begins with a full letter.
+_DEVANAGARI = ("\u0900", "\u097F")
+
+
+def is_devanagari(text: str) -> bool:
+    """Whether a line is Hindi (or another Devanagari language)."""
+    return any(_DEVANAGARI[0] <= ch <= _DEVANAGARI[1] for ch in str(text or ""))
+
+
+def reading_size(text: str, size: int) -> int:
+    """The size to set a reading at, given what the reading says."""
+    return size + DEVANAGARI_LIFT if is_devanagari(text) else size
+
 
 def devanagari_family() -> str:
     """A family that covers Devanagari, so mastheads never render as tofu.

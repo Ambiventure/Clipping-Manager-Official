@@ -498,7 +498,13 @@ class EntryDelegate(QStyledItemDelegate):
         painter.drawText(tag_rect, Qt.AlignCenter, tag)
 
         font = painter.font()
-        font.setPixelSize(size)
+        # Hindi is set larger - see theme.reading_size. The placeholder is
+        # English, so the size is taken from what is actually about to be
+        # drawn, which is decided a few lines further down; taken from `text`
+        # here, an empty Hindi reading would show its English placeholder at
+        # the Hindi size.
+        font.setPixelSize(theme.reading_size(text, size)
+                          if text.strip() else size)
         font.setBold(bool(text.strip()))
         painter.setFont(font)
         metrics = QFontMetrics(font)

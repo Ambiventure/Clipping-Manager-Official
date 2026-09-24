@@ -28,14 +28,13 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from PySide6.QtCore import (QEvent, QPoint, QStringListModel, Qt, QTimer,
-                            Signal)
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (QCheckBox, QCompleter, QDialog,
                                QDialogButtonBox, QFrame,
-                               QHBoxLayout, QLabel, QLineEdit, QMenu,
-                               QPushButton, QScrollArea, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
+                               QLineEdit, QMenu, QPushButton, QScrollArea,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -61,6 +60,11 @@ RECENT_KEY = "recent_searches"
 #: The padding the offer's own panel carries, which has to be added back when
 #: it is sized - see offer_recent.
 OFFER_PAD = 4
+#: The last line of the offer, which empties it. On the list itself rather than
+#: hidden on a right-click, because a list somebody wants rid of is a list they
+#: are looking at - and a search typed by mistake, or one with somebody's name
+#: in it, should not need to be hunted for.
+CLEAR_ROW = "\u00d7   Clear all recent searches"
 
 
 def recent() -> list:
@@ -361,22 +365,38 @@ class FindBox(QFrame):
         super().__init__(parent)
         self.setObjectName("FindBox")
         self.setFrameShape(QFrame.NoFrame)
+        # NOT PART OF THE PAGE. It used to be the page's own colour at 96
+        # per cent over the page, with a hairline round it, which is almost the
+        # definition of not being told apart: a panel and the thing behind it
+        # were the same grey and the eye had one faint line to go on. It keeps
+        # its translucency - the page still shows through - but it is white
+        # over a grey page, it is carried on a shadow, and it is headed by the
+        # same navy band the top of the window uses, so there is no moment
+        # where a result reads as a clipping on the page.
         self.setStyleSheet(
-            # Translucent, as asked, but over a pale page - so the words on it
-            # keep their contrast. Anything thinner and the thumbnails behind
-            # it start reading as part of a result.
-            "#FindBox { background: rgba(244, 246, 250, 0.96);"
-            " border: 1px solid rgba(15, 23, 42, 0.14);"
-            " border-radius: 14px; }")
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(10, 9, 10, 10)
-        outer.setSpacing(7)
+            "#FindBox { background: rgba(255, 255, 255, 0.97);"
+            " border: 1px solid rgba(18, 42, 82, 0.34);"
+            " border-radius: 14px; }"
+            f"#FindHead {{ background: {theme.NAVY};"
+            " border-top-left-radius: 13px; border-top-right-radius: 13px; }}")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(34)
+        shadow.setOffset(0, 10)
+        shadow.setColor(QColor(15, 23, 42, 105))
+        self.setGraphicsEffect(shadow)
 
-        head = QHBoxLayout()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.band = QFrame()
+        self.band.setObjectName("FindHead")
+        head = QHBoxLayout(self.band)
+        head.setContentsMargins(12, 8, 10, 8)
         head.setSpacing(8)
         self.said = QLabel()
         self.said.setStyleSheet(
-            f"color: {theme.MUTED}; font-size: 11px; font-weight: 700;"
+            f"color: {theme.CROWN_SUB}; font-size: 11px; font-weight: 700;"
             " background: transparent; border: none;")
         head.addWidget(self.said, 1)
 
@@ -401,14 +421,16 @@ class FindBox(QFrame):
         head.addWidget(self.shift_btn)
         for button in (self.all_btn, self.shift_btn):
             button.setStyleSheet(
-                f"QPushButton {{ background: {theme.SURFACE};"
-                f" border: 1px solid {theme.HAIRLINE_STRONG};"
+                f"QPushButton {{ background: {theme.CROWN_RAISED};"
+                f" border: 1px solid {theme.SLATE_LINE};"
                 f" border-radius: 9px; padding: 3px 10px; font-size: 11px;"
-                f" font-weight: 700; color: {theme.NAVY}; }}"
-                f"QPushButton:hover {{ border-color: {theme.NAVY}; }}"
-                "QPushButton:disabled { color: #9AA6B8; }"
+                f" font-weight: 700; color: #FFFFFF; }}"
+                f"QPushButton:hover {{ background: {theme.CROWN_HOVER};"
+                " border-color: #7C93C0; }"
+                "QPushButton:disabled { color: #8CA0C2;"
+                " background: rgba(255,255,255,0.06); border-color: #3C5280; }"
                 "QPushButton::menu-indicator { image: none; width: 0; }")
-        outer.addLayout(head)
+        outer.addWidget(self.band)
 
         self.area = QScrollArea()
         self.area.setWidgetResizable(True)
@@ -421,7 +443,10 @@ class FindBox(QFrame):
         self.column.setSpacing(5)
         self.column.addStretch(1)
         self.area.setWidget(self.holder)
-        outer.addWidget(self.area, 1)
+        body = QVBoxLayout()
+        body.setContentsMargins(10, 9, 10, 10)
+        body.addWidget(self.area, 1)
+        outer.addLayout(body, 1)
         self.hide()
 
     #: Every result on show, in order.
@@ -629,7 +654,7 @@ class FindBar(QWidget):
         # completer's popup leaves the keys with the field. Driven by hand
         # because attached it would also pop up WHILE typing, over the results
         # panel, which is two floating things at once over the same spot.
-        self._recent_list = QStringListModel([], self)
+        self._recent_list = QStandardItemModel(self)
         self._recent = QCompleter(self._recent_list, self)
         self._recent.setWidget(self.field)
         self._recent.setCaseSensitivity(Qt.CaseInsensitive)
@@ -697,7 +722,19 @@ class FindBar(QWidget):
         kept = recent()
         if not kept or self.field.text().strip():
             return
-        self._recent_list.setStringList(kept)
+        self._recent_list.clear()
+        for words in kept:
+            self._recent_list.appendRow(QStandardItem(words))
+        clear = QStandardItem(CLEAR_ROW)
+        # Red and bold, not a tinted band: a background set on the row itself
+        # is ignored the moment the list carries a stylesheet, and this list
+        # does.
+        clear.setForeground(QColor(theme.RED))
+        weight = clear.font()
+        weight.setBold(True)
+        clear.setFont(weight)
+        clear.setToolTip("Forget every search remembered here.")
+        self._recent_list.appendRow(clear)
         self._recent.setCompletionPrefix("")
         self._recent.complete()
         # SIZED HERE. A completer measures its popup from the rows alone and
@@ -706,8 +743,8 @@ class FindBar(QWidget):
         offer = self._recent.popup()
         row = offer.sizeHintForRow(0)
         if row > 0:
-            offer.setFixedHeight(row * len(kept) + 2 * OFFER_PAD
-                                 + 2 * offer.frameWidth())
+            offer.setFixedHeight(row * self._recent_list.rowCount()
+                                 + 2 * OFFER_PAD + 2 * offer.frameWidth())
 
     def hide_recent(self) -> None:
         popup = self._recent.popup()
@@ -722,11 +759,14 @@ class FindBar(QWidget):
 
     def _use_recent(self, words: str) -> None:
         self.hide_recent()
+        if words == CLEAR_ROW:
+            self._forget_recent()
+            return
         self.field.setText(words)
         self._look()
 
     def _forget_recent(self) -> None:
-        self._recent_list.setStringList([])
+        self._recent_list.clear()
         try:
             from .export_dialog import load_settings, save_settings
 

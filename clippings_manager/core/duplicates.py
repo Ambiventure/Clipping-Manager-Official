@@ -572,7 +572,8 @@ def forget_measurements(clips: Iterable) -> int:
     check needs it, from the picture as it now prints. Returns how many.
 
     What a clipping LOOKS like is never touched: its picture, its crop, its
-    name, its priority and whether it is in the report are all left alone.
+    name, its priority and whether it is in the report are all left alone -
+    and neither is a reading somebody typed themselves.
     """
     count = 0
     for clip in clips:
@@ -584,9 +585,15 @@ def forget_measurements(clips: Iterable) -> int:
         clip.ink_profile = ""
         clip.content_w = 0
         clip.content_h = 0
-        clip.ocr_text = ""
-        clip.ocr_engine = ""
-        clip.headline_confidence = 0
+        # A READING TYPED BY HAND IS NOT A MEASUREMENT. It is what somebody
+        # decided this clipping says, and a turn of the picture or a trim -
+        # both of which come through here - used to delete it without a word.
+        # A machine reading is still forgotten with the rest of them and is
+        # read again by the next check, which is the whole point of this.
+        if str(getattr(clip, "ocr_engine", "") or "") != ocr.BY_HAND:
+            clip.ocr_text = ""
+            clip.ocr_engine = ""
+            clip.headline_confidence = 0
         count += 1
     return count
 

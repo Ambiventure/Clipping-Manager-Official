@@ -569,6 +569,13 @@ def _prepare(data: bytes, portion: float = TOP_BAND):
     return band
 
 
+#: What ocr_engine says when the reading was typed rather than read. The
+#: field names which reader produced the words, and a person is one of them -
+#: which is what keeps a typed correction from being read over on the next
+#: check, and from being thrown out with the measurements.
+BY_HAND = "hand"
+
+
 def headline(data: bytes) -> Headline:
     """The headline printed on this clipping, or an empty reading.
 
@@ -729,6 +736,10 @@ def read_into(clip, force: bool = False) -> Headline:
             clip.content_w = seen["width"]
             clip.content_h = seen["height"]
 
+    if clip.ocr_engine == BY_HAND and not force:
+        # Typed by somebody. Never read over, never scored again: their words
+        # are the answer until they ask for another reading.
+        return Headline(clip.ocr_text, clip.headline_confidence, BY_HAND)
     if clip.ocr_engine and not force:
         return Headline(clip.ocr_text, clip.headline_confidence,
                         clip.ocr_engine)

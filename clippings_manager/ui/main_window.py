@@ -4048,6 +4048,19 @@ class MainWindow(QMainWindow):
         if row is None or row.clip is None:
             return
         row.clip.ocr_text = words
+        # MARKED AS THEIRS. Two things hang on the mark: the reader does not
+        # read over it on the next check, and the check's own housekeeping
+        # does not throw it out when the picture is turned or trimmed - which
+        # it used to, taking a correction somebody had just typed with it.
+        if words.strip():
+            row.clip.ocr_engine = ocr.BY_HAND
+            # The most reliable reading there is, so it is not held out of the
+            # word comparison by a confidence left over from the machine.
+            row.clip.headline_confidence = 100
+        else:
+            # Emptied on purpose: let the next check read the picture again.
+            row.clip.ocr_engine = ""
+            row.clip.headline_confidence = 0
         self.touch_session()
 
     def _copy_clip_picture(self, clip_id: int) -> None:

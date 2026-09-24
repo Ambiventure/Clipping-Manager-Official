@@ -728,9 +728,9 @@ class PreviewDialog(QDialog):
             "the search both use it, so correcting a misreading here makes "
             "both of them better.")
         # Set to be read, for the same reason as the box on the row: this is
-        # the one field somebody checks word by word against the picture.
-        self.ocr_edit.setStyleSheet(
-            "font-size: 14px; font-weight: 600; letter-spacing: .1px;")
+        # the one field somebody checks word by word against the picture. The
+        # size follows the script - see _size_reading.
+        self._size_reading()
         self.reread_btn = self._round_button(
             "rotate", "Read this picture again",
             "Read the headline off the picture again. Worth doing when what "
@@ -926,6 +926,19 @@ class PreviewDialog(QDialog):
         self._emit_label()
         self.told("Put into the headline")
 
+    def _size_reading(self) -> None:
+        """Set the reading at the size its own script needs.
+
+        Hindi at the size the English is set at reads a size and a half
+        smaller - see theme.reading_size - and this is the one field somebody
+        checks word by word against the picture, so it is the one field where
+        that cannot stand. The box is a line edit and carries ONE font, so it
+        follows whatever is in it rather than the line following the word.
+        """
+        size = theme.reading_size(self.ocr_edit.text(), 14)
+        self.ocr_edit.setStyleSheet(
+            f"font-size: {size}px; font-weight: 600; letter-spacing: .1px;")
+
     def _ocr_typed(self, words: str) -> None:
         """A correction typed into the read box. It is the clipping's own
         reading from then on - the duplicate check and the search both read
@@ -1074,6 +1087,7 @@ class PreviewDialog(QDialog):
             self.ocr_edit.setText(str(getattr(clip, "ocr_text", "") or "").strip())
         finally:
             self.ocr_edit.blockSignals(was)
+        self._size_reading()
         self.use_read_btn.setEnabled(bool(self.ocr_edit.text().strip()))
         self.link.setText(clip.url)
         self._fill(self.newspaper, self.model.name_index.newspaper_names, clip.newspaper)
@@ -1187,6 +1201,7 @@ class PreviewDialog(QDialog):
         self.section.currentIndexChanged.connect(self._section_picked)
         self.label_edit.textEdited.connect(self._emit_label)
         self.ocr_edit.textEdited.connect(self._ocr_typed)
+        self.ocr_edit.textChanged.connect(lambda _t: self._size_reading())
         self.link.textEdited.connect(lambda text: self._emit("url", text))
         self._connected = True
 
