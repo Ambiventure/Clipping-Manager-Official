@@ -20,6 +20,8 @@ from PySide6.QtGui import (
     QPixmap,
 )
 
+from ..core import hindifont
+
 ASSETS = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 ICONS = Path(__file__).resolve().parent.parent / "assets" / "icon"
 
@@ -273,9 +275,10 @@ def load_fonts() -> str:
     return QFont().defaultFamily()
 
 
-# The three that are preferred when present, in this order. They are a
-# preference, not the test - the test is whether a font covers Devanagari.
-PREFERRED_DEVANAGARI = ("Noto Sans Devanagari", "Nirmala UI", "Mangal")
+# Which faces set Hindi, and in what order, is one list for the whole program
+# now - see core/hindifont.py, which says why. Kept under the old name because
+# it reads as what it is at the places that use it.
+PREFERRED_DEVANAGARI = hindifont.FACES
 
 #: How much bigger Devanagari has to be set to read as large as Latin beside
 #: it. A Devanagari letter carries its vowel signs ABOVE and BELOW the line -
@@ -300,27 +303,20 @@ def reading_size(text: str, size: int) -> int:
     return size + DEVANAGARI_LIFT if is_devanagari(text) else size
 
 
-def devanagari_family() -> str:
-    """A family that covers Devanagari, so mastheads never render as tofu.
+def devanagari_chain() -> list:
+    """Every face that can set Hindi on this machine, best first.
 
-    This used to match three names exactly and answer "none" for anything else,
-    so a machine carrying Aparajita, Kokila, Utsaah, Sanskrit Text or Adobe
-    Devanagari - any of which sets Hindi perfectly well - was treated as having
-    no Devanagari at all. Qt already knows which writing systems a family
-    covers; asking it is both shorter and right.
+    A CHAIN, not a face. Handed to Qt as a font's families, it tries each in
+    turn for every glyph, so a face that turns out to be missing one - or to
+    have been uninstalled since - costs nothing. One face and a machine that
+    lacked it was the difference between a masthead and a row of empty boxes.
     """
-    installed = set(QFontDatabase.families())
-    for candidate in PREFERRED_DEVANAGARI:
-        if candidate in installed:
-            return candidate
-    for family in sorted(installed):
-        try:
-            systems = QFontDatabase.writingSystems(family)
-        except Exception:  # noqa: BLE001 - a font Qt cannot inspect is no use
-            continue
-        if QFontDatabase.WritingSystem.Devanagari in systems:
-            return family
-    return ""
+    return hindifont.chain()
+
+
+def devanagari_family() -> str:
+    """The one face to name where only one can be named."""
+    return hindifont.best()
 
 
 STYLESHEET = f"""
@@ -690,15 +686,17 @@ def apply_font(widget) -> None:
     """
     from PySide6.QtGui import QGuiApplication
 
-    deva = devanagari_family()
+    deva = [f for f in devanagari_chain() if f]
     if not deva:
         return
     font = widget.font()
     families = [f for f in font.families() if f] or [font.family()]
-    if deva in families:
+    if deva[0] in families:
         return
     base = QGuiApplication.font().families() or []
-    font.setFamilies([*families, *[f for f in base if f not in families], deva])
+    font.setFamilies([*families,
+                      *[f for f in base if f not in families],
+                      *[f for f in deva if f not in families]])
     widget.setFont(font)
 
 

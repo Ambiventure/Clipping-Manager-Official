@@ -39,6 +39,8 @@ from PySide6.QtGui import (
     QPen,
 )
 
+from . import hindifont
+
 # A4 portrait at 200 DPI, the size the prototype's canvas used.
 PAGE_WIDTH = 1654
 PAGE_HEIGHT = 2338
@@ -65,9 +67,7 @@ FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 # produced a cover with the Hindi lines as empty boxes - inside a PDF that is
 # otherwise independent of the machine.
 PREFERRED_FAMILIES = (
-    "Noto Sans Devanagari",
-    "Nirmala UI",
-    "Mangal",
+    *hindifont.FACES,
     "Plus Jakarta Sans",
     "Segoe UI",
     "Arial",
@@ -76,14 +76,7 @@ PREFERRED_FAMILIES = (
 
 def _any_devanagari() -> list[str]:
     """Whatever else on this machine can set Devanagari, best effort."""
-    try:
-        from PySide6.QtGui import QFontDatabase
-
-        return [f for f in QFontDatabase.families()
-                if QFontDatabase.WritingSystem.Devanagari
-                in QFontDatabase.writingSystems(f)]
-    except Exception:  # noqa: BLE001 - no Qt yet, or none to be had
-        return []
+    return hindifont.chain()
 
 _families_cache: Optional[list[str]] = None
 _owned_app: Optional[QGuiApplication] = None

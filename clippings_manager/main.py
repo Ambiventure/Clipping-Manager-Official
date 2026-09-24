@@ -125,9 +125,11 @@ def main() -> int:
 
     family = theme.load_fonts()
     font = QFont(family, 10)
-    fallbacks = [f for f in (theme.devanagari_family(),) if f]
+    # Devanagari mastheads must never render as empty boxes. The whole chain,
+    # not the best one of it: Qt walks the families per glyph, so a face that
+    # turns out to be missing a conjunct falls through to the next.
+    fallbacks = [f for f in theme.devanagari_chain() if f and f != family]
     if fallbacks:
-        # Devanagari mastheads must never render as empty boxes.
         font.setFamilies([family, *fallbacks])
     app.setFont(font)
     app.setStyleSheet(theme.stylesheet())

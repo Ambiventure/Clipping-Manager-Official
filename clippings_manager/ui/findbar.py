@@ -335,8 +335,13 @@ class Result(QFrame):
         words = QVBoxLayout()
         words.setSpacing(1)
         head = QLabel(says[:150])
+        # Hindi a size larger, the same as the boxes on a row - a headline in
+        # Devanagari at the size the English is set at reads smaller than it,
+        # and a result is read at a glance or it is no use.
         head.setStyleSheet(
-            f"color: {theme.INK}; font-size: 12px; font-weight: 600;")
+            f"color: {theme.INK};"
+            f" font-size: {theme.reading_size(says, 12)}px;"
+            " font-weight: 600;")
         head.setWordWrap(False)
         said_where = QLabel(which)
         said_where.setStyleSheet(

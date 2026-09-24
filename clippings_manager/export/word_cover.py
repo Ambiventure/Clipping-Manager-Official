@@ -33,6 +33,8 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from docx.shared import Emu
 
+from ..core import hindifont
+
 # The cover is laid out on an A4 sheet at 200 DPI. Points are what Word wants.
 PX_TO_PT = 72.0 / 200.0
 EMU_PER_PT = 12700
@@ -40,7 +42,7 @@ EMU_PER_PT = 12700
 # The face the cover is drawn in on screen is Devanagari-capable, and a heading
 # in Hindi is ordinary here. Naming it in the complex-script slot as well is what
 # stops Word choosing a Latin-only face and printing empty boxes.
-COVER_FONT = "Nirmala UI"
+COVER_FONT = hindifont.for_word()
 
 NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",

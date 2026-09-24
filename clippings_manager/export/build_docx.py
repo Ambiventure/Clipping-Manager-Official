@@ -22,7 +22,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from .. import version
-from ..core import assemble, imageops, ourfiles, reportrecord
+from ..core import assemble, hindifont, imageops, ourfiles, reportrecord
 from ..core.models import Clip
 
 from . import layout, word_cover
@@ -39,7 +39,10 @@ Progress = Optional[Callable[[int, int, str], None]]
 DOCX_SLACK = 24.0
 
 
-DEVANAGARI_FONT = "Nirmala UI"
+#: The face Word is told to set Devanagari in. ONE name - w:cs takes one -
+#: and it is read on the reader's machine, not this one, so it is the name
+#: most likely to mean something there. See core/hindifont.for_word.
+DEVANAGARI_FONT = hindifont.for_word()
 
 # What each choice means in Word. The complex-script slot always stays Nirmala UI:
 # Word picks the face for a run by script, so setting only the Latin face lets an

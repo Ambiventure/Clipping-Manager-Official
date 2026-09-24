@@ -25,14 +25,17 @@ from typing import Callable, Optional, Sequence
 import pymupdf
 
 from .. import version
-from ..core import assemble, imageops, ourfiles, reportrecord
+from ..core import assemble, hindifont, imageops, ourfiles, reportrecord
 from ..core.models import Clip
 from . import layout
 
 Progress = Optional[Callable[[int, int, str], None]]
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
-SYSTEM_FAMILIES = "'Nirmala UI', Mangal, 'Noto Sans Devanagari', sans-serif"
+#: Every Hindi face this machine has, best first, and sans-serif behind them
+#: - see core/hindifont.py. It was three names, fixed, and a machine with
+#: none of the three printed a Hindi masthead in whatever MuPDF felt like.
+SYSTEM_FAMILIES = hindifont.css(all_known=True)
 
 # Roughly half these newspapers are Hindi, and Devanagari resolves through the
 # system families above. So a chosen face is put IN FRONT of that chain, never in

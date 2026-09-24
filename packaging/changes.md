@@ -16,6 +16,24 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.51
+
+Changed
+
+  * **Hindi is set in whichever Hindi font the machine has.** Four parts of the
+    program used to name a Hindi font and they named different ones - the
+    screen asked for three faces, the cover for six, the PDF for three and the
+    Word file for exactly one. A computer missing the one a given part named
+    fell back to whatever it felt like, or to empty boxes. They all work from
+    one list now: the font carried inside the program first, then Nirmala UI,
+    Mangal, Sanskrit Text and the rest, and then anything else the computer has
+    that can set Hindi at all.
+  * **Hindi is a size larger everywhere it is read**, not only in the reading
+    box - the search results and the preview's headline box were still setting
+    it at the English size.
+
+---
+
 ## 2.0.50
 
 Fixed

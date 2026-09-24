@@ -938,6 +938,10 @@ class PreviewDialog(QDialog):
         size = theme.reading_size(self.ocr_edit.text(), 14)
         self.ocr_edit.setStyleSheet(
             f"font-size: {size}px; font-weight: 600; letter-spacing: .1px;")
+        # The headline box beside it, for the same reason: a Hindi headline
+        # typed or chosen there is read against the picture too.
+        self.label_edit.setStyleSheet(
+            f"font-size: {theme.reading_size(self.label_edit.text(), 13)}px;")
 
     def _ocr_typed(self, words: str) -> None:
         """A correction typed into the read box. It is the clipping's own
@@ -1202,6 +1206,7 @@ class PreviewDialog(QDialog):
         self.label_edit.textEdited.connect(self._emit_label)
         self.ocr_edit.textEdited.connect(self._ocr_typed)
         self.ocr_edit.textChanged.connect(lambda _t: self._size_reading())
+        self.label_edit.textChanged.connect(lambda _t: self._size_reading())
         self.link.textEdited.connect(lambda text: self._emit("url", text))
         self._connected = True
 
