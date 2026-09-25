@@ -238,7 +238,7 @@ class Reader(QObject):
                         seen = blank
                 got.append(Reading(
                     uid, found.text, found.confidence,
-                    (found.engine or "tesseract") if self._read_headlines else "",
+                    (found.engine or ocr.stamp()) if self._read_headlines else "",
                     seen["whole"], seen["lower"], seen["fine"],
                     seen["width"], seen["height"], seen["ink"]))
                 self._done += 1

@@ -16,6 +16,20 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.55
+
+Fixed
+
+  * **An office label above a cutting is no longer read as its headline.**
+    Where "जनसंदेश टाइम्स लखनऊ" or "My City Page -6" sits above the story, the
+    OCR headline is now the story's own headline.
+  * **Every clipping now gets the new headline reader.** OCR headlines read
+    the old way, before 2.0.52, are read again once when duplicates are
+    checked. That happens whether the OCR headline is switched on or off.
+    A headline you typed yourself is never read again.
+  * **Numbers in a headline keep their first figure** - "12 कर्मचारियों",
+    "15 सितम्बर" and "13 सितंबर" had been read as 2, 5 and 3.
+
 ## 2.0.54
 
 Changed

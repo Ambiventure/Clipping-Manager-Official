@@ -620,17 +620,82 @@ def headline_with(api, data: bytes) -> Headline:
     if api is None or not data:
         return Headline()
     found = Headline()
+    finding, picture = None, None
     try:
         from PIL import Image
 
         picture = Image.open(io.BytesIO(data))
         picture.load()
-        _finding, found = two_stage(api, picture)
+        finding, found = two_stage(api, picture)
         if found.text and found.confidence >= SURE and not _scrappy(found.text):
-            return found
+            return Headline(found.text, found.confidence, stamp())
     except Exception:  # noqa: BLE001 - the old way still stands
         found = Headline()
-    return _cleaner(found, _old_way(api, data))
+    old = _old_way(api, data)
+    # THE SECOND OPINION MAY NOT BRING BACK WHAT THE FINDER THREW OUT. The old
+    # way reads the biggest line at the top of the picture - which, on a
+    # cutting the office has labelled, IS the label. The finder had rejected
+    # "जनसंदेश टाइम्स लखनऊ / 15-09-26 Page- 3" as sitting above the article,
+    # read the headline under it at 80, and the old way's 95 for the label
+    # won the comparison. So the old reading is refused when it reads like a
+    # label, or when it is the words of a block the finder rejected -
+    # but that second only while the finder's own reading is sound. A
+    # headline over a photograph sits above a gap too: on two of the
+    # office's cuttings the finder turned the real headline away, read "nes
+    # gies)" at 32 and "glege" at 17 instead, and the old way's reading of
+    # the headline is then the one to keep, not to refuse.
+    finder_sound = (found.text and found.confidence >= POOR_READING
+                    and not _scrappy(found.text))
+    if old.text and (_label_like(old.text)
+                     or (finder_sound and _is_rejected_header(
+                         api, picture, finding, old.text))):
+        old = Headline()
+    chosen = _cleaner(found, old)
+    return Headline(chosen.text, chosen.confidence, stamp())
+
+
+#: A page number, "my city", or a date in figures: the office's label, or a
+#: paper's own furniture - never the words of a story's headline.
+_LABELISH = re.compile(
+    r"(page|\u092a\u0947\u091c|\u092a\u0943\u0937\u094d\u0920)\s*[-\u2013:]?\s*\d"
+    r"|my\s*city"
+    r"|\d{1,2}\s*[-./|\u0964]\s*\d{1,2}\s*[-./|\u0964]\s*\d{2,4}",
+    re.IGNORECASE)
+
+
+def _label_like(text: str) -> bool:
+    """Does a reading look like the office's label rather than a headline?"""
+    body = text or ""
+    return bool(_is_furniture(body) or _nameplate(body)
+                or _LABELISH.search(body))
+
+
+def _is_rejected_header(api, picture, finding, words: str) -> bool:
+    """Are these words those of a block the finder rejected as not the story?
+
+    Only the blocks turned away for their PLACE - above the article past a
+    gap, beside it, below it - which is where labels and nameplates are. Each
+    is read (they are few, and small) and compared loosely: the old way reads
+    the label's first line, the block holds the whole label.
+    """
+    if picture is None or finding is None or not words:
+        return False
+    try:
+        from rapidfuzz import fuzz
+
+        seen = strip_band(picture.convert("RGB")
+                          if picture.mode not in ("RGB", "L") else picture)
+        mine = normalise(words)
+        for region in getattr(finding, "rejected", ()):
+            if not region.note.startswith(("above a gap", "beside the article",
+                                           "below the article")):
+                continue
+            theirs = read_region(api, seen, region).text
+            if theirs and fuzz.partial_ratio(mine, theirs) >= 75:
+                return True
+    except Exception:  # noqa: BLE001 - when in doubt, the old way may speak
+        return False
+    return False
 
 
 #: Two stages this sure, reading this cleanly, need no second opinion.
@@ -761,6 +826,27 @@ def _prepare(data: bytes, portion: float = TOP_BAND):
 #: which is what keeps a typed correction from being read over on the next
 #: check, and from being thrown out with the measurements.
 BY_HAND = "hand"
+
+#: Every reading made since the headline has been FOUND before it is read
+#: carries this on its engine stamp. One without it was made by the old way -
+#: a slice off the top, the biggest line kept - and is read again: that is how
+#: the office's label, a paper's nameplate or a photograph stayed as a
+#: clipping's "headline" long after the reader stopped making that mistake.
+FOUND_FIRST = " +found"
+
+
+def stamp() -> str:
+    """What a reading made now is stamped with."""
+    return f"{engine_name() or 'tesseract'}{FOUND_FIRST}"
+
+
+def current(engine: str) -> bool:
+    """Is a reading stamped like this one to keep?
+
+    Typed ones always; read ones only if the headline finder made them.
+    """
+    engine = str(engine or "")
+    return engine == BY_HAND or engine.endswith(FOUND_FIRST)
 
 
 def headline(data: bytes) -> Headline:
@@ -1018,6 +1104,115 @@ def _clear_edges(crop, region):
         return crop
 
 
+_digits_api = None
+_digits_tried = False
+
+
+def _digits_engine():
+    """A second reader that knows only English digits - see _numbers_again.
+
+    Made once, and only where making one is allowed: on a program's main
+    thread, which in a helper process is where every reading happens.
+    """
+    global _digits_api, _digits_tried
+    if _digits_tried:
+        return _digits_api
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    _digits_tried = True
+    try:
+        import tesserocr
+
+        if (TESSDATA / "eng.traineddata").is_file():
+            engine = tesserocr.PyTessBaseAPI(path=str(TESSDATA), lang="eng")
+            engine.SetVariable("tessedit_char_whitelist", "0123456789.,:-/")
+            engine.SetPageSegMode(tesserocr.PSM.SINGLE_LINE)
+            _digits_api = engine
+    except Exception:  # noqa: BLE001 - without it, numbers read as they read
+        _digits_api = None
+    return _digits_api
+
+
+def _numbers_again(api, crop, text: str) -> str:
+    """Read every number in a headline again, with a reader that only knows
+    digits. "रेलवे के 12 कर्मचारियों" came back as "2", or "42": the Hindi and
+    English reader, reading both at once, took this paper's thin "1" for
+    nothing at all, or for a 4.
+
+    Each word that holds a digit is cut out a little wider than the reader
+    said it was - out to the words either side, where a lost "1" sits - and
+    read again as digits alone. The new reading is taken only when it is
+    sure and loses none of the digits it replaces.
+    """
+    if not text or not any(ch.isdigit() for ch in text):
+        return text
+    engine = _digits_engine()
+    if engine is None:
+        return text
+    try:
+        import tesserocr
+
+        level = tesserocr.RIL.WORD
+        words = []
+        walk = api.GetIterator()
+        if walk is None:
+            return text
+        while True:
+            try:
+                said = walk.GetUTF8Text(level) or ""
+                box = walk.BoundingBox(level)
+            except Exception:  # noqa: BLE001
+                said, box = "", None
+            if box:
+                words.append([said, box])
+            if not walk.Next(level):
+                break
+        if not any(any(ch.isdigit() for ch in w[0]) for w in words):
+            return text
+        changed = False
+        for at, (said, box) in enumerate(words):
+            digits = "".join(ch for ch in said if ch.isascii() and ch.isdigit())
+            if not digits:
+                continue
+            x0, y0, x1, y1 = box
+            tall = max(4, y1 - y0)
+            # Out to the neighbours on this line, where a dropped "1" sits.
+            left = x0 - int(0.8 * tall)
+            right = x1 + int(0.8 * tall)
+            for other_said, (ox0, oy0, ox1, oy1) in (words[at - 1:at] +
+                                                   words[at + 1:at + 2]):
+                if min(y1, oy1) - max(y0, oy0) < 0.4 * tall:
+                    continue
+                if ox1 <= x0:
+                    left = max(left, ox1 + 1)
+                elif ox0 >= x1:
+                    right = min(right, ox0 - 1)
+            left, right = max(0, left), min(crop.width, right)
+            top, bottom = max(0, y0 - tall // 4), min(crop.height, y1 + tall // 4)
+            if right - left < 4 or bottom - top < 4:
+                continue
+            piece = crop.crop((left, top, right, bottom))
+            from PIL import ImageOps
+
+            engine.SetImage(ImageOps.expand(piece, border=12, fill=255))
+            again = (engine.GetUTF8Text() or "").strip().replace(" ", "")
+            sure = int(engine.MeanTextConf() or 0)
+            again_digits = "".join(ch for ch in again if ch.isdigit())
+            if (again and again_digits and sure >= 60
+                    and len(again_digits) >= len(digits)
+                    and all(ch in "0123456789.,:-/" for ch in again)):
+                if again != said:
+                    words[at][0] = again
+                    changed = True
+        if not changed:
+            return text
+        return " ".join(w[0] for w in words if w[0])
+    except Exception:  # noqa: BLE001 - the first reading stands
+        return text
+
+
 def read_region(api, image, region) -> Headline:
     """Read ONE region of a picture - the one the finder says is the headline.
 
@@ -1062,6 +1257,7 @@ def read_region(api, image, region) -> Headline:
             api.SetImage(crop)
             text = api.GetUTF8Text() or ""
             confidence = int(api.MeanTextConf() or 0)
+            text = _numbers_again(api, crop, text)
         finally:
             api.SetPageSegMode(was)
         text = normalise(text)
@@ -1172,7 +1368,7 @@ def read_into(clip, force: bool = False) -> Headline:
         # Typed by somebody. Never read over, never scored again: their words
         # are the answer until they ask for another reading.
         return Headline(clip.ocr_text, clip.headline_confidence, BY_HAND)
-    if clip.ocr_engine and not force:
+    if current(clip.ocr_engine) and not force:
         return Headline(clip.ocr_text, clip.headline_confidence,
                         clip.ocr_engine)
     found = headline(_as_printed(clip))
@@ -1180,5 +1376,5 @@ def read_into(clip, force: bool = False) -> Headline:
     clip.headline_confidence = found.confidence
     # Stamped even when nothing was read, so a clipping that cannot be read is
     # not read again on every import.
-    clip.ocr_engine = found.engine or (engine_name() or "none")
+    clip.ocr_engine = stamp()
     return found

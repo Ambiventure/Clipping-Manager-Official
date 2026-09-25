@@ -479,10 +479,20 @@ def to_read(clips: Iterable) -> list:
     clips = list(clips)
     _ensure_prints(clips)
     _close, reading = _neighbours(clips)
-    return [clip for clip in clips
-            if clip.uid in reading
-            and not getattr(clip, "ocr_engine", "")
-            and getattr(clip, "image_bytes", b"")]
+    def wanted(clip) -> bool:
+        engine = str(getattr(clip, "ocr_engine", "") or "")
+        if ocr.current(engine) or not getattr(clip, "image_bytes", b""):
+            return False
+        if clip.uid in reading:
+            return True
+        # Read by the OLD way and showing it: that reading is on screen in
+        # the OCR box, so it is read again whether or not anything needs it
+        # for a comparison - once, since the new reading carries the stamp.
+        # A clipping never read at all is read only when it is wanted, as
+        # before: importing one file on its own still reads nothing.
+        return bool(engine) and bool(str(getattr(clip, "ocr_text", "") or "").strip())
+
+    return [clip for clip in clips if wanted(clip)]
 
 
 def find(clips: Iterable, threshold: float = SIMILARITY,

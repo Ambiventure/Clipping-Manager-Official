@@ -4143,7 +4143,7 @@ class MainWindow(QMainWindow):
             return
         row.clip.ocr_text = text
         row.clip.headline_confidence = confidence
-        row.clip.ocr_engine = engine or ocr.engine_name() or "none"
+        row.clip.ocr_engine = engine or ocr.stamp()
         now = text.strip()
         if showing:
             preview.ocr_edit.setText(now)
