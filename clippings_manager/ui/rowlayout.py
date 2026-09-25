@@ -90,7 +90,8 @@ class RowGeometry:
                    "The address that prints under the image, as a link")]
               if not self.url.isNull() and self.url.isValid() else []),
             *([Hit("label", self.label,
-                   "The headline that prints above the image")]
+                   "The label that prints above the image - the newspaper's "
+                   "name, or the page a post came from")]
               if not self.label.isNull() and self.label.isValid() else []),
             *([Hit("read", self.read,
                    "The OCR reading of this picture - correct it here and "
@@ -217,9 +218,9 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
                             READ_BTN, READ_BTN),
             "Read the headline off this picture again"))
         buttons.append(Hit(
-            "use_read", QRect(read.right() + 8 + READ_BTN + 6,
-                              mid - READ_BTN // 2, READ_BTN, READ_BTN),
-            "Put these words into the headline that prints"))
+            "find_read", QRect(read.right() + 8 + READ_BTN + 6,
+                               mid - READ_BTN // 2, READ_BTN, READ_BTN),
+            "Find this headline in the list - the same story from other files"))
         top = read.bottom() + FIELD_GAP
     if show_url:
         url = QRect(label_left, top, label_width, FIELD_HEIGHT)
@@ -235,7 +236,8 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
             (not show_url, "add_url",
              "Add the web address this clipping came from"),
             (not show_title, "add_title",
-             "Add a headline to print above this clipping")):
+             "Add a label - the newspaper's name - to print above "
+             "this clipping")):
         if not missing:
             continue
         add_rect = QRect(sub.left(), sub.top() - 1, ADD_URL_W, ADD_URL_H)

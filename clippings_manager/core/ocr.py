@@ -266,15 +266,49 @@ _looked = False
 _trouble = ""
 
 
+#: What the reader mistakes a 1 for inside a number - i, l, I, |, ! and
+#: the Hindi full stops । and ॥ are all a single upright stroke - and what it
+#: mistakes a 0 for.
+_ONE_LIKE = "iIl|!\u0964\u0965"
+_ZERO_LIKE = "oO"
+
+
+def _fix_digits(text: str) -> str:
+    """A 1 read as i inside a number is a 1: "i00" is 100, "॥2" is 12.
+
+    Only where the stroke stands AGAINST a digit - in front of one, or
+    between two. A full stop after a number ("2026।") is a full stop, and a
+    word is left alone however many i's it has.
+    """
+    if not text or not any(ch.isdigit() for ch in text):
+        return text
+    chars = list(text)
+    for at, ch in enumerate(chars):
+        if ch not in _ONE_LIKE and ch not in _ZERO_LIKE:
+            continue
+        after = chars[at + 1] if at + 1 < len(chars) else ""
+        before = chars[at - 1] if at else ""
+        digit_after = after.isascii() and after.isdigit()
+        digit_before = before.isascii() and before.isdigit()
+        if ch in _ONE_LIKE and digit_after and not (before.isalpha()):
+            chars[at] = "1"
+        elif ch in _ZERO_LIKE and (digit_after or digit_before) and not (
+                before.isalpha() and before not in _ZERO_LIKE):
+            chars[at] = "0"
+    return "".join(chars)
+
+
 def normalise(text: str) -> str:
     """One spelling, so two readings of the same words compare equal.
 
     Composed form, because Devanagari has more than one way to write the same
     letter and OCR does not always pick the same one; folded case, which only
     affects the Latin half and does nothing to Devanagari; and single spaces,
-    because line breaks in a headline are a matter of column width.
+    because line breaks in a headline are a matter of column width. And a 1
+    read as an i inside a number is put back - see _fix_digits.
     """
-    return " ".join(unicodedata.normalize("NFC", text or "").split()).lower()
+    text = _fix_digits(unicodedata.normalize("NFC", text or ""))
+    return " ".join(text.split()).lower()
 
 
 def available() -> bool:

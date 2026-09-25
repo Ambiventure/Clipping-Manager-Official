@@ -157,6 +157,8 @@ class PreviewDialog(QDialog):
     #: (row id, (left, top, right, bottom)) - read the words inside the OCR
     #: box, in the picture's own pixels. The window reads; this only asks.
     boxReadRequested = Signal(int, tuple)
+    #: Words to look for in the list - the OCR headline's search button.
+    findRequested = Signal(str)
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
@@ -440,7 +442,7 @@ class PreviewDialog(QDialog):
         self.ocr_btn.setToolTip(
             "Read a headline yourself: lays a glass over the picture. Drag "
             "its dot onto the headline, pull its edges to fit, and "
-            "double-click the dot - the words go into the headline box.")
+            "double-click the dot - the words go into the OCR headline.")
         self.ocr_btn.toggled.connect(self._ocr_box_toggled)
         column.addWidget(self.ocr_btn)
 
@@ -588,11 +590,11 @@ class PreviewDialog(QDialog):
             self.boxReadRequested.emit(self.row.id, tuple(where))
 
     def box_read(self, words: str) -> None:
-        """What the OCR box read, back from the window: into the headline.
+        """What the OCR box read, back from the window: into the OCR headline.
 
-        The headline box first, which is what was asked for - and the OCR
-        headline too, since the words are a better reading of this picture
-        than whatever the reader made of it on its own.
+        ONLY there. The label is the newspaper's name; a headline read off
+        the picture never goes into it - it went in once, and the list filled
+        up with LABELs reading ".,, nr extends periodicity".
         """
         box = getattr(self, "_ocr_box", None)
         if box is not None:
@@ -601,11 +603,9 @@ class PreviewDialog(QDialog):
         if not words:
             self.told("Nothing could be read in the box")
             return
-        self.label_edit.setText(words)
-        self._emit_label(words)
         self.ocr_edit.setText(words)
         self._ocr_typed(words)
-        self.told("Headline read")
+        self.told("Read into the OCR headline")
 
     def _copy_picture(self) -> None:
         if self.row is not None:
@@ -794,9 +794,14 @@ class PreviewDialog(QDialog):
 
         label_row = QHBoxLayout()
         label_row.setSpacing(12)
-        self.label_edit = self._field(
-            "Headline / label that prints above the image", label_row, 2
-        )
+        # THE LABEL: the newspaper's name, or the page a post came from -
+        # what prints above the picture. It was called "Headline / label",
+        # and headlines were put in it; a story's headline is what the OCR
+        # field holds, and nothing ever copies one into here.
+        self.label_edit = self._field("Label", label_row, 2)
+        self.label_edit.setPlaceholderText(
+            "The newspaper's name, or the page a post came from - "
+            "e.g. Dainik Jagran, Lucknow")
         body.addLayout(label_row)
 
         # The address the import read from under the picture. It gets a whole
@@ -834,11 +839,15 @@ class PreviewDialog(QDialog):
             "is in the box is nonsense - a crooked scan often reads better "
             "after it has been straightened or trimmed.")
         self.reread_btn.clicked.connect(self._reread)
-        self.use_read_btn = self._round_button(
-            "check", "Use this as the headline",
-            "Put these words into the headline box above, which is the one "
-            "that prints above the clipping in the report.")
-        self.use_read_btn.clicked.connect(self._use_reading)
+        # FIND THIS STORY, not "use as the headline": the label above is
+        # for the paper's name, and nothing copies a headline into it. The
+        # most useful thing to do with a headline is to see whether the same
+        # story came in from another file.
+        self.find_read_btn = self._round_button(
+            "search", "Find this headline in the list",
+            "Search the list for these words - the same story sent in by "
+            "another division shows up in the results.")
+        self.find_read_btn.clicked.connect(self._find_reading)
         # Level with the box, not with its caption.
         pads = QVBoxLayout()
         pads.setContentsMargins(0, 0, 0, 0)
@@ -847,7 +856,7 @@ class PreviewDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
         buttons.addWidget(self.reread_btn)
-        buttons.addWidget(self.use_read_btn)
+        buttons.addWidget(self.find_read_btn)
         pads.addLayout(buttons)
         read_row.addLayout(pads, 0)
         # Held as a widget, not only a layout, so the whole line - caption, box
@@ -1062,7 +1071,7 @@ class PreviewDialog(QDialog):
 
             timer.timeout.connect(turn)
         self.reread_btn.setEnabled(not busy)
-        self.use_read_btn.setEnabled(not busy
+        self.find_read_btn.setEnabled(not busy
                                      and bool(self.ocr_edit.text().strip()))
         if busy:
             self.ocr_edit.setPlaceholderText("Reading the headline…")
@@ -1073,15 +1082,12 @@ class PreviewDialog(QDialog):
             self.ocr_edit.setPlaceholderText(
                 "Not read yet — press the round button to read it")
 
-    def _use_reading(self) -> None:
-        """What the picture said becomes what the report prints."""
+    def _find_reading(self) -> None:
+        """Ask the window to search the list for this headline."""
         words = self.ocr_edit.text().strip()
-        if not words or self.row is None:
-            return
-        self.label_edit.setText(words)
-        self._emit_label()
-        self.told("Put into the headline")
-
+        if words:
+            self.findRequested.emit(words)
+            self.told("Searching the list for this headline")
     def show_ocr(self, on: bool) -> None:
         """Show or hide the OCR headline line - the menu's switch."""
         line = getattr(self, "ocr_line", None)
@@ -1109,7 +1115,7 @@ class PreviewDialog(QDialog):
         """A correction typed into the read box. It is the clipping's own
         reading from then on - the duplicate check and the search both read
         the same field, so a correction helps both."""
-        self.use_read_btn.setEnabled(bool(words.strip()))
+        self.find_read_btn.setEnabled(bool(words.strip()))
         if self.row is not None:
             self.ocrEdited.emit(self.row.id, words)
 
@@ -1259,7 +1265,7 @@ class PreviewDialog(QDialog):
         finally:
             self.ocr_edit.blockSignals(was)
         self._size_reading()
-        self.use_read_btn.setEnabled(bool(self.ocr_edit.text().strip()))
+        self.find_read_btn.setEnabled(bool(self.ocr_edit.text().strip()))
         self.link.setText(clip.url)
         self._fill(self.newspaper, self.model.name_index.newspaper_names, clip.newspaper)
         self._fill(self.edition, self.model.name_index.edition_names, clip.edition)

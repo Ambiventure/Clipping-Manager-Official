@@ -3226,8 +3226,8 @@ class MainWindow(QMainWindow):
         if name == "reread":
             self._reread_headline(clip_id)
             return
-        if name == "use_read":
-            self._use_reading(clip_id)
+        if name == "find_read":
+            self._find_reading(clip_id)
             return
         if name == "delete":
             stack.push(commands.RemoveClips(model, [clip_id]))
@@ -4147,7 +4147,7 @@ class MainWindow(QMainWindow):
         now = text.strip()
         if showing:
             preview.ocr_edit.setText(now)
-            preview.use_read_btn.setEnabled(bool(now))
+            preview.find_read_btn.setEnabled(bool(now))
             preview.told("Read again" if now else "Nothing could be read")
         pool.refresh_all()
         self.touch_session()
@@ -4158,11 +4158,13 @@ class MainWindow(QMainWindow):
         else:
             self._flash(f"Read again: {now[:70]}", "good")
 
-    def _use_reading(self, clip_id: int) -> None:
-        """What the picture said becomes the headline the report prints.
+    def _find_reading(self, clip_id: int) -> None:
+        """Search the list for this clipping's headline.
 
-        On the undo stack like any other change to a clipping: it is an edit
-        to what will be printed, and one Ctrl+Z takes it back.
+        It used to COPY the headline into the label, and the label is for
+        the newspaper's name: nothing puts a headline there any more. What a
+        headline is good for is finding the same story again - sent twice,
+        or by two divisions.
         """
         pool = self.pool_for(clip_id)
         row = pool.row_for(clip_id) if pool is not None else None
@@ -4172,9 +4174,16 @@ class MainWindow(QMainWindow):
         if not words:
             self._flash("There is nothing read off that picture yet.", "info")
             return
-        self.stack_for(pool).push(
-            commands.EditLabel(pool, clip_id, words))
-        self._flash(f"Headline set from the picture: {words[:60]}", "good")
+        self._find_words(words)
+
+    def _find_words(self, words: str) -> None:
+        """Put these words in the search field and look."""
+        bar = getattr(self, "find_bar", None)
+        if bar is None:
+            return
+        bar.field.setText(" ".join(words.split()))
+        bar._look()
+        bar.field.setFocus()
 
     def _ocr_field_switched(self, on: bool) -> None:
         """The OCR headline switched on or off: every row and the preview.
@@ -4328,6 +4337,7 @@ class MainWindow(QMainWindow):
             self.preview.copyRequested.connect(self._copy_clip_picture)
             self.preview.rereadRequested.connect(self._reread_headline)
             self.preview.boxReadRequested.connect(self._read_box)
+            self.preview.findRequested.connect(self._find_words)
             self.preview.ocrEdited.connect(self._ocr_corrected)
             self.preview.sendToNewspad.connect(self._send_clip_to_newspad)
             # Which newspad is open, asked every time a clipping is shown: the

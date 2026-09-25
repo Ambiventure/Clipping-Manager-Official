@@ -302,6 +302,16 @@ def zoom(painter: QPainter, box: QRectF, color: QColor, sign: str = "+") -> None
     painter.restore()
 
 
+def search(painter: QPainter, box: QRectF, color: QColor) -> None:
+    """A magnifying glass with nothing in it: look for this."""
+    _unit(painter, box)
+    painter.setPen(_pen(color, 2.0))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawEllipse(QPointF(10.5, 10.5), 6.0, 6.0)
+    painter.drawLine(QPointF(15.0, 15.0), QPointF(20, 20))
+    painter.restore()
+
+
 def wand(painter: QPainter, box: QRectF, color: QColor) -> None:
     _unit(painter, box)
     painter.setPen(_pen(color, 1.7))

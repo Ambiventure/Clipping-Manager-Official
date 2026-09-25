@@ -116,6 +116,17 @@ def decode_clip(data: dict, image_bytes: bytes) -> Clip:
     # from that one build has no arrival number, which is how it is known.
     if "order_seq" not in data and clip.priority == 3:
         clip.priority = 0
+    # A LABEL THAT IS ONLY THE OCR READING, copied in by 2.0.52's OCR box or by
+    # the button beside the OCR box that used to "use this as the headline".
+    # The label is for the newspaper's name; with it emptied the paper's own
+    # name and city come back, as they were before the copy - and the words
+    # are not lost, they are the OCR headline, which is where they belong.
+    # Only an EXACT copy is emptied: a label anybody typed differs from what
+    # the reader made of the picture.
+    typed = " ".join(str(clip.label or "").split()).casefold()
+    read = " ".join(str(clip.ocr_text or "").split()).casefold()
+    if typed and typed == read:
+        clip.label = ""
     return clip
 
 

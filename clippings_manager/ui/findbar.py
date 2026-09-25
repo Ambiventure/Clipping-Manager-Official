@@ -114,8 +114,8 @@ def fold(words: str) -> str:
 
 #: What is looked at, and what each is called in a result.
 FIELDS = (
-    ("printed_caption", "headline"),
-    ("label", "headline"),
+    ("printed_caption", "label"),
+    ("label", "label"),
     ("ocr_text", "OCR headline"),
     ("newspaper", "newspaper"),
     ("edition", "edition"),
@@ -132,9 +132,12 @@ def _said(clip, name: str) -> str:
 
 
 #: A field can be asked for by name, the way a search engine lets you:
-#: paper:jagran, read:kavach, link:indianexpress, headline:hydrogen.
+#: paper:jagran, headline:kavach, link:indianexpress, label:jagran.
 BY_NAME = {
-    "headline": ("printed_caption", "label"),
+    # The HEADLINE is what the OCR reads off the picture; the label is the
+    # newspaper's name. "title:" still means the label, as it always did.
+    "headline": ("ocr_text",),
+    "label": ("printed_caption", "label"),
     "title": ("printed_caption", "label"),
     "read": ("ocr_text",),
     "ocr": ("ocr_text",),
@@ -619,9 +622,10 @@ hidden, reordered, ticked or unticked.</p>
 <p style="margin:0 0 4px 0"><b>Asking one field only</b></p>
 <table cellpadding="3" style="margin:0 0 10px 0">
 <tr><td><code>paper:jagran</code></td><td>&mdash; the newspaper</td></tr>
-<tr><td><code>headline:hydrogen</code></td><td>&mdash; the printed headline</td></tr>
-<tr><td><code>read:kavach</code></td>
-    <td>&mdash; only what was read off the picture</td></tr>
+<tr><td><code>headline:hydrogen</code></td>
+    <td>&mdash; the OCR headline, read off the picture</td></tr>
+<tr><td><code>label:jagran</code></td>
+    <td>&mdash; the label: the newspaper's name that prints above it</td></tr>
 <tr><td><code>edition:delhi</code></td><td>&mdash; the edition or city</td></tr>
 <tr><td><code>link:indianexpress</code></td><td>&mdash; the web address</td></tr>
 </table>
@@ -692,14 +696,14 @@ class FindBar(QWidget):
         self.field.setClearButtonEnabled(True)
         self.field.setObjectName("FindField")
         self.field.setToolTip(
-            "Searches the headline, the headline read off the picture, "
-            "the newspaper and the link.\n\n"
+            "Searches the OCR headline, the label, the newspaper and "
+            "the link.\n\n"
             "hydrogen train \u2014 both words\n"
             "hydrogen OR train \u2014 either one\n"
             '"vande bharat" \u2014 those words in that order\n'
             "-cricket \u2014 leave those out\n"
             "paper:jagran \u2014 only in the newspaper "
-            "(also read:, link:, headline:, edition:)\n\n"
+            "(also headline:, label:, link:, edition:)\n\n"
             "Nothing is hidden or reordered: this only finds.")
         row.addWidget(self.field, 1)
 

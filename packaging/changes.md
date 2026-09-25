@@ -16,6 +16,30 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.54
+
+Changed
+
+  * **The "Headline / label" box is called Label**, and it is for the
+    newspaper's name - or the page a post came from. Nothing puts a headline
+    in it any more: what the OCR reads, and what the OCR box reads, goes into
+    the OCR headline and nowhere else.
+  * **The second round button beside the OCR headline searches the list for
+    that headline**, to find the same story sent in from another file. It
+    used to copy the headline into the label.
+  * **In the search box, headline: looks in the OCR headline** and label:
+    looks in the label.
+
+Fixed
+
+  * **Labels that were copies of the OCR headline are emptied** when a
+    newspad is opened, so the paper's own name shows again. A label that was
+    typed is left as it is.
+  * **A 1 read as an i inside a number is a 1** - "i00" reads 100, "॥2" reads
+    12. A full stop after a number stays a full stop.
+
+---
+
 ## 2.0.53
 
 Fixed

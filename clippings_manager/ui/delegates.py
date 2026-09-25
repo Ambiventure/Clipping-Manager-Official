@@ -443,9 +443,9 @@ class EntryDelegate(QStyledItemDelegate):
         """The headline box, the address box, or whichever of them there is."""
         if not geo.label.isNull() and geo.label.isValid():
             self._paint_field(
-                painter, geo.label, clip, selected, "TITLE",
+                painter, geo.label, clip, selected, "LABEL",
                 clip.effective_label,
-                "Headline — leave blank for a clean clipping",
+                "Label — the newspaper's name, or leave it blank",
                 theme.QINK,
             )
         if not geo.read.isNull() and geo.read.isValid():
@@ -474,7 +474,7 @@ class EntryDelegate(QStyledItemDelegate):
         # The tag is inside the box, at the left, so it reads as part of the
         # field rather than as another line of the card. Without it the two
         # boxes are the same shape and there is nothing to say which is which.
-        needs = (tag == "TITLE" and not clip.title_text
+        needs = (tag == "LABEL" and not clip.title_text
                  and not clip.title_in_image)
         if needs:
             border = QColor(theme.FLAG)
@@ -514,9 +514,9 @@ class EntryDelegate(QStyledItemDelegate):
         text_rect = rect.adjusted(int(tag_width) + 12, 0, -10, 0)
         if text.strip():
             painter.setPen(theme.QNAVY if selected else ink)
-        elif clip.title_in_image and tag == "TITLE":
+        elif clip.title_in_image and tag == "LABEL":
             painter.setPen(QColor("#8A939B"))
-            text = "title already on the clipping — leave blank"
+            text = "the paper's name is on the clipping — leave blank"
         else:
             painter.setPen(QColor("#B0B7BF"))
             text = placeholder
@@ -544,7 +544,7 @@ class EntryDelegate(QStyledItemDelegate):
         painter.drawText(
             QRectF(mark.right() + 3, rect.top(), rect.width() - 20, rect.height()),
             Qt.AlignVCenter | Qt.AlignLeft,
-            "Add URL" if field == "url" else "Add title")
+            "Add URL" if field == "url" else "Add label")
         painter.restore()
 
     def _paint_subline(self, painter, rect: QRect, row, clip, opens="") -> None:
@@ -653,13 +653,13 @@ class EntryDelegate(QStyledItemDelegate):
         # The two round buttons beside the read box. Round, so they are not
         # mistaken for the square action buttons on the right of the row -
         # these belong to the box they sit against, not to the clipping.
-        if name in ("reread", "use_read"):
+        if name in ("reread", "find_read"):
             painter.setPen(QPen(theme.QNAVY if hovered else theme.QHAIRLINE, 1))
             painter.setBrush(QColor(theme.NAVY_WASH) if hovered
                              else QColor("#F4F6FA"))
             painter.drawEllipse(rect.adjusted(0.5, 0.5, -0.5, -0.5))
             box = QRectF(rect.center().x() - 6.5, rect.center().y() - 6.5, 13, 13)
-            drawer = icons.rotate if name == "reread" else icons.check
+            drawer = icons.rotate if name == "reread" else icons.search
             drawer(painter, box, theme.QNAVY if hovered else theme.QMUTED)
             return
 
