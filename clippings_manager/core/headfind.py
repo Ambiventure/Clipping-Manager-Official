@@ -115,6 +115,10 @@ class Finding:
     #: The candidate whose reading was used - the best one, unless it read
     #: as nothing or as a paper's name. Set by ocr.two_stage.
     chosen: Optional[Region] = None
+    #: What the blocks rejected for their place - a label, a nameplate - read
+    #: as. Filled by ocr, once, the first time a reading is held up against
+    #: them; nothing here reads anything.
+    placed_words: Optional[list] = None
 
     @property
     def best(self) -> Optional[Region]:

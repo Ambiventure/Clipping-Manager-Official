@@ -16,6 +16,30 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.56
+
+Fixed
+
+  * **Headlines with a year or a figure in them are read whole.** In
+    "स्वच्छता ही सेवा अभियान-2026 के तहत ...", "22.256 किलो गांजा ..." or
+    "94.35 फीसदी काम हुआ", the line with the number had been dropped as if it
+    were the paper's date.
+  * **A division's black stamp laid over a cutting is no longer read as its
+    headline** - "THESE DAYS / NEW DELHI / 24-09-2026 / PG-9", "LOK SATYA".
+  * **A label is never the OCR headline**: "Pg 7", "Page 5", "Edition:", or
+    the paper's name printed above the cutting.
+  * **A post is read for its own words**, not its header - "Facebook",
+    "Northern Railway 2 hours ago".
+  * **The words WhatsApp adds to a forwarded link are never the headline** -
+    "पूरा समाचार पढ़ने के लिए नीचे दिए लिंक पर क्लिक करें", "ऐप इनस्टॉल करें".
+  * **A paragraph of the story is no longer taken for its headline.**
+  * **On an e-paper cutting, the headline is read, not the e-paper's own
+    header** ("Ferozpur Kesari Sep 25, 2026").
+  * **Web links are left out of the OCR headline.**
+  * **OCR headlines already read are read again once**, at the next
+    duplicate check, so these fixes reach them too. A headline you typed,
+    or read with the OCR box, is kept as it is.
+
 ## 2.0.55
 
 Fixed

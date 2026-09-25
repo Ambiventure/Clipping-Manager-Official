@@ -109,8 +109,30 @@ BLOCK_GAP = 0.35
 
 
 # A date, however the reader mangles the separators - "06.09.2026", "08I09I2026",
-# "06-09-2026". Dates belong to mastheads; headlines do not carry them.
-DATED = re.compile(r"\d{1,2}\s*[^\w\s]{0,2}\s*\d{1,2}\s*[^\w\s]{0,2}\s*\d{2,4}")
+# "06-09-2026", "25 09 2026". Dates belong to mastheads; headlines do not
+# carry them. THE SEPARATORS MUST BE THERE: without them any four figures in
+# a row were a date - "अभियान-2026", "22.256 किलो", train 12005, "94.35
+# फीसदी" - and the line of the headline holding them was thrown away as a
+# stamped date. On the office's report pages that cost the first line of
+# every "स्वच्छता ही सेवा अभियान-2026" headline.
+_DATE_GAP = r"(?:\s*[^\w\s]{1,2}\s*|\s+|\s*[Il]\s*)"
+# And the date in words a dateline opens the story with - "Jammu, 23
+# September 2026:", "24 सितंबर, 2026" - day, month and year all three. A
+# headline's "13 सितंबर से" has no year, and stays a headline.
+_MONTHS = ("jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|"
+           "\u091c\u0928\u0935\u0930\u0940|\u092b\u0930\u0935\u0930\u0940|"
+           "\u092e\u093e\u0930\u094d\u091a|\u0905\u092a\u094d\u0930\u0948\u0932|"
+           "\u092e\u0908|\u091c\u0942\u0928|\u091c\u0941\u0932\u093e\u0908|"
+           "\u0905\u0917\u0938\u094d\u0924|\u0938\u093f\u0924\u0902\u092c\u0930|"
+           "\u0938\u093f\u0924\u092e\u094d\u092c\u0930|"
+           "\u0905\u0915\u094d\u091f\u0942\u092c\u0930|"
+           "\u0905\u0915\u094d\u0924\u0942\u092c\u0930|"
+           "\u0928\u0935\u0902\u092c\u0930|\u0928\u0935\u092e\u094d\u092c\u0930|"
+           "\u0926\u093f\u0938\u0902\u092c\u0930|\u0926\u093f\u0938\u092e\u094d\u092c\u0930")
+DATED = re.compile(r"(?<!\d)\d{1,2}" + _DATE_GAP + r"\d{1,2}" + _DATE_GAP
+                   + r"\d{2,4}(?!\d)"
+                   + r"|(?<!\d)\d{1,2}\s*(?:" + _MONTHS + r")\w*\.?\s*,?\s*\d{4}(?!\d)",
+                   re.IGNORECASE)
 
 # Above that, a line with a lot of digits and few letters is a strip of
 # furniture rather than a sentence.
@@ -165,7 +187,10 @@ NAME_MAX_LENGTH = 46
 NAME_WORD_SHARE = 0.8
 
 
-def _is_name(text: str) -> bool:
+def _is_name(text: str, starting: bool = True) -> bool:
+    """Is this a paper's or a city's name? ``starting`` also counts a short
+    line that merely begins with one - right for a whole reading, wrong for
+    one line of a headline: "Chandigarh for over a month" is not a name."""
     body = normalise(text)
     if not body or len(body) > NAME_MAX_LENGTH:
         return False
@@ -176,7 +201,9 @@ def _is_name(text: str) -> bool:
     for name in _known_names():
         if fuzz.ratio(body, name) >= NAME_MATCH:
             return True
-        if len(name) >= 6 and fuzz.partial_ratio(name, body) >= 92 and                 len(body) <= len(name) * 2:
+        if (starting and len(name) >= 6
+                and fuzz.partial_ratio(name, body) >= 92
+                and len(body) <= len(name) * 2):
             return True
     # "अमर उजाला नई दिल्ली" is the paper AND the city on one line - neither
     # match on its own, but between them they account for the whole line. A
@@ -451,6 +478,122 @@ def strip_band(image):
     return image.crop((0, cut, width, height))
 
 
+#: A DIVISION'S STAMP. Some divisions lay a black box - or a stack of them -
+#: over the top of the cutting with the paper, the city, the date and the
+#: page set in white on it: "THESE DAYS / NEW DELHI / 24-09-2026 / PG-9".
+#: It is not a strip across the top, so strip_band never sees it, and the old
+#: way read it as the headline - "pg-9", "these days", "lok satya". Each
+#: number below is what tells such a box from the things that look like it.
+STAMP_DARK = 80          # grey below which a pixel is the stamp's black
+STAMP_WIDE = 0.06        # it is at least this share of the picture across
+STAMP_TALL = 0.025       # and this share down
+STAMP_TOP = 0.5          # it starts in the top half of the cutting
+STAMP_FILL = 0.65        # its outline fills its box: stacked boxes 0.73
+STAMP_BLACK = 0.45       # mostly black, with type on it...
+STAMP_WHITE = 0.10       # ...white type: a night photograph has none
+STAMP_TWO_TONE = 0.88    # and hardly any grey between: not a photograph
+STAMP_LETTERS = 8        # white letters inside it. The nine stamps on the
+                         # office's pages held 13 to 35; the loops inside a
+                         # bold headline word - "स्वच्छ", which passed every
+                         # other test - held 4.
+STAMP_HOLE = 0.10        # none bigger than letter size: a black page with
+                         # a white box of story on it is not a stamp
+STAMP_CONVEX = 0.80      # a box's outline bulges nowhere: stamps 0.83-0.99,
+                         # that word 0.72
+STAMP_MARGIN = 0.9       # and the white type sits a letter's height inside
+                         # the black: stamps 1.08-1.73, the word 0.68
+STAMP_GREY = 40          # the black is black - a red kicker box is not
+STAMP_SPECK = 12         # a white shape smaller than this is JPEG dust
+
+
+def blank_stamps(image):
+    """The cutting with any stamped black box painted out.
+
+    Only boxes that pass every test above are touched, and only inside their
+    own outline - nothing round them is changed. Without OpenCV the picture
+    is handed back as it came.
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+    except Exception:  # noqa: BLE001 - no OpenCV, no stamps found
+        return image
+    try:
+        rgb = np.asarray(image.convert("RGB"))
+        grey = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        height, width = grey.shape
+        dark = (grey < STAMP_DARK).astype(np.uint8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+        out = None
+        for i in range(1, count):
+            x, y, w, h = (int(v) for v in stats[i][:4])
+            if (w < STAMP_WIDE * width or h < STAMP_TALL * height
+                    or y > STAMP_TOP * height):
+                continue
+            piece = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
+            outlines, _ = cv2.findContours(piece, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+            if not outlines:
+                continue
+            whole = np.zeros_like(piece)
+            cv2.drawContours(whole, outlines, -1, 1, thickness=-1)
+            inside = whole.astype(bool)
+            area = int(inside.sum())
+            if area < STAMP_FILL * w * h:
+                continue
+            levels = grey[y:y + h, x:x + w][inside]
+            black = float((levels < STAMP_DARK).mean())
+            white = float((levels > 175).mean())
+            if (black < STAMP_BLACK or white < STAMP_WHITE
+                    or black + white < STAMP_TWO_TONE):
+                continue
+            holes = (inside & (piece == 0)).astype(np.uint8)
+            n, _, hole_stats, _ = cv2.connectedComponentsWithStats(holes, 8)
+            sizes = hole_stats[1:, cv2.CC_STAT_AREA] if n > 1 else np.array([])
+            letters = hole_stats[1:][sizes >= STAMP_SPECK] if n > 1 else []
+            if (len(letters) < STAMP_LETTERS
+                    or float(sizes.max()) > STAMP_HOLE * area):
+                continue
+            hull = cv2.convexHull(max(outlines, key=cv2.contourArea))
+            if area < STAMP_CONVEX * max(1.0, cv2.contourArea(hull)):
+                continue
+            letter = float(np.median(letters[:, 3]))
+            inset = min(int(letters[:, 0].min()),
+                        w - int((letters[:, 0] + letters[:, 2]).max()))
+            if inset < STAMP_MARGIN * letter:
+                continue
+            ink = rgb[y:y + h, x:x + w][inside & (piece == 1)].astype(int)
+            if len(ink) and float((ink.max(axis=1) - ink.min(axis=1)).mean()) > STAMP_GREY:
+                continue
+            if out is None:
+                out = rgb.copy()
+            grown = cv2.dilate(whole, np.ones((5, 5), np.uint8)).astype(bool)
+            out[y:y + h, x:x + w][grown] = 255
+        if out is None:
+            return image
+        return Image.fromarray(out)
+    except Exception:  # noqa: BLE001 - a picture the check cannot look at
+        return image
+
+
+def ready_to_read(image):
+    """The cutting as the headline is looked for on it: the division's
+    stamped strip cut away, and any stamped box painted out.
+
+    NOT TRIMMED OF ITS WHITE EDGES. That was tried on the office's report
+    pages - cuttings on white A4 - and measured: the finder looks at every
+    picture at one working width, so trimming moved the scale, and a scale
+    change flips the close calls both ways. 39 pages read better and 23
+    worse, most of those a word lost; of the office's own cuttings, which
+    have next to no margin, it changed one. The finder already passes over
+    blank paper, so the white is left where it is.
+    """
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    return blank_stamps(strip_band(image))
+
+
 def band_text(image) -> str:
     """Every word on one strip of a picture, read as a single block.
 
@@ -563,9 +706,7 @@ def two_stage(api, image):
     if api is None or image is None or not headfind.available():
         return None, Headline()
     try:
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
-        image = strip_band(image)
+        image = ready_to_read(image)
         finding = headfind.find(image)
     except Exception:  # noqa: BLE001 - a picture the finder cannot look at
         return None, Headline()
@@ -574,12 +715,12 @@ def two_stage(api, image):
     def story(found) -> bool:
         letters = sum(1 for ch in found.text if ch.isalpha())
         return bool(found.text and letters >= 4
-                    and not _is_furniture(found.text)
-                    and not _nameplate(found.text))
+                    and not _label_like(found.text)
+                    and not _SENTENCES.search(found.text))
 
     for region in finding.candidates[:CANDIDATES_READ]:
-        found = read_region(api, image, region)
-        if story(found):
+        found, bare = _read_region(api, image, region)
+        if story(found) and not _repeats_label(api, image, finding, found.text):
             finding.chosen = region
             return finding, found
         # A LABEL SET ON TOP OF THE HEADLINE. The office types its own
@@ -596,6 +737,17 @@ def two_stage(api, image):
             words = normalise(" ".join(line.text for line in kept))
             confidence = int(sum(line.confidence for line in kept) / len(kept))
             return finding, Headline(words, confidence, kept[0].engine)
+        # ONE BLOCK THAT CANNOT BE READ A LINE AT A TIME, with the label in
+        # it - "State Vision, Page 1" over "Temporary augmentation of coach".
+        # Its label lines are dropped, and what is left is taken only when it
+        # reads cleanly: dropping them from a block of scraps let a column of
+        # junk with the headline's tail in it beat the headline itself.
+        if (not getattr(region, "lines", ()) and bare and bare != found.text
+                and found.confidence >= POOR_READING and not _scrappy(bare)):
+            trimmed = Headline(bare, found.confidence, found.engine)
+            if story(trimmed):
+                finding.chosen = region
+                return finding, trimmed
     return finding, Headline()
 
 
@@ -646,8 +798,9 @@ def headline_with(api, data: bytes) -> Headline:
     # the headline is then the one to keep, not to refuse.
     finder_sound = (found.text and found.confidence >= POOR_READING
                     and not _scrappy(found.text))
+    short = len(old.text.split()) <= LABEL_WORDS
     if old.text and (_label_like(old.text)
-                     or (finder_sound and _is_rejected_header(
+                     or ((finder_sound or short) and _is_rejected_header(
                          api, picture, finding, old.text))):
         old = Headline()
     chosen = _cleaner(found, old)
@@ -655,19 +808,93 @@ def headline_with(api, data: bytes) -> Headline:
 
 
 #: A page number, "my city", or a date in figures: the office's label, or a
-#: paper's own furniture - never the words of a story's headline.
+#: paper's own furniture - never the words of a story's headline. The page
+#: number as the report pages print it too - "Pg 7", "pg.03", "PG-9", "Page
+#: No. 3", and "page i]" where the reader took a 1 for an i.
 _LABELISH = re.compile(
-    r"(page|\u092a\u0947\u091c|\u092a\u0943\u0937\u094d\u0920)\s*[-\u2013:]?\s*\d"
+    r"(?<![a-z])(page|pg|\u092a\u0947\u091c|\u092a\u0943\u0937\u094d\u0920)"
+    r"\s*(no\.?)?\s*[-\u2013:.]?\s*[\dil|!\]]{1,3}(?![a-z])"
     r"|my\s*city"
+    r"|(?<![a-z])edition\s*:"
+    r"|(?<![a-z])(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+    r"\s*\d{1,2},?\s*\d{4}"
     r"|\d{1,2}\s*[-./|\u0964]\s*\d{1,2}\s*[-./|\u0964]\s*\d{2,4}",
     re.IGNORECASE)
+
+#: THE FURNITURE OF A POST AND OF A FORWARDED LINK. A Facebook or X post is
+#: headed by the account and the time - "Northern Railway 11 hours ago" -
+#: and that, the tallest clean line on the picture, was read as the post's
+#: headline on eleven of the sixteen posts in the office's report. A link
+#: forwarded on WhatsApp brings "पूरा समाचार पढ़ने के लिए नीचे दिए लिंक पर
+#: क्लिक करें" with it, and a news app's card "ऐप इनस्टॉल करें". None of it
+#: is ever a story's words.
+_POST_FURNITURE = re.compile(
+    r"\b(hours?|hrs?|mins?|minutes?|days?|weeks?)\s+ago\b"
+    r"|northernrailway"
+    r"|see\s+translation|translated\s+from|for\s+news\s+on\s+the\s+go"
+    r"|\u0915\u094d\u0932\u093f\u0915\s+\u0915\u0930\u0947\u0902"          # क्लिक करें
+    r"|\u0932\u093f\u0902\u0915\s+\u092a\u0930"                              # लिंक पर
+    r"|\u092a\u0942\u0930\u093e\s+\u0938\u092e\u093e\u091a\u093e\u0930"      # पूरा समाचार
+    r"|\u0928\u0940\u091a\u0947\s+\u0926\u093f\u090f"                        # नीचे दिए
+    r"|\u0907\u0928\u0938\u094d\u091f\u0949\u0932\s+\u0915\u0930\u0947\u0902"  # इनस्टॉल करें
+    r"|\u0907\u0902\u0938\u094d\u091f\u0949\u0932\s+\u0915\u0930\u0947\u0902", # इंस्टॉल करें
+    re.IGNORECASE)
+
+#: The words of a platform's name and an account's, which a post's header is
+#: built of. A reading made of nothing else - "Facebook:", "SOCIAL MEDIA",
+#: "Northern Railway @" - is the header; one with a story in it is not.
+_PLATFORM_WORDS = frozenset((
+    "facebook", "twitter", "instagram", "youtube", "whatsapp", "threads",
+    "linkedin", "koo", "x", "social", "media", "electronic", "northern",
+    "northem", "railway", "railways", "india"))
+
+
+def _platform_only(body: str) -> bool:
+    """A few words, every one of them a platform's or the account's."""
+    words = re.findall(r"[^\W\d_]+", body.casefold())
+    return bool(words) and len(words) <= 4 and all(
+        word in _PLATFORM_WORDS for word in words)
 
 
 def _label_like(text: str) -> bool:
     """Does a reading look like the office's label rather than a headline?"""
     body = text or ""
     return bool(_is_furniture(body) or _nameplate(body)
-                or _LABELISH.search(body))
+                or _LABELISH.search(body) or _POST_FURNITURE.search(body)
+                or _platform_only(body))
+
+
+#: A web address is never a headline's words either: "... का डीआरएम ने
+#: लिया जायजा https://dhunt.in/75s" is the headline and the link it came with.
+_ADDRESS = re.compile(r"(https?://|www\.)\S*", re.IGNORECASE)
+
+
+def _without_labels(text: str) -> str:
+    """A reading's lines without the label lines at its top and foot.
+
+    The finder's region, or the old way's band, sometimes takes in the line
+    above the headline - "Amar Ujala, Jalandhar, Page 12" - or the account a
+    post came from. Such a line is dropped when a line of story is left; a
+    reading that is ALL label is handed back whole, for the caller to refuse.
+    """
+    lines = [_ADDRESS.sub("", line).strip() for line in (text or "").splitlines()]
+    lines = [line for line in lines if line]
+    while len(lines) > 1 and _label_line(lines[0]):
+        lines.pop(0)
+    while len(lines) > 1 and _label_line(lines[-1]):
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _label_line(line: str) -> bool:
+    """One line of a reading that is label, not story. As _label_like, but a
+    name must be the WHOLE line - see _is_name."""
+    body = normalise(line)
+    if not body:
+        return True
+    return bool(DATED.search(body) or _is_name(body, starting=False)
+                or _nameplate(body) or _LABELISH.search(body)
+                or _POST_FURNITURE.search(body) or _platform_only(body))
 
 
 def _is_rejected_header(api, picture, finding, words: str) -> bool:
@@ -683,19 +910,55 @@ def _is_rejected_header(api, picture, finding, words: str) -> bool:
     try:
         from rapidfuzz import fuzz
 
-        seen = strip_band(picture.convert("RGB")
-                          if picture.mode not in ("RGB", "L") else picture)
         mine = normalise(words)
-        for region in getattr(finding, "rejected", ()):
-            if not region.note.startswith(("above a gap", "beside the article",
-                                           "below the article")):
-                continue
-            theirs = read_region(api, seen, region).text
-            if theirs and fuzz.partial_ratio(mine, theirs) >= 75:
-                return True
+        return any(fuzz.partial_ratio(mine, theirs) >= 75
+                   for theirs in _placed_words(api, picture, finding))
     except Exception:  # noqa: BLE001 - when in doubt, the old way may speak
         return False
-    return False
+
+
+def _placed_words(api, picture, finding, seen=None) -> list:
+    """The readings of the blocks the finder turned away for their PLACE.
+
+    Read once per picture and kept on the finding: both readers are held up
+    against them. ``seen`` is the picture as the finder looked at it, when
+    the caller has it already.
+    """
+    kept = finding.placed_words
+    if kept is not None:
+        return kept
+    kept = []
+    if seen is None:
+        seen = ready_to_read(picture)
+    for region in getattr(finding, "rejected", ()):
+        if region.note.startswith(("above a gap", "beside the article",
+                                   "below the article")):
+            theirs = _read_region(api, seen, region)[0].text
+            if theirs:
+                kept.append(theirs)
+    finding.placed_words = kept
+    return kept
+
+
+#: A reading this short that repeats a turned-away label is that label again:
+#: the paper's name, as the label printed it and as the paper's own masthead
+#: repeats it under the label.
+LABEL_WORDS = 3
+
+
+def _repeats_label(api, image, finding, words: str) -> bool:
+    """Is this short reading the words of a label the finder turned away?"""
+    if not words or len(words.split()) > LABEL_WORDS + 2:
+        return False
+    try:
+        from rapidfuzz import fuzz
+
+        mine = normalise(words)
+        return any(len(theirs.split()) <= LABEL_WORDS + 3
+                   and fuzz.partial_ratio(mine, theirs) >= 75
+                   for theirs in _placed_words(api, None, finding, seen=image))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 #: Two stages this sure, reading this cleanly, need no second opinion.
@@ -731,12 +994,89 @@ def _cleaner(two: Headline, old: Headline) -> Headline:
     small start - their region is the headline by construction, the old way's
     is only the top of the picture.
     """
+    if _fuller(two, old) or _outweighs(two, old) or _paragraph_against(two, old):
+        return two
     candidates = [(not _scrappy(h.text), h.confidence + bonus, n, h)
                   for n, (h, bonus) in enumerate(((two, 3), (old, 0)))
                   if h.text]
     if not candidates:
         return two if two.text else old
     return max(candidates, key=lambda c: (c[0], c[1], -c[2]))[3]
+
+
+#: How much of the old way's reading must be found inside the two stages'
+#: for the two to be one headline read twice.
+SAME_WORDS = 90
+#: And how much longer the two stages' reading has to be to count as more.
+FULLER = 1.2
+
+
+def _fuller(two: Headline, old: Headline) -> bool:
+    """Did the two stages read the SAME headline as the old way, and more of it?
+
+    The old way reads lines one at a time and keeps a block of them; on a
+    headline in two lines of slightly different sizes it kept the first -
+    "दीवाली से पहले कई" at 96, where the two stages had "दीवाली से पहले कई
+    ट्रेनोंमें जगह नहीं" at 76 - and the surer one won. A reading that holds
+    the other one whole, reads cleanly and says more is the better reading of
+    the same words, however sure the shorter one is.
+    """
+    if not two.text or not old.text or _scrappy(two.text):
+        return False
+    try:
+        from rapidfuzz import fuzz
+    except Exception:  # noqa: BLE001
+        return False
+    letters = lambda text: sum(1 for ch in text if ch.isalpha())  # noqa: E731
+    if letters(two.text) < FULLER * letters(old.text):
+        return False
+    return fuzz.partial_ratio(normalise(old.text), normalise(two.text)) >= SAME_WORDS
+
+
+def _outweighs(two: Headline, old: Headline) -> bool:
+    """A headline read with some noise, against a scrap that is not in it.
+
+    On a cutting taken off a paper's e-paper, the page's own header sits over
+    it - "Ferozpur Kesari / Sep 25, 2026" - and the old way read that, garbled,
+    as "see rozpur kesari" or "ao) kesari": short, and clean enough to beat
+    two stages that had read the whole headline with a stray word or two in
+    it. A reading of three words or fewer that shares nothing with a sure
+    reading of six or more is a scrap of something else on the picture.
+    """
+    if not two.text or not old.text or two.confidence < POOR_READING:
+        return False
+    if len(old.text.split()) > 3 or len(two.text.split()) < 6:
+        return False
+    try:
+        from rapidfuzz import fuzz
+    except Exception:  # noqa: BLE001
+        return False
+    return fuzz.partial_ratio(normalise(old.text), normalise(two.text)) < 50
+
+
+#: A reading with a Hindi full stop inside it, words after it, is sentences:
+#: body text, a byline, a dateline's "लखनऊ।". A headline has none. (Not the
+#: English full stop: "4.0", "v.s." and "Rs." are all inside headlines.) Nor
+#: does a headline run to this many words.
+_SENTENCES = re.compile(r"[\u0964]\s*\S")
+PARAGRAPH_WORDS = 40
+
+
+def _paragraph_against(two: Headline, old: Headline) -> bool:
+    """The old way read a paragraph; the two stages read a headline, roughly.
+
+    With the label taken out of the old way's reach, its tallest remaining
+    lines were sometimes the body - "उपयोग करें। कार्यक्रम में ठोस उपयोग और
+    उनके महत्व के ..." at 87 - and a clean paragraph beat the two stages'
+    rough but right "रेशवे स्टेशन ue te गया ... जागरुकता अभियान" at 65. Body
+    text is never the headline, however cleanly it reads.
+    """
+    if not two.text or not old.text or two.confidence < POOR_READING:
+        return False
+    if len(two.text.split()) < 3:
+        return False
+    return bool(_SENTENCES.search(old.text)
+                or len(old.text.split()) > PARAGRAPH_WORDS)
 
 
 def _old_way(api, data: bytes) -> Headline:
@@ -797,10 +1137,7 @@ def _prepare(data: bytes, portion: float = TOP_BAND):
     """The band of picture the headline is in, at a size worth reading."""
     from PIL import Image
 
-    image = Image.open(io.BytesIO(data))
-    if image.mode not in ("RGB", "L"):
-        image = image.convert("RGB")
-    image = strip_band(image)
+    image = ready_to_read(Image.open(io.BytesIO(data)))
     band = (image if portion >= 1.0 else
             image.crop((0, 0, image.width,
                         max(60, int(image.height * portion)))))
@@ -832,7 +1169,14 @@ BY_HAND = "hand"
 #: a slice off the top, the biggest line kept - and is read again: that is how
 #: the office's label, a paper's nameplate or a photograph stayed as a
 #: clipping's "headline" long after the reader stopped making that mistake.
-FOUND_FIRST = " +found"
+#:
+#: The number is the reader's generation, raised when it has learned enough
+#: that what it read before should be read again - once, at the next
+#: duplicate check. " +found" was 2.0.52 to 2.0.55; " +found2" is 2.0.56,
+#: which learned the divisions' stamps, labels, post headers and dates with
+#: figures in them from the office's own report pages. A reading typed, or
+#: read with the OCR box, is the person's (BY_HAND) and is never read again.
+FOUND_FIRST = " +found2"
 
 
 def stamp() -> str:
@@ -888,9 +1232,9 @@ def _read_band(api, data: bytes, portion: float) -> Headline:
                 confidence = walk.Confidence(level)
             except Exception:  # noqa: BLE001 - a line that will not read
                 box, text, confidence = None, "", 0.0
-            if box and text and text.strip():
-                lines.append((box[1], box[3] - box[1], text.strip(),
-                              confidence))
+            text = _ADDRESS.sub("", text or "").strip()
+            if box and text:
+                lines.append((box[1], box[3] - box[1], text, confidence))
             if not walk.Next(level):
                 break
         if not lines:
@@ -899,7 +1243,7 @@ def _read_band(api, data: bytes, portion: float) -> Headline:
         # The masthead band goes first, before anything is measured. It is
         # frequently the biggest type on the cutting, so leaving it in and
         # picking the tallest line reads the paper's name instead of the story.
-        lines = [row for row in lines if not _is_furniture(row[2])]
+        lines = [row for row in lines if not _label_like(row[2])]
         if not lines:
             return Headline()
 
@@ -1219,17 +1563,24 @@ def read_region(api, image, region) -> Headline:
     The region is read as a single block of text: one to three lines of the
     same size, which is what a headline is. Nothing outside it is seen, so a
     photograph, the office's label or the paper's nameplate cannot end up in
-    the words.
+    the words - and a label line the region did take in, at its top or foot,
+    is dropped (_without_labels).
     """
+    whole, bare = _read_region(api, image, region)
+    return Headline(bare, whole.confidence, whole.engine) if bare else Headline()
+
+
+def _read_region(api, image, region):
+    """(the reading, the same reading without its label lines)."""
     if api is None or image is None or region is None:
-        return Headline()
+        return Headline(), ""
     try:
         import tesserocr
         from PIL import Image, ImageOps
 
         crop = image.crop(region.box())
         if crop.width < 8 or crop.height < 8:
-            return Headline()
+            return Headline(), ""
         crop = crop.convert("L")
         crop = _clear_edges(crop, region)
         # Reversed type, white on a dark strip, the ordinary way round.
@@ -1260,12 +1611,13 @@ def read_region(api, image, region) -> Headline:
             text = _numbers_again(api, crop, text)
         finally:
             api.SetPageSegMode(was)
-        text = normalise(text)
-        if not text:
-            return Headline()
-        return Headline(text, confidence, engine_name())
+        whole = normalise(text)
+        if not whole:
+            return Headline(), ""
+        return (Headline(whole, confidence, engine_name()),
+                normalise(_without_labels(text)))
     except Exception:  # noqa: BLE001 - never let a reading break anything
-        return Headline()
+        return Headline(), ""
 
 
 def _headline_block(lines: list) -> list:
