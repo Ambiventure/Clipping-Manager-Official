@@ -27,7 +27,7 @@ from PySide6.QtGui import (QColor, QCursor, QLinearGradient, QPainter,
 from PySide6.QtWidgets import QWidget
 
 #: How much the glass magnifies what is under it.
-MAGNIFY = 1.22
+MAGNIFY = 1.06
 #: The handle: its radius, and how far round it still counts as on it.
 DOT = 8
 DOT_REACH = 16

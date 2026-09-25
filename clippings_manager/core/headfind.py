@@ -45,6 +45,13 @@ HEADLINE_RATIO = 1.7
 #: size rule alone missed entirely - but always in much heavier strokes.
 BOLD_RATIO = 1.25
 BOLD_STROKE = 1.55
+#: Or big and bold together, neither all the way. A condensed headline on a
+#: small cutting - "रेल से 50 किलो गांजा लेकर जा रहे तीन तस्कर गिरफ्तार", 213
+#: pixels wide - was 1.6 times the body and 1.4 times as heavy: under both of
+#: the rules above, so only its tallest word counted and the reader read two
+#: words of an eight-word headline. Size times weight is 2.1 for those words
+#: and about 1.25 for the body text, however tall its vowel signs.
+HEFT = 1.9
 
 #: A word beside a headline line joins it when it is at least this tall and
 #: this bold, relative to the line. Body text in the next column, level with
@@ -447,9 +454,11 @@ def find(image) -> Finding:
         x, y, w, h = p["x"], p["y"], p["w"], p["h"]
         if 0.55 * body <= h <= 1.6 * body and p["stroke"] < 1.4 * body_stroke:
             body_mask[y:y + h, x:x + w][labels[y:y + h, x:x + w] == p["i"]] = 255
+        heft = (h / body) * (p["stroke"] / body_stroke) ** 0.75
         if (h >= HEADLINE_RATIO * body
                 or (h >= BOLD_RATIO * body
-                    and p["stroke"] >= BOLD_STROKE * body_stroke)):
+                    and p["stroke"] >= BOLD_STROKE * body_stroke)
+                or (h >= BOLD_RATIO * body and heft >= HEFT)):
             heads.append(p)
 
     lines = [ln for ln in _group_lines(body_mask, body) if ln[2] >= 3 * body]

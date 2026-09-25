@@ -16,6 +16,27 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.53
+
+Fixed
+
+  * **The OCR box reads only the headline inside it.** A box dragged across a
+    column also caught slivers of the columns either side and half a line
+    above, and read them into the headline - "NR extends periodicity of
+    Special Trains" came back with ".,," and "|] aes" in it. It now reads the
+    headline's own lines and leaves the rest, however loosely it is drawn.
+  * **A condensed headline on a small, tall cutting is read in full.** "रेल से
+    50 किलो गांजा लेकर जा रहे तीन तस्कर गिरफ्तार" was read as its last two words.
+  * **A black stamp with a white label inside it comes off whole.** Only the
+    top of such a stamp was being cut away.
+
+Changed
+
+  * **The OCR box magnifies only a little**, so the headline under it stays
+    easy to read and lines up with the page around it.
+
+---
+
 ## 2.0.52
 
 Changed

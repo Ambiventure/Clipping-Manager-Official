@@ -357,6 +357,10 @@ BAND_CLEAR_ROWS = 6
 #: rows the search still insists on are what keeps this honest: a dark
 #: PHOTOGRAPH at the top of a cutting does not end in a clean light edge, and
 #: what is left has to be a real cutting - see BAND_LEAVES.
+#: A row this much black is band, whatever its average - see strip_band.
+BAND_BLACK = 0.35
+#: And a row of the cutting itself is never more than this much black.
+BAND_PAPER = 0.18
 BAND_LIMIT = 0.50
 #: And what remains after a band is taken off is never less than this much of
 #: the picture. A stamp is furniture above the cutting; if taking it would
@@ -384,13 +388,21 @@ def strip_band(image):
         return image
     rows = grey.resize((1, height))          # one pixel per row: the row mean
     means = list(rows.getdata())
-    if not means or means[0] > BAND_DARK:
+    # And how much of each row is black. A white LABEL inside the band - the
+    # rounded "samachar post New Delhi / 15|09|2026" some divisions use -
+    # lifts a row's average over the line that said "paper", and the band was
+    # cut 59 pixels into 170, leaving the rest of the stamp on the cutting.
+    # Half of such a row is still solid black; half of a row of print never is.
+    black = [share / 255.0 for share in
+             grey.point(lambda v: 255 if v < 70 else 0).resize(
+                 (1, height), resample=4).getdata()]
+    if not means or (means[0] > BAND_DARK and black[0] < BAND_BLACK):
         return image                          # nothing dark at the top
 
     cut, clear = 0, 0
     ceiling = int(height * BAND_LIMIT)
     for y in range(min(len(means), ceiling)):
-        if means[y] >= BAND_LIGHT:
+        if means[y] >= BAND_LIGHT and black[y] < BAND_PAPER:
             clear += 1
             if clear >= BAND_CLEAR_ROWS:
                 cut = y - BAND_CLEAR_ROWS + 1
@@ -811,17 +823,128 @@ def read_box(data: bytes, box: tuple, api=None) -> Headline:
         left, top = max(0, left), max(0, top)
         right = min(picture.width, max(left + 1, right))
         bottom = min(picture.height, max(top + 1, bottom))
-        crop = picture.crop((left, top, right, bottom))
-        size = 0.0
+        # THE FINDER'S HEADLINE LINES THAT FALL INSIDE THE BOX. A box laid
+        # over a headline in a column takes in slivers of the columns either
+        # side and half a line above - "ttar", "ress", "AS", "outcome." - and
+        # read as it stood that came back as ".,, nr extends periodicity |]
+        # aes of special trains". Looking at the WHOLE picture, the finder
+        # knows exactly which ink is the headline's - it has the body text to
+        # measure it against, which a box that is nearly all headline does
+        # not - so the lines it found inside the box are read, each cleared
+        # of everything that is not on it, and nothing else.
         if headfind.available():
-            finding = headfind.find(crop)
-            if finding.best is not None:
-                size = finding.best.type_height
+            finding = headfind.find(picture)
+            def within(blocks):
+                kept = []
+                for r in blocks:
+                    x0, y0 = max(r.left, left), max(r.top, top)
+                    x1, y1 = min(r.right, right), min(r.bottom, bottom)
+                    if x1 <= x0 or y1 <= y0:
+                        continue
+                    if (x1 - x0) * (y1 - y0) >= 0.35 * max(1, r.width * r.height):
+                        parts = []
+                        for part in getattr(r, "lines", ()) or ():
+                            px0, py0 = max(part.left, left), max(part.top, top)
+                            px1 = min(part.right, right)
+                            py1 = min(part.bottom, bottom)
+                            if px1 > px0 and py1 > py0:
+                                parts.append(headfind.Region(
+                                    px0, py0, px1, py1,
+                                    type_height=part.type_height,
+                                    core=part.core))
+                        kept.append(headfind.Region(
+                            x0, y0, x1, y1, type_height=r.type_height,
+                            core=r.core, lines=tuple(parts)))
+                return kept
+
+            # The headlines it accepted, first. Large type it turned away -
+            # a label, a strip across a picture - is read only when the box
+            # holds nothing else, so that a sloppy box over a real headline
+            # does not drag a coloured kicker strip into it as noise.
+            inside = within(finding.candidates) or within(
+                [r for r in finding.rejected
+                 if not r.note.startswith(("a lone mark", "inside a picture"))])
+            texts, sure = [], []
+            for r in sorted(inside, key=lambda r: (r.top, r.left)):
+                found = read_region(api, picture, r)
+                if found.text and (_is_furniture(found.text)
+                                   or _nameplate(found.text)) and r.lines:
+                    # The office's label typed on top of the headline, found
+                    # with it as one block: a line at a time, keeping the story.
+                    for part in r.lines:
+                        line = read_region(api, picture, part)
+                        if (line.text and not _is_furniture(line.text)
+                                and not _nameplate(line.text)):
+                            texts.append(line.text)
+                            sure.append(line.confidence)
+                    continue
+                if found.text:
+                    texts.append(found.text)
+                    sure.append(found.confidence)
+            if texts:
+                return Headline(normalise(" ".join(texts)),
+                                int(sum(sure) / len(sure)), engine_name())
+        # Framed round something the finder does not take for a headline:
+        # read what the box holds, less what its edges cut through.
+        crop = picture.crop((left, top, right, bottom))
+        crop, size = _clear_box_edges(crop)
         region = headfind.Region(0, 0, crop.width, crop.height,
                                  type_height=size or crop.height / 2.5)
         return read_region(api, crop, region)
     except Exception:  # noqa: BLE001 - a box that will not read reads empty
         return Headline()
+
+
+def _clear_box_edges(crop):
+    """White out what a drawn box's edges cut through. (picture, type size)
+
+    The type the box is mostly of is measured - the letter height that
+    covers the most width - and then three kinds of ink go:
+
+      * anything cut by the left or right edge that is smaller than that
+        type: the next column's words, of which the box caught a sliver;
+      * anything cut by the top or bottom edge that is smaller than it: the
+        line above or below, of which the box caught the bottom or the top;
+      * a tall thin stroke the height of the box: a column rule.
+
+    Ink of the headline's own size that the edge happens to clip is kept - a
+    box drawn a little tight should still read its first and last letters.
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+
+        gray = np.asarray(crop.convert("L")).copy()
+        height, width = gray.shape[:2]
+        if width < 12 or height < 8:
+            return crop, 0.0
+        if float((gray > 150).mean()) < 0.3:
+            gray = 255 - gray                  # white type on a dark strip
+        _, ink = cv2.threshold(gray, 0, 255,
+                               cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        pieces = [tuple(int(v) for v in stats[i][:4]) + (i,)
+                  for i in range(1, count) if stats[i][4] >= 6]
+        if not pieces:
+            return crop, 0.0
+        # The type the box is mostly of: the height covering the most width.
+        weights = {}
+        for _x, _y, w, h, _i in pieces:
+            if h >= 6:
+                bucket = int(h // 3) * 3
+                weights[bucket] = weights.get(bucket, 0) + w
+        size = float(max(weights, key=weights.get) + 1.5) if weights else 0.0
+        for x, y, w, h, i in pieces:
+            at_side = x <= 1 or x + w >= width - 1
+            at_end = y <= 1 or y + h >= height - 1
+            rule = h >= 0.8 * height and w <= max(3, 0.12 * h)
+            cut = (at_side or at_end) and size and h < 0.8 * size
+            if rule or cut:
+                gray[labels == i] = 255
+        return Image.fromarray(gray), size
+    except Exception:  # noqa: BLE001 - a box left as it was still reads
+        return crop, 0.0
 
 
 def _clear_edges(crop, region):
