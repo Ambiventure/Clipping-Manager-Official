@@ -29,6 +29,7 @@ would allow any licence you like.
 | rapidfuzz | 3.14.6 | MIT | Matching misspelt publication names and near-identical headlines |
 | numpy | 2.5.2 | BSD-3-Clause (with bundled components under their own permissive terms, listed in its LICENSE) | Ink-band detection, finding where to split a joined clipping |
 | tesserocr | 2.10.0 | MIT | Reading the headline off a clipping |
+| opencv-python-headless | 5.0.0.93 | Apache-2.0 | Finding WHERE the headline is on a cutting before anything is read. The wheel's FFmpeg video plug-in (LGPL) is left out of the build - nothing here reads video |
 | pywin32 | 312 | PSF | Accepting a drag from a browser the way Explorer does |
 | PyInstaller | 6.22.2 | GPL-2.0-or-later, with a bootloader exception | Building the .exe. The exception exists precisely so packaged programs are not forced to GPL |
 

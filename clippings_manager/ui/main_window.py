@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from ..core.assemble import (ExtractionError, detect_division, is_advisory,
@@ -72,7 +73,7 @@ TIDIED_NOTE = (" The phone's bars were trimmed off - Trim… then Whole picture 
 from .. import version
 from ..core.session import SessionStore, decode_clip, encode_clip
 from . import (collect, commands, datefield, dropped, export_dialog, findbar,
-               icons, reader, theme, webclip, win_drop, zoom)
+               icons, ocrfield, reader, theme, webclip, win_drop, zoom)
 from .clip_list import ClipList
 from .cover_card import CoverCard
 from .fluid import ElidedLabel, FlowLayout, ShrinkingCombo
@@ -939,6 +940,15 @@ class MainWindow(QMainWindow):
         self.trainer_action.setToolTip(
             "Teach it which cuttings are the same story and which are not.")
         self.trainer_action.triggered.connect(self.open_trainer)
+        # THE OCR HEADLINE, ON OR OFF. A switch on a line of its own, green
+        # when on and red when off, that stays open when pressed so the change
+        # is seen. It hides the OCR box on every clipping and in the preview;
+        # the duplicate check reads the pictures either way - see ocrfield.
+        self.ocr_switch = ocrfield.SwitchRow("OCR headline", ocrfield.is_on())
+        self.ocr_switch.toggled.connect(self._ocr_field_switched)
+        self.ocr_switch_action = QWidgetAction(self.main_menu)
+        self.ocr_switch_action.setDefaultWidget(self.ocr_switch)
+        self.main_menu.addAction(self.ocr_switch_action)
         # How big everything is drawn. Each size asks first, then starts the
         # program again at it, as the zoom on the bar always did.
         self.zoom_menu = self.main_menu.addMenu("Zoom")
@@ -1336,6 +1346,10 @@ class MainWindow(QMainWindow):
                             lambda row_id: self.pool().number_of(row_id))
         self.find_bar.picked.connect(self._go_to_clip)
         self.find_bar.shiftWanted.connect(self._shift_found_to)
+        self.find_bar.priorityWanted.connect(self._found_priority)
+        self.find_bar.arrangeWanted.connect(self._found_arrange)
+        self.find_bar.moveMenuOpening.connect(
+            lambda menu, ids: self._fill_move_menu(menu, ids))
 
         # A bar for work that takes long enough to wonder about. Above the
         # status strip, so the sentence and the bar read as one thing.
@@ -3491,9 +3505,29 @@ class MainWindow(QMainWindow):
                 row.clip is not None and copied.needs_english(row.clip)
                 for row in pool.scoped_rows()))
 
-    def _batch_move(self, where: str) -> None:
+    def _found_priority(self, ids: list, level: int) -> None:
+        """A priority for every ticked search result at once. One step."""
         pool = self._list_pool()
-        ids = self._selected_ids(pool) if pool is not None else []
+        if pool is None:
+            return
+        ids = [i for i in ids if pool.row_for(i) is not None]
+        if not ids:
+            return
+        self.stack_for(pool).push(commands.SetPriority(pool, ids, level))
+        self._update_counts()
+        self.find_bar.refresh()
+
+    def _found_arrange(self, ids: list, where: str) -> None:
+        """The ticked search results to the top or the bottom of the list."""
+        self._batch_move(where, ids)
+        self.find_bar.refresh()
+
+    def _batch_move(self, where: str, ids: list | None = None) -> None:
+        pool = self._list_pool()
+        if ids is None:
+            ids = self._selected_ids(pool) if pool is not None else []
+        elif pool is not None:
+            ids = [i for i in ids if pool.row_for(i) is not None]
         if not ids or pool is None:
             return
         if self._lens_holds(pool):
@@ -3996,20 +4030,122 @@ class MainWindow(QMainWindow):
         row = pool.row_for(clip_id) if pool is not None else None
         if row is None or row.clip is None:
             return
-        from ..core import ocr
+        from ..core import ocr, ocrworker
 
         if not ocr.available():
             self._flash(f"The reader is not available ({ocr.why_not()}).", "bad")
             return
+        # NEVER ON THIS THREAD. It used to read right here, and the window
+        # stopped until it was done - a second, or five on a big scan. The
+        # picture goes to a helper process (see core/ocrworker), the same two
+        # stages as every other reading: find the headline by looking, then
+        # read only that. The answer comes back to _reread_done.
+        busy = self.__dict__.setdefault("_reading_now", set())
+        if clip_id in busy:
+            return                  # already being read: one press is enough
+        busy.add(clip_id)
         was = str(getattr(row.clip, "ocr_text", "") or "")
-        try:
-            ocr.read_into(row.clip, force=True)
-        except Exception as bad:  # noqa: BLE001 - one clipping, never the morning
-            self._flash(f"That picture could not be read ({bad}).", "bad")
-            return
-        now = str(getattr(row.clip, "ocr_text", "") or "").strip()
+        data = ocr._as_printed(row.clip)
         preview = getattr(self, "preview", None)
-        if preview is not None and preview.isVisible():
+        if (preview is not None and preview.isVisible()
+                and preview.row is not None and preview.row.id == clip_id):
+            preview.reading(True)
+        # A reader of its own, made here on the main thread, only for when no
+        # helper will start - building one anywhere else is not allowed.
+        engine = None
+        if not ocrworker.available():
+            made = ocr.build_engines(1)
+            engine = made[0] if made else None
+        relay = self._reading_relay()
+
+        def work():
+            found = ocrworker.read_headline(data)
+            if found is None:
+                try:
+                    found = (ocr.headline_with(engine, data)
+                             if engine is not None else ocr.Headline())
+                except Exception:  # noqa: BLE001 - it will not read
+                    found = ocr.Headline()
+            if engine is not None:
+                ocr.close_engines([engine])
+            relay.done.emit(clip_id, found.text, int(found.confidence),
+                            found.engine or "", was)
+
+        import threading
+
+        threading.Thread(target=work, name="read-again", daemon=True).start()
+
+    def _read_box(self, clip_id: int, box: tuple) -> None:
+        """Read the words inside the preview's OCR box - never on this thread."""
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        if row is None or row.clip is None:
+            return
+        from ..core import ocr, ocrworker
+
+        data = ocr._as_printed(row.clip)
+        engine = None
+        if not ocrworker.available():
+            made = ocr.build_engines(1)
+            engine = made[0] if made else None
+        relay = self._reading_relay()
+
+        def work():
+            found = ocrworker.read_box(data, box)
+            if found is None:
+                try:
+                    found = ocr.read_box(data, box, api=engine)
+                except Exception:  # noqa: BLE001 - it will not read
+                    found = ocr.Headline()
+            if engine is not None:
+                ocr.close_engines([engine])
+            relay.boxed.emit(clip_id, found.text)
+
+        import threading
+
+        threading.Thread(target=work, name="read-box", daemon=True).start()
+
+    def _box_done(self, clip_id: int, words: str) -> None:
+        preview = getattr(self, "preview", None)
+        if (preview is not None and preview.row is not None
+                and preview.row.id == clip_id):
+            preview.box_read(words)
+
+    def _reading_relay(self):
+        """What carries a reading back from its thread to this one."""
+        relay = getattr(self, "_relay", None)
+        if relay is None:
+            from PySide6.QtCore import QObject, Signal
+
+            class _Relay(QObject):
+                done = Signal(int, str, int, str, str)
+                boxed = Signal(int, str)
+
+            relay = self._relay = _Relay(self)
+            relay.done.connect(self._reread_done)
+            relay.boxed.connect(self._box_done)
+        return relay
+
+    def _reread_done(self, clip_id: int, text: str, confidence: int,
+                     engine: str, was: str) -> None:
+        """A reading has come back: put it on the clipping and say so."""
+        from ..core import ocr
+
+        getattr(self, "_reading_now", set()).discard(clip_id)
+        pool = self.pool_for(clip_id)
+        row = pool.row_for(clip_id) if pool is not None else None
+        preview = getattr(self, "preview", None)
+        showing = (preview is not None and preview.isVisible()
+                   and preview.row is not None and preview.row.id == clip_id)
+        if preview is not None and showing:
+            preview.reading(False)
+        if row is None or row.clip is None:
+            return
+        row.clip.ocr_text = text
+        row.clip.headline_confidence = confidence
+        row.clip.ocr_engine = engine or ocr.engine_name() or "none"
+        now = text.strip()
+        if showing:
             preview.ocr_edit.setText(now)
             preview.use_read_btn.setEnabled(bool(now))
             preview.told("Read again" if now else "Nothing could be read")
@@ -4039,6 +4175,28 @@ class MainWindow(QMainWindow):
         self.stack_for(pool).push(
             commands.EditLabel(pool, clip_id, words))
         self._flash(f"Headline set from the picture: {words[:60]}", "good")
+
+    def _ocr_field_switched(self, on: bool) -> None:
+        """The OCR headline switched on or off: every row and the preview.
+
+        The rows change height with it - a row with its OCR box is one box
+        taller - so the list is laid out again rather than only repainted,
+        or the rows would keep the old heights with the boxes gone from them.
+        """
+        ocrfield.set_on(on)
+        for view in (self.list, getattr(self.board, "focus_list", None)):
+            if view is None:
+                continue
+            try:
+                view.scheduleDelayedItemsLayout()
+                view.viewport().update()
+            except Exception:  # noqa: BLE001 - a view that is not there yet
+                pass
+        if self.preview is not None:
+            self.preview.show_ocr(on)
+        self._flash("OCR headline shown" if on else
+                   "OCR headline hidden - the duplicate check still reads "
+                   "the pictures")
 
     def _ocr_corrected(self, clip_id: int, words: str) -> None:
         """A reading corrected by hand. Kept on the clipping, so the duplicate
@@ -4169,8 +4327,12 @@ class MainWindow(QMainWindow):
             # The review of the list the previewed clipping is in.
             self.preview.copyRequested.connect(self._copy_clip_picture)
             self.preview.rereadRequested.connect(self._reread_headline)
+            self.preview.boxReadRequested.connect(self._read_box)
             self.preview.ocrEdited.connect(self._ocr_corrected)
             self.preview.sendToNewspad.connect(self._send_clip_to_newspad)
+            # Which newspad is open, asked every time a clipping is shown: the
+            # window outlives a switch, and its newspad buttons must not.
+            self.preview.newspad_here = lambda: self.newspad
             self.preview.reviewRequested.connect(
                 lambda: self.review_duplicates(pool=self._preview_pool()))
         # Set before the row is shown: it decides whether the Section control

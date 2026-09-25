@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -99,6 +99,62 @@ class Side(QWidget):
         bits = [b for b in (clip.title_text, source) if b]
         self.source.setText("  ·  ".join(bits) or "unnamed")
         self.headline.setText(clip.ocr_text or "(nothing could be read)")
+
+
+class _Flash(QWidget):
+    """A light laid over the whole window and taken off again, three times.
+
+    Laid OVER the dialog as a child that lets every click through, so nothing
+    underneath moves, resizes or repaints differently - the only thing that
+    changes on screen is the light itself.
+    """
+
+    #: On, off, on, off, on, off: three flashes.
+    BEATS = 6
+    #: Fast, as asked - the whole thing is over in about half a second.
+    BEAT_MS = 85
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._lit = False
+        self._left = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.BEAT_MS)
+        self._timer.timeout.connect(self._beat)
+        self.hide()
+
+    def run(self) -> None:
+        self.setGeometry(self.parentWidget().rect())
+        self._left = self.BEATS
+        self._lit = True
+        self.show()
+        self.raise_()
+        self.update()
+        self._timer.start()
+
+    def _beat(self) -> None:
+        self._left -= 1
+        if self._left <= 0:
+            self._timer.stop()
+            self._lit = False
+            self.hide()
+            return
+        self._lit = not self._lit
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802 - Qt's name
+        if not self._lit:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor(232, 121, 47, 46))
+        pen = QPen(QColor(theme.ORANGE), 6)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(self.rect().adjusted(3, 3, -3, -3))
+        painter.end()
 
 
 class DuplicatesDialog(QDialog):
@@ -303,10 +359,45 @@ class DuplicatesDialog(QDialog):
         if not self.pairs:
             return
         pair = self.pairs[self.at]
+        at_end = self.at >= len(self.pairs) - 1
+        # Decided already, and still on the last pair: this press went
+        # nowhere. It used to be accepted without a sign - the same verdict
+        # written over itself - so people went on pressing Confirm Duplicate
+        # on a window that had nothing left to show them.
+        again = at_end and pair.copy.uid in self.verdicts
         self.verdicts[pair.copy.uid] = is_duplicate
-        if self.at < len(self.pairs) - 1:
+        if not at_end:
             self.at += 1
         self.show_pair()
+        if at_end:
+            self._say_finished()
+            if again:
+                self.flash_done()
+
+    def undecided(self) -> int:
+        """How many pairs have no verdict yet."""
+        return sum(1 for p in self.pairs if p.copy.uid not in self.verdicts)
+
+    def _say_finished(self) -> None:
+        """At the last pair: say what is left, and light the way out."""
+        left = self.undecided()
+        if left:
+            self.position.setText(
+                f"That was the last one - {left} earlier "
+                f"{'pair is' if left == 1 else 'pairs are'} still undecided. "
+                "Use ‹ Previous, or press Done.")
+        else:
+            self.position.setText(
+                f"All {len(self.pairs)} decided - press Done to finish.")
+        self.done_btn.setDefault(True)
+        self.done_btn.setFocus(Qt.OtherFocusReason)
+
+    def flash_done(self) -> None:
+        """Three quick flashes: there is nothing left here to decide."""
+        flash = getattr(self, "_flash", None)
+        if flash is None:
+            flash = self._flash = _Flash(self)
+        flash.run()
 
     def swept(self) -> bool:
         """Whether the lot were dealt with in one press rather than one by one.

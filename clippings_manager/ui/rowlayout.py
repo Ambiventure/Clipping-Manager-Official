@@ -38,6 +38,11 @@ INDEX_W = 22
 THUMB = 64
 ICON_BTN = 28
 MOVE_BTN = 22
+#: Split, Merge and English, stacked one above the other in a single narrow
+#: column rather than laid side by side.
+PILL_W = 80
+PILL_H = 22
+PILL_GAP = 4
 
 # --- group header -----------------------------------------------------------
 GROUP_HEIGHT = 46
@@ -88,8 +93,8 @@ class RowGeometry:
                    "The headline that prints above the image")]
               if not self.label.isNull() and self.label.isValid() else []),
             *([Hit("read", self.read,
-                   "What the reader made of this picture - correct it here "
-                   "and the duplicate check and the search both improve")]
+                   "The OCR reading of this picture - correct it here and "
+                   "the duplicate check and the search both improve")]
               if not self.read.isNull() and self.read.isValid() else []),
         ]
 
@@ -167,16 +172,26 @@ def clip_row(option_rect: QRect, *, in_group: bool, is_last: bool,
                        "Move to the bottom"))
     right = pad.left() - 6
 
-    add("rotate", ICON_BTN, "Rotate 90° clockwise")
+    # SPLIT AND MERGE, STACKED, and no Rotate. Side by side, with Rotate
+    # beside them, they took 204 pixels of every row - room the headline, the
+    # address and the OCR reading wanted, since those are what somebody reads.
+    # One narrow column of them takes 80. Rotate is on the preview, where a
+    # picture is looked at properly before it is turned; the row is for
+    # sorting, and a turn done from a 64-pixel thumbnail was always a guess.
+    stack = [("split", "Split this image into two clippings")]
+    if not is_last:
+        stack.append(("merge", "Merge this clipping with the one below it"))
     # Only on a card with Hindi or Punjabi in a field the report prints. A
     # caption typed into the headline box stays as typed, and this is the
     # button that reads it and writes it into the fields in English.
     if english:
-        add("english", 78, "Put this card's Hindi into English")
-
-    if not is_last:
-        add("merge", 84, "Merge this clipping with the one below it")
-    add("split", 74, "Split this image into two clippings")
+        stack.append(("english", "Put this card's Hindi into English"))
+    tall = len(stack) * PILL_H + (len(stack) - 1) * PILL_GAP
+    y = y_mid - tall // 2
+    for name, tip in stack:
+        buttons.append(Hit(name, QRect(right - PILL_W, y, PILL_W, PILL_H), tip))
+        y += PILL_H + PILL_GAP
+    right = right - PILL_W - 8
 
     # --- the fields take what is left --------------------------------------
     label_left = thumb.right() + 12

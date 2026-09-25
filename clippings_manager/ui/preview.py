@@ -154,6 +154,9 @@ class PreviewDialog(QDialog):
     rereadRequested = Signal(int)
     #: (row id, words) - what was read off the picture, edited by hand.
     ocrEdited = Signal(int, str)
+    #: (row id, (left, top, right, bottom)) - read the words inside the OCR
+    #: box, in the picture's own pixels. The window reads; this only asks.
+    boxReadRequested = Signal(int, tuple)
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
@@ -426,11 +429,32 @@ class PreviewDialog(QDialog):
         self.copy_btn.clicked.connect(self._copy_picture)
         column.addWidget(self.copy_btn)
 
+        # THE OCR BOX. When the reader has come back with nonsense, show it
+        # where the headline is: a glass over the picture, moved by its dot,
+        # read with a double press on the dot. See ui/ocrbox.
+        self.ocr_btn = QToolButton(rail)
+        self.ocr_btn.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
+        self.ocr_btn.setCursor(Qt.PointingHandCursor)
+        self.ocr_btn.setText("OCR")
+        self.ocr_btn.setCheckable(True)
+        self.ocr_btn.setToolTip(
+            "Read a headline yourself: lays a glass over the picture. Drag "
+            "its dot onto the headline, pull its edges to fit, and "
+            "double-click the dot - the words go into the headline box.")
+        self.ocr_btn.toggled.connect(self._ocr_box_toggled)
+        column.addWidget(self.ocr_btn)
+
         # ONE BUTTON PER NEWSPAD, rather than a menu. Sending a clipping on is
         # something done over and over while a second newspad is built, and a
-        # menu costs a press and a read every time; N2, N3, N4 is one press and
-        # no reading. The newspad that is open is not offered - the clipping is
-        # already in it.
+        # menu costs a press and a read every time; one button is one press
+        # and no reading. The newspad that is open is not offered - the
+        # clipping is already in it.
+        #
+        # All four are BUILT, and the open one is hidden each time a clipping
+        # is shown - see _match_newspads. They used to be built once, leaving
+        # out whichever newspad was open when this window first appeared; the
+        # window outlives a switch, so in Newspad 2 it went on offering N2,
+        # N3, N4 - the newspad you were in, and not the one you came from.
         line = QFrame(rail)
         line.setFixedHeight(1)
         line.setStyleSheet("background: rgba(255, 255, 255, 0.16);"
@@ -440,10 +464,7 @@ class PreviewDialog(QDialog):
         from ..core import newspads
 
         self.newspad_btns = {}
-        here = newspads.active()
         for number in range(1, newspads.COUNT + 1):
-            if number == here:
-                continue
             button = QToolButton(rail)
             button.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
             button.setCursor(Qt.PointingHandCursor)
@@ -455,9 +476,35 @@ class PreviewDialog(QDialog):
                 lambda _checked=False, n=number: self._send_to(n))
             self.newspad_btns[number] = button
             column.addWidget(button)
-        rail.adjustSize()
-        rail.raise_()
+        self._match_newspads(rail)
         return rail
+
+    def _match_newspads(self, rail=None) -> None:
+        """Offer every newspad but the one that is open, as it is NOW.
+
+        Asked of the window rather than of the file that remembers the last
+        one opened: that file can fail to be written, and the window is the
+        one that knows which newspad it is showing.
+        """
+        from ..core import newspads
+
+        rail = rail if rail is not None else getattr(self, "_rail", None)
+        here = None
+        asking = getattr(self, "newspad_here", None)
+        if callable(asking):
+            try:
+                here = int(asking())
+            except Exception:  # noqa: BLE001 - fall back to the remembered one
+                here = None
+        if here is None:
+            here = newspads.active()
+        for number, button in getattr(self, "newspad_btns", {}).items():
+            button.setVisible(number != here)
+        if rail is not None:
+            rail.adjustSize()
+            rail.raise_()
+            if getattr(self, "_rail", None) is rail:
+                self._place_rail()
 
     #: How long the bubble stays up after a clipping is sent.
     TOLD_FOR_MS = 1500
@@ -509,6 +556,56 @@ class PreviewDialog(QDialog):
         rail.move(max(0, holder.width() - rail.width()),
                   max(0, (holder.height() - rail.height()) // 2))
         rail.raise_()
+
+    def _ocr_box_toggled(self, on: bool) -> None:
+        """Lay the glass over the picture, or take it away."""
+        box = getattr(self, "_ocr_box", None)
+        if on:
+            if getattr(self.canvas, "trimming", False):
+                # One tool on the picture at a time: a trim half drawn is
+                # not thrown away for this.
+                self.ocr_btn.blockSignals(True)
+                self.ocr_btn.setChecked(False)
+                self.ocr_btn.blockSignals(False)
+                self.told("Finish the trim first")
+                return
+            if box is None:
+                from .ocrbox import OcrBox
+
+                box = self._ocr_box = OcrBox(self.canvas,
+                                             lambda: self._pixmap)
+                box.readWanted.connect(self._ocr_box_read)
+                box.closed.connect(lambda: self.ocr_btn.setChecked(False))
+            box.follow()
+            box.show()
+            box.setFocus(Qt.OtherFocusReason)
+            self.told("Drag the dot onto the headline, then double-click it")
+        elif box is not None:
+            box.hide()
+
+    def _ocr_box_read(self, where: tuple) -> None:
+        if self.row is not None:
+            self.boxReadRequested.emit(self.row.id, tuple(where))
+
+    def box_read(self, words: str) -> None:
+        """What the OCR box read, back from the window: into the headline.
+
+        The headline box first, which is what was asked for - and the OCR
+        headline too, since the words are a better reading of this picture
+        than whatever the reader made of it on its own.
+        """
+        box = getattr(self, "_ocr_box", None)
+        if box is not None:
+            box.busy(False)
+        words = (words or "").strip()
+        if not words:
+            self.told("Nothing could be read in the box")
+            return
+        self.label_edit.setText(words)
+        self._emit_label(words)
+        self.ocr_edit.setText(words)
+        self._ocr_typed(words)
+        self.told("Headline read")
 
     def _copy_picture(self) -> None:
         if self.row is not None:
@@ -720,7 +817,7 @@ class PreviewDialog(QDialog):
         read_row = QHBoxLayout()
         read_row.setSpacing(8)
         self.ocr_edit = self._field(
-            "Headline read from the picture", read_row, 1)
+            "OCR headline - read from the picture", read_row, 1)
         self.ocr_edit.setPlaceholderText(
             "Not read yet — press the round button to read it")
         self.ocr_edit.setToolTip(
@@ -753,7 +850,21 @@ class PreviewDialog(QDialog):
         buttons.addWidget(self.use_read_btn)
         pads.addLayout(buttons)
         read_row.addLayout(pads, 0)
-        body.addLayout(read_row)
+        # Held as a widget, not only a layout, so the whole line - caption, box
+        # and both buttons - can be hidden in one go when the OCR headline is
+        # switched off in the menu.
+        self.ocr_line = QWidget()
+        # See-through: the application's stylesheet paints every plain widget
+        # the page's pale grey, and on this dark panel that showed as a white
+        # strip behind the whole line.
+        self.ocr_line.setObjectName("OcrLine")
+        self.ocr_line.setStyleSheet("#OcrLine { background: transparent; }")
+        self.ocr_line.setLayout(read_row)
+        read_row.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self.ocr_line)
+        from .ocrfield import is_on as _ocr_on
+
+        self.ocr_line.setVisible(_ocr_on())
 
         link_row = QHBoxLayout()
         link_row.setSpacing(12)
@@ -917,6 +1028,51 @@ class PreviewDialog(QDialog):
         if self.row is not None:
             self.rereadRequested.emit(self.row.id)
 
+    def reading(self, busy: bool) -> None:
+        """While a reading is under way: the button turns, and waits.
+
+        The reading happens in a helper process now, so the window goes on
+        working meanwhile - which means something has to say that it is
+        happening, or a second press follows the first.
+        """
+        from PySide6.QtGui import QIcon, QPainter, QTransform
+
+        timer = getattr(self, "_spin_timer", None)
+        if timer is None:
+            timer = self._spin_timer = QTimer(self)
+            timer.setInterval(70)
+            self._spin_at = 0
+            self._spin_still = icon_pixmap("rotate", "#DCE5F2", 15)
+
+            def turn():
+                self._spin_at = (self._spin_at + 30) % 360
+                still = self._spin_still
+                turned = still.transformed(QTransform().rotate(self._spin_at),
+                                           Qt.SmoothTransformation)
+                # Back to the button's own size, centred, so it turns in place
+                # rather than growing and shrinking at the corners.
+                canvas = QPixmap(still.size())
+                canvas.fill(Qt.transparent)
+                painter = QPainter(canvas)
+                painter.drawPixmap(
+                    (canvas.width() - turned.width()) // 2,
+                    (canvas.height() - turned.height()) // 2, turned)
+                painter.end()
+                self.reread_btn.setIcon(QIcon(canvas))
+
+            timer.timeout.connect(turn)
+        self.reread_btn.setEnabled(not busy)
+        self.use_read_btn.setEnabled(not busy
+                                     and bool(self.ocr_edit.text().strip()))
+        if busy:
+            self.ocr_edit.setPlaceholderText("Reading the headline…")
+            timer.start()
+        else:
+            timer.stop()
+            self.reread_btn.setIcon(self._spin_still)
+            self.ocr_edit.setPlaceholderText(
+                "Not read yet — press the round button to read it")
+
     def _use_reading(self) -> None:
         """What the picture said becomes what the report prints."""
         words = self.ocr_edit.text().strip()
@@ -925,6 +1081,12 @@ class PreviewDialog(QDialog):
         self.label_edit.setText(words)
         self._emit_label()
         self.told("Put into the headline")
+
+    def show_ocr(self, on: bool) -> None:
+        """Show or hide the OCR headline line - the menu's switch."""
+        line = getattr(self, "ocr_line", None)
+        if line is not None:
+            line.setVisible(bool(on))
 
     def _size_reading(self) -> None:
         """Set the reading at the size its own script needs.
@@ -1085,6 +1247,11 @@ class PreviewDialog(QDialog):
             self.prev_btn.setEnabled(position > 1)
             self.next_btn.setEnabled(position < total)
 
+        self._match_newspads()
+        glass = getattr(self, "_ocr_box", None)
+        if glass is not None:
+            glass.busy(False)
+            glass.follow()
         self.label_edit.setText(clip.title_text)
         was = self.ocr_edit.blockSignals(True)
         try:

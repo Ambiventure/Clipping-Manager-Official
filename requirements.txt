@@ -17,6 +17,7 @@ python-docx>=1.1   # Word export
 PyMuPDF>=1.26      # PDF read (division files, 360 doc) and PDF write (the newspad)
 rapidfuzz>=3.14    # section-header typo tolerance; OCR name matching
 numpy>=2.0         # label-band detection, split-point detection
+opencv-python-headless>=5.0   # finds WHERE the headline is before it is read; headless = no Qt of its own to clash with PySide6
 PySide6>=6.9       # the application itself
 pywin32>=306; sys_platform == "win32"   # read a browser drag the way Explorer does
 

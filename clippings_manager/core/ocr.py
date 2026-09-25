@@ -480,15 +480,156 @@ def close_engines(engines) -> None:
             pass
 
 
+#: How many of the finder's candidates are ever read. The best one, nearly
+#: always; the next only when the best reads as nothing, or as a paper's name
+#: or a date rather than a story.
+CANDIDATES_READ = 3
+
+#: Words a newspaper's nameplate carries and a headline almost never does -
+#: "daily", "published from", edition, price, page, year and issue. TWO of
+#: them make a nameplate; one alone does not, or a story about a book being
+#: published would be thrown away.
+NAMEPLATE_WORDS = ("दैनिक", "प्रकाशित", "संस्करण", "मूल्य", "पृष्ठ", "वर्ष",
+                   "अंक", "daily", "edition", "price", "pages", "rs.")
+
+
+def _nameplate(text: str) -> bool:
+    """Does this read as a paper's nameplate rather than a story?"""
+    folded = (text or "").casefold()
+    return sum(1 for word in NAMEPLATE_WORDS if word in folded) >= 2
+
+
+def two_stage(api, image):
+    """Find the headline by looking, then read only that. (finding, reading)
+
+    1. The part of the picture that is not the article goes first - the
+       division's stamped strip with the paper, the city and the date.
+    2. OpenCV finds where the headline is: the bold type that sits on the
+       article, not the office's label above a gap, not the paper's name, not
+       a photograph. Nothing is read to find it.
+    3. Only that region is read.
+
+    ``finding`` is None when there is no OpenCV, or nothing on the picture
+    that looks like a headline; the caller then reads the old way.
+    """
+    from . import headfind
+
+    if api is None or image is None or not headfind.available():
+        return None, Headline()
+    try:
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        image = strip_band(image)
+        finding = headfind.find(image)
+    except Exception:  # noqa: BLE001 - a picture the finder cannot look at
+        return None, Headline()
+    if not finding.candidates:
+        return None, Headline()
+    def story(found) -> bool:
+        letters = sum(1 for ch in found.text if ch.isalpha())
+        return bool(found.text and letters >= 4
+                    and not _is_furniture(found.text)
+                    and not _nameplate(found.text))
+
+    for region in finding.candidates[:CANDIDATES_READ]:
+        found = read_region(api, image, region)
+        if story(found):
+            finding.chosen = region
+            return finding, found
+        # A LABEL SET ON TOP OF THE HEADLINE. The office types its own
+        # "हिंदुस्तान वाराणसी 06-09-26 page-8" straight above the story, at
+        # nearly the headline's size and with no gap, and the two were found
+        # as one two-line headline - whose date then, rightly, made the whole
+        # of it read as furniture. Read such a block a line at a time and keep
+        # every line that is a story.
+        kept = [line for line in (read_region(api, image, part)
+                                  for part in getattr(region, "lines", ()))
+                if story(line)]
+        if kept:
+            finding.chosen = region
+            words = normalise(" ".join(line.text for line in kept))
+            confidence = int(sum(line.confidence for line in kept) / len(kept))
+            return finding, Headline(words, confidence, kept[0].engine)
+    return finding, Headline()
+
+
 def headline_with(api, data: bytes) -> Headline:
     """The headline, read with a reader of the caller's own.
 
     Same work as :func:`headline`, but against an engine that belongs to one
     thread, so several clippings can be read at once without them treading on
     each other.
+
+    TWO STAGES FIRST - see two_stage - and when they read cleanly and are
+    sure, that is the answer and nothing else runs: seven clippings in ten.
+
+    The old way below reads a fixed slice of the top of the picture and keeps
+    its tallest line, which is how a photograph, the office's label and a
+    paper's nameplate were read as headlines. It is asked only for a SECOND
+    OPINION, when the two stages found no headline or read one they were not
+    sure of, and the cleaner of the two readings is kept. Measured on 336 of
+    the office's cuttings: 41 read as gibberish the old way alone, 29 by two
+    stages alone, and 15 this way; 5, 36 and 4 read as nothing.
     """
     if api is None or not data:
         return Headline()
+    found = Headline()
+    try:
+        from PIL import Image
+
+        picture = Image.open(io.BytesIO(data))
+        picture.load()
+        _finding, found = two_stage(api, picture)
+        if found.text and found.confidence >= SURE and not _scrappy(found.text):
+            return found
+    except Exception:  # noqa: BLE001 - the old way still stands
+        found = Headline()
+    return _cleaner(found, _old_way(api, data))
+
+
+#: Two stages this sure, reading this cleanly, need no second opinion.
+SURE = 80
+
+
+def _scrappy(text: str) -> bool:
+    """Does a reading look like scraps rather than a sentence?
+
+    Latin fragments in the middle of Hindi ("रेल ब्लाक: करनाल की 2 cal के"),
+    stray symbols, or hardly any letters at all - what a reading of the wrong
+    region, or of a photograph, looks like.
+    """
+    body = text or ""
+    letters = sum(1 for ch in body if ch.isalpha() or "\u0900" <= ch <= "\u097f")
+    if letters < 6:
+        return True
+    devanagari = sum(1 for ch in body if "\u0900" <= ch <= "\u097f")
+    latin_words = [w for w in body.split()
+                   if any(ch.isascii() and ch.isalpha() for ch in w)]
+    if devanagari >= 10 and len(latin_words) >= 2:
+        return True
+    odd = sum(1 for ch in body
+              if not (ch.isalnum() or ch.isspace() or "\u0900" <= ch <= "\u097f"
+                      or ch in ",.:;-'\"!?()|%/&\u2018\u2019\u201c\u201d\u2013\u2014"))
+    return odd >= 3
+
+
+def _cleaner(two: Headline, old: Headline) -> Headline:
+    """Of two readings of one picture, the one that reads as a sentence.
+
+    Clean beats scrappy; then the surer one wins, with the two stages given a
+    small start - their region is the headline by construction, the old way's
+    is only the top of the picture.
+    """
+    candidates = [(not _scrappy(h.text), h.confidence + bonus, n, h)
+                  for n, (h, bonus) in enumerate(((two, 3), (old, 0)))
+                  if h.text]
+    if not candidates:
+        return two if two.text else old
+    return max(candidates, key=lambda c: (c[0], c[1], -c[2]))[3]
+
+
+def _old_way(api, data: bytes) -> Headline:
+    """The reading as it was before the two stages: slices of the top."""
     found = _read_band(api, data, TOP_BAND)
     if not found.text:
         found = _read_band(api, data, DEEPER_BAND)
@@ -637,6 +778,140 @@ def _read_band(api, data: bytes, portion: float) -> Headline:
         confidence = int(sum(conf for _t, _x, conf in kept) / max(1, len(kept)))
         return Headline(found, confidence, engine_name())
     except Exception:  # noqa: BLE001 - never let OCR break an import
+        return Headline()
+
+
+#: The headline's letters are brought to about this height before they are
+#: read. Tesseract's models are happiest with type a few dozen pixels tall;
+#: a headline found at 18 px on a phone capture reads as guesswork, and one
+#: at 140 px on a scan reads slowly for nothing.
+READ_TYPE_HEIGHT = 56
+
+
+def read_box(data: bytes, box: tuple, api=None) -> Headline:
+    """The words inside one box somebody drew over a picture.
+
+    The preview's OCR box: the person has put it round the headline, so there
+    is nothing to find - only the size of the type inside it, which is what
+    the reading is scaled by, and that is measured, not guessed.
+    """
+    api = api if api is not None else _open()
+    if api is None or not data:
+        return Headline()
+    try:
+        from PIL import Image
+
+        from . import headfind
+
+        picture = Image.open(io.BytesIO(data))
+        picture.load()
+        if picture.mode not in ("RGB", "L"):
+            picture = picture.convert("RGB")
+        left, top, right, bottom = (int(v) for v in box)
+        left, top = max(0, left), max(0, top)
+        right = min(picture.width, max(left + 1, right))
+        bottom = min(picture.height, max(top + 1, bottom))
+        crop = picture.crop((left, top, right, bottom))
+        size = 0.0
+        if headfind.available():
+            finding = headfind.find(crop)
+            if finding.best is not None:
+                size = finding.best.type_height
+        region = headfind.Region(0, 0, crop.width, crop.height,
+                                 type_height=size or crop.height / 2.5)
+        return read_region(api, crop, region)
+    except Exception:  # noqa: BLE001 - a box that will not read reads empty
+        return Headline()
+
+
+def _clear_edges(crop, region):
+    """White out ink in the box that is not on the headline's own lines.
+
+    The box is padded so the tops and tails of the headline's letters are not
+    cut off - and the padding takes in the bottom half of the line above it,
+    the top of a byline or a photograph below, and sometimes the first letter
+    of the next column. Half-letters read as nonsense, and the nonsense went
+    into the middle of an otherwise good reading. So anything whose CENTRE is
+    off the headline's lines goes; the headline's own vowel signs and dots
+    have their centres on it, and stay.
+    """
+    core = getattr(region, "core", ()) or ()
+    if len(core) != 4:
+        return crop
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+
+        gray = np.asarray(crop).copy()
+        _, ink = cv2.threshold(gray, 0, 255,
+                               cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        count, labels, stats, centres = cv2.connectedComponentsWithStats(ink, 8)
+        size = max(1.0, float(region.type_height or 0))
+        top = core[1] - region.top - 0.15 * size
+        bottom = core[3] - region.top + 0.15 * size
+        left = core[0] - region.left - 0.1 * size
+        right = core[2] - region.left + 0.1 * size
+        for i in range(1, count):
+            cx, cy = centres[i]
+            if not (top <= cy <= bottom and left <= cx <= right):
+                gray[labels == i] = 255
+        return Image.fromarray(gray)
+    except Exception:  # noqa: BLE001 - a crop left as it was still reads
+        return crop
+
+
+def read_region(api, image, region) -> Headline:
+    """Read ONE region of a picture - the one the finder says is the headline.
+
+    The region is read as a single block of text: one to three lines of the
+    same size, which is what a headline is. Nothing outside it is seen, so a
+    photograph, the office's label or the paper's nameplate cannot end up in
+    the words.
+    """
+    if api is None or image is None or region is None:
+        return Headline()
+    try:
+        import tesserocr
+        from PIL import Image, ImageOps
+
+        crop = image.crop(region.box())
+        if crop.width < 8 or crop.height < 8:
+            return Headline()
+        crop = crop.convert("L")
+        crop = _clear_edges(crop, region)
+        # Reversed type, white on a dark strip, the ordinary way round.
+        histogram = crop.histogram()
+        half = sum(histogram) / 2
+        running, median = 0, 255
+        for level, many in enumerate(histogram):
+            running += many
+            if running >= half:
+                median = level
+                break
+        if median < 100:
+            crop = ImageOps.invert(crop)
+        scale = READ_TYPE_HEIGHT / max(1.0, float(region.type_height or 0) or
+                                       crop.height / 2.0)
+        scale = max(0.4, min(4.0, scale))
+        if abs(scale - 1.0) > 0.05:
+            crop = crop.resize((max(1, int(crop.width * scale)),
+                                max(1, int(crop.height * scale))),
+                               Image.LANCZOS)
+        crop = ImageOps.expand(crop, border=24, fill=255)
+        was = api.GetPageSegMode()
+        try:
+            api.SetPageSegMode(tesserocr.PSM.SINGLE_BLOCK)
+            api.SetImage(crop)
+            text = api.GetUTF8Text() or ""
+            confidence = int(api.MeanTextConf() or 0)
+        finally:
+            api.SetPageSegMode(was)
+        text = normalise(text)
+        if not text:
+            return Headline()
+        return Headline(text, confidence, engine_name())
+    except Exception:  # noqa: BLE001 - never let a reading break anything
         return Headline()
 
 

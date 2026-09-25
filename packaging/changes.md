@@ -16,6 +16,44 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.52
+
+Changed
+
+  * **The headline is found first, then read.** The reader used to read a
+    slice off the top of every picture and keep its biggest line - so a
+    photograph, the office's own label ("The Times of India Pg 4 25.09.26")
+    or a paper's nameplate was often read instead of the story, and came
+    back as gibberish. It now looks for the headline first - the bold type
+    that sits on the article - and reads only that. On 48 of the office's
+    own cuttings it read the right headline on 47, where the old way got
+    about 31, and it is several times faster.
+  * **Reading never holds up the window.** "Read again", the duplicate check
+    and the new OCR box all read in a helper process in the background.
+  * **Split and Merge are stacked, and Rotate is off the row** (it is in the
+    preview), so the headline, address and OCR boxes on each clipping are
+    much wider.
+  * **The READ box is called OCR.**
+
+Fixed
+
+  * **The preview's newspad buttons follow the newspad you are in.** In
+    Newspad 2 they offered N2, N3 and N4; they now offer N1, N3 and N4.
+
+Added
+
+  * **An OCR switch in the menu**, green when on and red when off, that
+    hides the OCR box on every clipping and in the preview.
+  * **The OCR box in the preview.** Press OCR on the right edge of the
+    picture, drag the glass onto the headline by its dot, and double-click
+    the dot: it reads just that and puts the words in the headline box.
+  * **Priority, Top, Bottom and Move to for search results**, beside Shift
+    to - tick the results, and do it to all of them at once.
+  * **The duplicates window flashes** when you press Duplicate or Not a
+    Duplicate after the last pair, so it is plain that it is time for Done.
+
+---
+
 ## 2.0.51
 
 Changed

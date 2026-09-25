@@ -13,6 +13,14 @@ from pathlib import Path
 if __package__ in (None, ""):  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# STARTED AS A READING HELPER - see core/ocrworker. Checked before anything of
+# the window is loaded, so a helper carries Tesseract and OpenCV and nothing
+# else, and never opens a window of its own.
+if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--ocr-worker":
+    from clippings_manager.core import ocrworker  # noqa: E402
+
+    raise SystemExit(ocrworker.serve(sys.argv[2], sys.argv[3]))
+
 from PySide6.QtCore import QLockFile, QTimer  # noqa: E402
 from PySide6.QtGui import QFont, QIcon  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
@@ -140,6 +148,10 @@ def main() -> int:
     scroll.guard_the_wheel(app)
 
     window = MainWindow()
+    # The reading helpers go with the window: nothing is left running after.
+    from clippings_manager.core import ocrworker
+
+    app.aboutToQuit.connect(ocrworker.shutdown)
     window.show()
     # After the window is up, not before: building QPixmaps needs the
     # application, and a restore done inside the constructor would leave the

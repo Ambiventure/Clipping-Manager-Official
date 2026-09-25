@@ -73,6 +73,17 @@ _ocr_datas, _ocr_binaries, _ocr_hidden = collect_all("tesserocr")
 datas += _ocr_datas
 hiddenimports += _ocr_hidden
 
+# OPENCV finds where the headline is before anything is read (core/headfind),
+# and the reading happens in a helper process that is this same program started
+# with --ocr-worker (core/ocrworker). Both are imported only inside functions,
+# so they are named here rather than trusted to be found.
+hiddenimports += [
+    "cv2", "numpy",
+    "clippings_manager.core.headfind",
+    "clippings_manager.core.ocrworker",
+    "multiprocessing.connection",
+]
+
 # Qt ships far more than a desktop tool needs, and every megabyte is a megabyte the
 # PR department has to copy onto the office machine.
 excludes = [
@@ -119,6 +130,15 @@ analysis = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# OpenCV's video plug-in is FFmpeg, 31 MB of it, and nothing here reads or
+# writes video. It is also under a different licence from the rest of OpenCV,
+# so leaving it out keeps THIRD-PARTY-NOTICES honest as well as the folder
+# smaller.
+analysis.binaries = [
+    entry for entry in analysis.binaries
+    if "opencv_videoio_ffmpeg" not in str(entry[0]).lower()
+]
 
 pyz = PYZ(analysis.pure)
 

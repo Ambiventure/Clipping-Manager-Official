@@ -14,19 +14,22 @@ from PySide6.QtWidgets import QStyledItemDelegate
 
 from ..core import copied
 from ..core.models import priority_of
-from . import icons, rowlayout, theme
+from . import icons, ocrfield, rowlayout, theme
 from .model import ENTRY_CLIP, ENTRY_GROUP, Entry
 
 HOVER_NONE = (-1, "")
 
 
 def reading_for(clip) -> bool:
-    """Whether the read box is shown for this clipping.
+    """Whether the OCR box is shown for this clipping.
 
-    Only where there is something read. An empty box on every one of a
-    hundred and sixty rows is the clutter rowlayout warns about, and the
-    reading arrives on its own the first time the duplicate check runs.
+    Only where there is something read, and only while the OCR headline is
+    switched on (see ocrfield). An empty box on every one of a hundred and
+    sixty rows is the clutter rowlayout warns about, and the reading arrives
+    on its own the first time the duplicate check runs.
     """
+    if not ocrfield.is_on():
+        return False
     return bool(str(getattr(clip, "ocr_text", "") or "").strip())
 
 
@@ -454,7 +457,7 @@ class EntryDelegate(QStyledItemDelegate):
             # black the printed headline uses, because the two are different
             # things and should not look like one field repeated.
             self._paint_field(
-                painter, geo.read, clip, selected, "READ",
+                painter, geo.read, clip, selected, "OCR",
                 str(getattr(clip, "ocr_text", "") or ""),
                 "Nothing read from this picture yet",
                 QColor("#334155"), size=14,
@@ -647,15 +650,6 @@ class EntryDelegate(QStyledItemDelegate):
             icons.trash(painter, box, theme.QDANGER)
             return
 
-        if name == "rotate":
-            if hovered:
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor("#EEF2F7"))
-                painter.drawRoundedRect(rect, 7, 7)
-            box = QRectF(rect.center().x() - 8, rect.center().y() - 8, 16, 16)
-            icons.rotate(painter, box, theme.QNAVY if hovered else theme.QMUTED)
-            return
-
         # The two round buttons beside the read box. Round, so they are not
         # mistaken for the square action buttons on the right of the row -
         # these belong to the box they sit against, not to the clipping.
@@ -691,15 +685,19 @@ class EntryDelegate(QStyledItemDelegate):
             label, drawer = "Split", icons.scissors
         painter.setPen(QPen(line, 1))
         painter.setBrush(bg)
-        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
-        box = QRectF(rect.left() + 7, rect.center().y() - 7, 14, 14)
+        radius = rect.height() / 2
+        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5),
+                                radius, radius)
+        box = QRectF(rect.left() + 7, rect.center().y() - 6, 12, 12)
         drawer(painter, box, fg if name in ("merge", "english") else theme.QORANGE)
         painter.setPen(fg)
+        text = QRect(hit.rect.left() + 22, hit.rect.top(),
+                     hit.rect.width() - 26, hit.rect.height())
         painter.drawText(
-            QRect(hit.rect.left() + 24, hit.rect.top(), hit.rect.width() - 28,
-                  hit.rect.height()),
-            Qt.AlignVCenter | Qt.AlignLeft,
-            label + (" ↓" if name == "merge" else ""),
+            text, Qt.AlignVCenter | Qt.AlignLeft,
+            QFontMetrics(font).elidedText(
+                label + (" ↓" if name == "merge" else ""), Qt.ElideRight,
+                text.width()),
         )
 
     # ------------------------------------------------------------ hit test

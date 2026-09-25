@@ -31,7 +31,7 @@ import time
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal, Slot
 
-from ..core import imageops, ocr
+from ..core import imageops, ocr, ocrworker
 
 # How many clippings to read at once. Four engines read four times as fast as
 # one (measured: 3.8x on twelve cores) and each costs about 40ms to build and a
@@ -168,13 +168,24 @@ class Reader(QObject):
 
     def run(self) -> None:
         total = len(self._work)
-        if not total or (self._read_headlines and not self._engines):
+        # The helper processes are readers too - see core/ocrworker. With
+        # them there are no engines in this process at all, and "no engines"
+        # used to mean "nothing can be read": the pass finished at once, empty,
+        # and the duplicate check compared clippings it had never read.
+        helpers = self._read_headlines and ocrworker.available()
+        if not total or (self._read_headlines and not self._engines
+                         and not helpers):
             self.finished.emit([])
             self._end()
             return
 
-        lanes = max(1, min(len(self._engines) if self._read_headlines
-                           else MOST_ENGINES, total))
+        if not self._read_headlines:
+            lanes = MOST_ENGINES
+        elif helpers and not self._engines:
+            lanes = ocrworker.MOST
+        else:
+            lanes = len(self._engines)
+        lanes = max(1, min(lanes, total))
         out: list = []
 
         # The work is split into as many runs as there are engines, and each
@@ -198,13 +209,20 @@ class Reader(QObject):
             for uid, data in runs[lane]:
                 if self._stop:
                     break
-                if engine is None or not self._read_headlines:
+                if not self._read_headlines:
                     found = ocr.Headline()
                 else:
-                    try:
-                        found = ocr.headline_with(engine, data)
-                    except Exception:  # noqa: BLE001 - it will not read
-                        found = ocr.Headline()
+                    # A HELPER PROCESS READS IT - see core/ocrworker. This
+                    # thread only waits for the answer, so the window is never
+                    # held up by the reading however long a picture takes.
+                    # Read in this process only when no helper would start.
+                    found = ocrworker.read_headline(data)
+                    if found is None:
+                        try:
+                            found = (ocr.headline_with(engine, data)
+                                     if engine is not None else ocr.Headline())
+                        except Exception:  # noqa: BLE001 - it will not read
+                            found = ocr.Headline()
                 blank = {"whole": "", "lower": "", "fine": "", "width": 0,
                          "height": 0, "ink": ""}
                 if not self._measure:
@@ -412,7 +430,9 @@ def start(work, on_progress, on_finished, parent=None,
     one that wants to start without a pause.
     """
     engines = []
-    if work and read_headlines:
+    # Engines in this process only when the helpers will not start. Building
+    # four is 160ms on the window's thread, and with helpers they go unused.
+    if work and read_headlines and not ocrworker.available():
         engines = ocr.build_engines(_how_many())
     thread = QThread(parent)
     reader = Reader(engines, read_headlines=read_headlines, measure=measure)

@@ -116,7 +116,7 @@ def fold(words: str) -> str:
 FIELDS = (
     ("printed_caption", "headline"),
     ("label", "headline"),
-    ("ocr_text", "read from the picture"),
+    ("ocr_text", "OCR headline"),
     ("newspaper", "newspaper"),
     ("edition", "edition"),
     ("url", "link"),
@@ -365,6 +365,13 @@ class FindBox(QFrame):
     picked = Signal(int)
     #: (row ids, newspad number) - put copies of the ticked results there.
     shiftWanted = Signal(list, int)
+    #: (row ids, level) - give the ticked results this priority; 0 clears it.
+    priorityWanted = Signal(list, int)
+    #: (row ids, "top" or "bottom") - send the ticked results to that end.
+    arrangeWanted = Signal(list, str)
+    #: (menu, row ids) - the Move to menu is opening; the window fills it,
+    #: because only the window knows which files are in the list.
+    moveMenuOpening = Signal(object, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -423,8 +430,46 @@ class FindBox(QFrame):
         self.shift_menu = QMenu(self)
         self.shift_menu.aboutToShow.connect(self._fill_shift)
         self.shift_btn.setMenu(self.shift_menu)
-        head.addWidget(self.shift_btn)
-        for button in (self.all_btn, self.shift_btn):
+
+        # EVERYTHING ELSE THE SELECTION BAR DOES TO SEVERAL CLIPPINGS, done to
+        # the ticked results: a priority for all of them at once, the top or
+        # the bottom of the list, and another file's group. The search is how
+        # the twelve stories about one subject are found; having found them,
+        # doing something to them should not mean finding them all again in
+        # a list of a hundred and sixty.
+        self.priority_btn = QPushButton("Priority ▾")
+        self.priority_btn.setToolTip(
+            "Give every ticked result the same priority - or clear it. They "
+            "move to where that priority sits in the list, as one step that "
+            "Ctrl+Z takes back.")
+        self.priority_menu = QMenu(self)
+        self.priority_menu.aboutToShow.connect(self._fill_priority)
+        self.priority_btn.setMenu(self.priority_menu)
+        self.top_btn = QPushButton("Top")
+        self.top_btn.setToolTip("Send the ticked results to the top of the "
+                                "list, in the order they are in now.")
+        self.top_btn.clicked.connect(
+            lambda: self.arrangeWanted.emit(self.chosen(), "top"))
+        self.bottom_btn = QPushButton("Bottom")
+        self.bottom_btn.setToolTip("Send the ticked results to the bottom of "
+                                   "the list, in the order they are in now.")
+        self.bottom_btn.clicked.connect(
+            lambda: self.arrangeWanted.emit(self.chosen(), "bottom"))
+        self.move_btn = QPushButton("Move to ▾")
+        self.move_btn.setToolTip(
+            "Move the ticked results into another file's group, at its end - "
+            "exactly as Move to on the selection bar does.")
+        self.move_menu = QMenu(self)
+        self.move_menu.setToolTipsVisible(True)
+        self.move_menu.aboutToShow.connect(
+            lambda: self.moveMenuOpening.emit(self.move_menu, self.chosen()))
+        self.move_btn.setMenu(self.move_menu)
+        for button in (self.priority_btn, self.top_btn, self.bottom_btn,
+                       self.move_btn, self.shift_btn):
+            head.addWidget(button)
+        for button in (self.all_btn, self.priority_btn, self.top_btn,
+                       self.bottom_btn, self.move_btn, self.shift_btn):
+            button.setCursor(Qt.PointingHandCursor)
             button.setStyleSheet(
                 f"QPushButton {{ background: {theme.CROWN_RAISED};"
                 f" border: 1px solid {theme.SLATE_LINE};"
@@ -470,9 +515,40 @@ class FindBox(QFrame):
         for result in results:
             result.tick.setChecked(wanted)
 
+    def _fill_priority(self) -> None:
+        """The five levels and a way back, each with the colour its badge has."""
+        from PySide6.QtGui import QIcon, QPainter
+
+        self.priority_menu.clear()
+        many = len(self.chosen())
+        self.priority_menu.addAction(
+            f"Priority for {many} clipping{'s' if many != 1 else ''}:"
+        ).setEnabled(False)
+        colours = list(getattr(theme, "PRIORITY_COLOURS", ()) or ())
+        for level in range(1, 6):
+            dot = QPixmap(12, 12)
+            dot.fill(Qt.transparent)
+            if level - 1 < len(colours):
+                painter = QPainter(dot)
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(colours[level - 1]))
+                painter.drawEllipse(1, 1, 10, 10)
+                painter.end()
+            action = self.priority_menu.addAction(QIcon(dot), f"Priority {level}")
+            action.triggered.connect(
+                lambda _c=False, n=level: self.priorityWanted.emit(
+                    self.chosen(), n))
+        self.priority_menu.addSeparator()
+        self.priority_menu.addAction("Clear priority").triggered.connect(
+            lambda _c=False: self.priorityWanted.emit(self.chosen(), 0))
+
     def _count_changed(self) -> None:
         many = len(self.chosen())
         self.shift_btn.setEnabled(bool(many))
+        for button in (self.priority_btn, self.top_btn, self.bottom_btn,
+                       self.move_btn):
+            button.setEnabled(bool(many))
         self.all_btn.setText("Select all" if not self.results()
                              or not all(r.tick.isChecked()
                                         for r in self.results())
@@ -599,6 +675,10 @@ class FindBar(QWidget):
     picked = Signal(int)
     #: (row ids, newspad number) - copies of the ticked results, sent on.
     shiftWanted = Signal(list, int)
+    #: The rest of what can be done to the ticked results - see FindBox.
+    priorityWanted = Signal(list, int)
+    arrangeWanted = Signal(list, str)
+    moveMenuOpening = Signal(object, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -693,8 +773,26 @@ class FindBar(QWidget):
             self.box = FindBox(top)
             self.box.picked.connect(self._chose)
             self.box.shiftWanted.connect(self.shiftWanted.emit)
+            self.box.priorityWanted.connect(self.priorityWanted.emit)
+            self.box.arrangeWanted.connect(self.arrangeWanted.emit)
+            self.box.moveMenuOpening.connect(self.moveMenuOpening.emit)
             top.installEventFilter(self)
         return self.box
+
+    def refresh(self) -> None:
+        """Look again, keeping what was ticked ticked.
+
+        Called after something was done to the results: they are the same
+        clippings, but moved, so every number on the panel is out of date.
+        """
+        box = self.box
+        if box is None or not box.isVisible():
+            return
+        ticked = set(box.chosen())
+        self._look()
+        for result in box.results():
+            if result.row_id in ticked:
+                result.tick.setChecked(True)
 
     def _chose(self, row_id: int) -> None:
         # THE BOX STAYS OPEN, and so does what was typed. Looking at one result

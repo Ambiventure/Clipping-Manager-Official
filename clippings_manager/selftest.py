@@ -220,6 +220,39 @@ def run(sample: str | None = None) -> tuple[bool, str]:
                else f" - COULD NOT READ A TEST HEADLINE ({trouble})" if trouble
                else " - COULD NOT READ A TEST HEADLINE" if reader else "")))
 
+        # THE TWO STAGES, AND THE HELPER THAT RUNS THEM. OpenCV has to be in the
+        # build to find a headline, and the helper is this same program started
+        # a second time - so the only proof that either works in a packaged
+        # copy is to find the test headline, then have a helper read it.
+        found_it, helped, why = False, "", ""
+        try:
+            from .core import headfind, ocrworker
+
+            test_png = locals().get("stream")
+            if headfind.available() and test_png is not None:
+                from PIL import Image as _Image
+
+                look = headfind.find(_Image.open(io.BytesIO(test_png.getvalue())))
+                found_it = look.best is not None
+                answer = ocrworker.read_headline(test_png.getvalue())
+                helped = answer.text if answer is not None else ""
+                if answer is None:
+                    why = "no helper process would start"
+                ocrworker.shutdown()
+            elif not headfind.available():
+                why = "OpenCV is not in this build"
+        except Exception as exc:  # noqa: BLE001
+            why = f"{type(exc).__name__}: {exc}"
+        passed &= bool(found_it) and bool(helped)
+        lines.append(_line(
+            bool(found_it), "finding headlines (OpenCV)",
+            "found the test headline" if found_it
+            else f"DID NOT FIND IT ({why})" if why else "DID NOT FIND IT"))
+        lines.append(_line(
+            bool(helped), "reading in a helper process",
+            f"read back {helped!r}" if helped
+            else f"NOTHING CAME BACK ({why})" if why else "NOTHING CAME BACK"))
+
         # Not "is a font present" but "does Hindi come out as Hindi". A base-14
         # font substitutes a middle dot for every character it cannot set and
         # reports success, so a Hindi heading printed as a row of dots on every
