@@ -44,6 +44,8 @@ Changed
   * **Reading takes a little longer:** about six tenths of a second a cutting
     instead of four. It still happens in the background.
 
+---
+
 ## 2.0.57
 
 Changed
@@ -72,6 +74,8 @@ Fixed
     The press report's own reading is not reported there, and every message
     on the board comes down on its own.
 
+---
+
 ## 2.0.56
 
 Fixed
@@ -96,6 +100,8 @@ Fixed
     duplicate check, so these fixes reach them too. A headline you typed,
     or read with the OCR box, is kept as it is.
 
+---
+
 ## 2.0.55
 
 Fixed
@@ -109,6 +115,8 @@ Fixed
     A headline you typed yourself is never read again.
   * **Numbers in a headline keep their first figure** - "12 कर्मचारियों",
     "15 सितम्बर" and "13 सितंबर" had been read as 2, 5 and 3.
+
+---
 
 ## 2.0.54
 
