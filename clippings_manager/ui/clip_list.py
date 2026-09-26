@@ -11,12 +11,15 @@ from PySide6.QtCore import (
     QMimeData,
     QPoint,
     QRect,
+    QRectF,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QDrag, QGuiApplication, QPainter, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QListView
+from PySide6.QtGui import (QColor, QDrag, QFont, QGuiApplication, QPainter,
+                           QPen, QPixmap)
+from PySide6.QtWidgets import (QAbstractItemView, QLineEdit, QListView,
+                               QStyleOptionViewItem)
 
 from . import rowlayout, theme
 from .scroll import WHEEL_PIXELS, page_under, smooth
@@ -72,6 +75,19 @@ class ClipList(QListView):
         self._press_point: QPoint | None = None
         self._press_hit = None
         self._press_row = -1
+        # A drag's gap: where it is opening (a boundary - "before row k", the
+        # row count for the very end - or -1), how far each boundary is open
+        # now and how far it is meant to be, how tall it opens, and what is
+        # carried, whose card the slot drawn in it matches. See _open_gap.
+        self._gap_at = -1
+        self._gap_now: dict = {}
+        self._gap_wanted: dict = {}
+        self._gap_size = 0
+        self._slot_entry = None
+        # Room added at the foot while a drag is on, when the list stands at
+        # full height in the page: the gap pushes the last rows down, and
+        # without it they, and a slot opened at the very end, would be cut off.
+        self._drag_extra = 0
         # The stylesheet strips the application font's family list off every
         # item view, taking the Devanagari fallback with it. Put it back, or a
         # Hindi masthead is boxes on any machine that has only one such font.
@@ -211,11 +227,14 @@ class ClipList(QListView):
             tall += self.sizeHintForRow(row)
         if not rows and getattr(self, "empty_hint", ""):
             tall = self.EMPTY_HINT_HEIGHT
+        tall += getattr(self, "_drag_extra", 0)
         tall += 2 * self.frameWidth()
         self.setFixedHeight(max(1, tall))
 
     def paintEvent(self, event):  # noqa: N802 - Qt name
         super().paintEvent(event)
+        if getattr(self, "_gap_now", None):
+            self._paint_slots()
         hint = getattr(self, "empty_hint", "")
         model = self.model()
         if not hint or (model is not None and model.rowCount()):
@@ -443,7 +462,9 @@ class ClipList(QListView):
             if event.key() == Qt.Key_Up:
                 self._commit_and_advance(step=-1)
                 return True
-        if obj is self._editor and event.type() == QEvent.FocusOut:
+        # getattr, as above: the view's own scroll bars reach this filter
+        # while __init__ is still running, before there is an _editor.
+        if obj is getattr(self, "_editor", None) and event.type() == QEvent.FocusOut:
             # Not every focus-out means the user has finished. A drop from a
             # browser hands focus back to the window a moment after the editor
             # opens, and committing on that closed the box before anything could
@@ -551,8 +572,24 @@ class ClipList(QListView):
             else:
                 ids = [clip_id]
 
+        grab = self._press_point
         self._press_point = None
         self._press_hit = None
+
+        # THE ROW ITSELF GOES WITH THE POINTER. It used to be a small navy
+        # label saying "1 clipping", and a file dragged by its handle with the
+        # list folded up showed nothing else moving at all: the file's own
+        # header drew no insertion line and no sign of being carried. Now the
+        # row that was taken hold of is carried, see-through, at the very
+        # place it was held; it is left greyed where it was; and the rows
+        # part to show where it will land (_open_gap).
+        pixmap, hotspot = self._ghost(index, entry, len(ids), grab)
+        rect = self.visualRect(index)
+        self._gap_size = max(24, min(rect.height(), self.GAP_MOST))
+        self._slot_entry = entry
+        if self._follows_content:
+            self._drag_extra = self._gap_size
+            self._match_content_height()
         self.delegate.dragging_ids = set(ids)
         self.viewport().update()
 
@@ -560,23 +597,221 @@ class ClipList(QListView):
         mime.setData(MIME, ",".join(str(i) for i in ids).encode("ascii"))
         drag = QDrag(self)
         drag.setMimeData(mime)
-        drag.setPixmap(self._drag_pixmap(len(ids)))
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(hotspot)
         drag.exec(Qt.MoveAction)
         self._clear_drop_line()
 
-    def _drag_pixmap(self, count: int) -> QPixmap:
-        text = f"{count} clipping" + ("s" if count != 1 else "")
-        pixmap = QPixmap(150, 34)
+    #: The widest the carried row is drawn: the width of a card on a wide
+    #: window is more than anybody needs to see under a pointer.
+    GHOST_WIDEST = 720
+    #: The tallest a gap opens, whatever is carried.
+    GAP_MOST = 160
+    #: Each frame the gap goes this much of the rest of the way, every
+    #: GAP_TICK_MS: about a tenth of a second to open or close, eased.
+    GAP_EASE = 0.32
+    GAP_TICK_MS = 16
+
+    def _ghost(self, index, entry, count: int, grab) -> tuple:
+        """The row as it is drawn in the list, lifted off it: see-through,
+        with a soft shadow, a stack behind it and the count when more than
+        one clipping is carried. (pixmap, the point the pointer holds it by)"""
+        rect = self.visualRect(index)
+        width = max(160, min(rect.width(), self.GHOST_WIDEST))
+        height = max(24, rect.height())
+        pad = 18
+        stack = 10 if count > 1 else 0
+        ratio = max(1.0, float(self.devicePixelRatioF() or 1.0))
+        pixmap = QPixmap(int((width + 2 * pad + stack) * ratio),
+                         int((height + 2 * pad + stack) * ratio))
+        pixmap.setDevicePixelRatio(ratio)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        option = QStyleOptionViewItem()
+        self.initViewItemOption(option)
+        option.rect = QRect(pad, pad, width, height)
+        # The card as the list draws it inside its row - inset from the row's
+        # slot, and for a clipping clear of the file's bracket line - so the
+        # shadow and the stack fit the card, not the slot round it.
+        card = QRectF(self.delegate.geometry_for(option.rect, entry).card)
+
+        # A soft shadow, lower than the card: lifted, not stuck on.
         painter.setPen(Qt.NoPen)
-        painter.setBrush(theme.QNAVY)
-        painter.drawRoundedRect(0, 0, 150, 34, 10, 10)
-        painter.setPen(Qt.white)
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, text)
+        for step, alpha in enumerate((22, 16, 11, 7, 4)):
+            grow = 2 + 3 * step
+            painter.setBrush(QColor(15, 23, 42, alpha))
+            painter.drawRoundedRect(
+                card.adjusted(-grow, -grow + 5, grow + stack, grow + 5 + stack),
+                14 + grow, 14 + grow)
+        # More than one: the others, as cards stacked under it.
+        for offset in ((stack, stack), (stack / 2, stack / 2)) if stack else ():
+            painter.setPen(QPen(QColor(theme.HAIRLINE_STRONG), 1))
+            painter.setBrush(QColor(theme.SURFACE))
+            painter.drawRoundedRect(card.translated(*offset).adjusted(2, 2, -2, -2),
+                                    13, 13)
+
+        # The row, drawn by the list's own painter at the ghost's width -
+        # plainly, not greyed and not shifted, whatever the list is doing -
+        # and only the card of it.
+        kept = (self.delegate.dragging_ids, self.delegate.hover,
+                self.delegate.shifts)
+        self.delegate.dragging_ids, self.delegate.shifts = set(), []
+        self.delegate.hover = (-1, "")
+        painter.save()
+        try:
+            painter.setClipRect(card.adjusted(-1, -1, 1, 1))
+            painter.setOpacity(0.9)
+            self.delegate.paint(painter, option, index)
+        finally:
+            painter.restore()
+            (self.delegate.dragging_ids, self.delegate.hover,
+             self.delegate.shifts) = kept
+
+        if count > 1:
+            words = f"{count} clippings"
+            font = QFont(self.font())
+            font.setPixelSize(11)
+            font.setBold(True)
+            painter.setFont(font)
+            wide = painter.fontMetrics().horizontalAdvance(words) + 20
+            badge = QRectF(card.right() - wide + stack - 4, card.top() - 9,
+                           wide, 22)
+            painter.setPen(QPen(QColor("white"), 1.5))
+            painter.setBrush(theme.QORANGE)
+            painter.drawRoundedRect(badge, 11, 11)
+            painter.setPen(QColor("white"))
+            painter.drawText(badge, Qt.AlignCenter, words)
         painter.end()
-        return pixmap
+
+        held = grab if grab is not None else rect.center()
+        spot = QPoint(pad + min(max(held.x() - rect.left(), 10), width - 10),
+                      pad + min(max(held.y() - rect.top(), 6), height - 6))
+        return pixmap, spot
+
+    # --------------------------------------------------------- the gap
+    def _drop_place(self, point: QPoint) -> tuple:
+        """Where a drop here lands: (the gap's boundary in the list, the place
+        in the order). ONE answer for both, so the gap drawn is exactly where
+        the clippings go.
+
+        On a clipping: over it or under it, by which half is under the
+        pointer. On a folded file's header likewise - before the file, or
+        after it; on an open one, before it, since under its header is inside
+        it. Anywhere past the last row: the very end."""
+        model = self.model()
+        rows = model.rowCount() if model is not None else 0
+        index = self.indexAt(point)
+        if model is None or not index.isValid():
+            return rows, len(model.rows) if model is not None else 0
+        entry = index.data(Qt.UserRole)
+        rect = self.visualRect(index)
+        row = index.row()
+        below = point.y() > rect.center().y()
+        if entry is not None and entry.kind == ENTRY_CLIP:
+            step = 1 if below else 0
+            return row + step, model.position_of(entry.row.id) + step
+        if entry is not None and entry.group is not None:
+            group = entry.group
+            if below and group.collapsed and group.rows:
+                return row + 1, model.position_of(group.rows[-1].id) + 1
+            if group.rows:
+                return row, model.position_of(group.rows[0].id)
+        return rows, len(model.rows)
+
+    def _gap_timer(self) -> QTimer:
+        timer = getattr(self, "_gap_clock", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(self.GAP_TICK_MS)
+            timer.timeout.connect(self._gap_tick)
+            self._gap_clock = timer
+        return timer
+
+    def _open_gap(self, boundary: int) -> None:
+        """Part the rows at ``boundary``, or close up with -1. Where it was
+        closes as the new one opens, so the rows glide rather than jump."""
+        if boundary == self._gap_at:
+            return
+        self._gap_at = boundary
+        self._gap_wanted = ({boundary: float(self._gap_size)}
+                            if boundary >= 0 and self._gap_size else {})
+        if not self._gap_timer().isActive():
+            self._gap_timer().start()
+
+    def _gap_tick(self) -> None:
+        moving = False
+        for key in set(self._gap_now) | set(self._gap_wanted):
+            want = self._gap_wanted.get(key, 0.0)
+            now = self._gap_now.get(key, 0.0)
+            now += (want - now) * self.GAP_EASE
+            if abs(want - now) < 0.6:
+                now = want
+            else:
+                moving = True
+            if now:
+                self._gap_now[key] = now
+            else:
+                self._gap_now.pop(key, None)
+        self._apply_shifts()
+        if not moving:
+            self._gap_timer().stop()
+        self.viewport().update()
+
+    def _apply_shifts(self) -> None:
+        """How far down each row is drawn: everything open above it."""
+        model = self.model()
+        rows = model.rowCount() if model is not None else 0
+        if not self._gap_now:
+            self.delegate.shifts = []
+            return
+        shifts, run = [], 0.0
+        for row in range(rows + 1):
+            run += self._gap_now.get(row, 0.0)
+            shifts.append(run)
+        self.delegate.shifts = shifts
+
+    def _close_gap_now(self) -> None:
+        """Gone at once - the list is about to be laid out afresh."""
+        self._gap_timer().stop()
+        self._gap_at = -1
+        self._gap_now, self._gap_wanted = {}, {}
+        self._slot_entry = None
+        self.delegate.shifts = []
+        if self._drag_extra:
+            self._drag_extra = 0
+            self._match_content_height()
+
+    def _paint_slots(self) -> None:
+        """The open gap: a soft slot with a dashed edge, where it will land."""
+        model = self.model()
+        rows = model.rowCount() if model is not None else 0
+        shifts = self.delegate.shifts
+        # As wide as the card of what is carried, at the list's width now.
+        left, right = 8, self.viewport().width() - 8
+        if self._slot_entry is not None:
+            card = self.delegate.geometry_for(
+                QRect(0, 0, self.viewport().width(), max(24, self._gap_size)),
+                self._slot_entry).card
+            left, right = card.left(), card.right()
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        for boundary, amount in self._gap_now.items():
+            if amount < 10 or boundary > rows:
+                continue
+            above = shifts[boundary] - amount if boundary < len(shifts) else 0.0
+            if boundary < rows:
+                y = self.visualRect(model.index(boundary, 0)).top() + above
+            elif rows:
+                y = self.visualRect(model.index(rows - 1, 0)).bottom() + 1 + above
+            else:
+                y = 0.0
+            slot = QRectF(left + 2, y + 5, (right - left) - 4, amount - 10)
+            painter.setOpacity(min(1.0, amount / max(1.0, self._gap_size)))
+            painter.setPen(QPen(theme.QORANGE, 2, Qt.DashLine))
+            painter.setBrush(QColor(232, 121, 47, 26))
+            painter.drawRoundedRect(slot, 13, 13)
+        painter.end()
 
     def dragEnterEvent(self, event):
         # An external drop landing on the list is still a drop on the window, so it
@@ -593,19 +828,18 @@ class ClipList(QListView):
         event.acceptProposedAction()
 
     def _update_drop_line(self, point: QPoint) -> None:
-        """Show where the dragged clippings would land."""
-        index = self.indexAt(point)
-        if index.isValid():
-            rect = self.visualRect(index)
-            row, below = index.row(), point.y() > rect.center().y()
-        elif self.model().rowCount():
-            row, below = self.model().rowCount() - 1, True
+        """Show where the dragged clippings would land: the rows part there."""
+        boundary, _place = self._drop_place(point)
+        rows = self.model().rowCount()
+        # Also said as "against this row, over or under it", for anything
+        # that asks the delegate.
+        if boundary < rows:
+            row, below = boundary, False
         else:
-            row, below = -1, False
-        if (row, below) != (self.delegate.drop_row, self.delegate.drop_below):
-            self.delegate.drop_row = row
-            self.delegate.drop_below = below
-            self.viewport().update()
+            row, below = (rows - 1, True) if rows else (-1, False)
+        self.delegate.drop_row = row
+        self.delegate.drop_below = below
+        self._open_gap(boundary)
 
     #: How close to the top or bottom of what is on screen counts as "held
     #: at the edge", in pixels, and how often the page moves while it is.
@@ -670,12 +904,16 @@ class ClipList(QListView):
         self._drag_edge_timer().stop()
         self._drag_point = None
         self.delegate.drop_row = -1
+        # Out of the list - onto a category's bubble, or off the window: the
+        # rows close up again, and part again if it comes back.
+        self._open_gap(-1)
         self.viewport().update()
         super().dragLeaveEvent(event)
 
     def _clear_drop_line(self) -> None:
         self.delegate.drop_row = -1
         self.delegate.dragging_ids = set()
+        self._close_gap_now()
         self.viewport().update()
 
     def dropEvent(self, event):
@@ -700,23 +938,9 @@ class ClipList(QListView):
             return
         raw = bytes(event.mimeData().data(MIME)).decode("ascii")
         ids = [int(part) for part in raw.split(",") if part]
-        model = self.model()
 
-        point = event.position().toPoint()
-        index = self.indexAt(point)
-        if index.isValid():
-            entry = index.data(Qt.UserRole)
-            rect = self.visualRect(index)
-            below = point.y() > rect.center().y()
-            if entry is not None and entry.kind == ENTRY_CLIP:
-                target = model.position_of(entry.row.id) + (1 if below else 0)
-            elif entry is not None and entry.group is not None:
-                first = entry.group.rows[0].id if entry.group.rows else None
-                target = model.position_of(first) if first is not None else len(model.rows)
-            else:
-                target = len(model.rows)
-        else:
-            target = len(model.rows)
+        # Where the gap was drawn, by the same rule.
+        _boundary, target = self._drop_place(event.position().toPoint())
 
         self._clear_drop_line()
         self.reorderRequested.emit(ids, target)

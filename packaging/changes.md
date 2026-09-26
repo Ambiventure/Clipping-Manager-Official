@@ -16,6 +16,34 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.57
+
+Changed
+
+  * **Dragging a file or a clipping shows it moving.** What you take hold of
+    by its six dots is carried under the pointer, see-through, and stays
+    greyed where it was. The rows glide apart to open a gap where it will
+    land, and close up again as you move on. It works with the list folded
+    down to the file names too.
+  * **A folded file can be dropped after another file as well as before it.**
+    The lower half of a file's name puts it after that file.
+  * **The OCR box is as wide as the clipping** each time it opens.
+  * **The OCR headline switch is off every time the program opens.** Turn it
+    on from the menu when you want to see the readings. It now shows and
+    hides the preview's OCR button as well as the OCR headline. The
+    duplicate check reads the pictures either way.
+  * **The sentiment board's bottom bar is one slim bar with a Build report
+    button.** It opens a window with everything in one place: PDF, Word,
+    burned headlines and JPEG pictures (one or several at once), the file
+    name with Standard name and five names of your own, the folder, and the
+    report's layout.
+
+Fixed
+
+  * **"Reading clippings… 24 of 40" no longer stays on the sentiment board.**
+    The press report's own reading is not reported there, and every message
+    on the board comes down on its own.
+
 ## 2.0.56
 
 Fixed

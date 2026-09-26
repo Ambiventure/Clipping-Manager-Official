@@ -445,6 +445,11 @@ class PreviewDialog(QDialog):
             "double-click the dot - the words go into the OCR headline.")
         self.ocr_btn.toggled.connect(self._ocr_box_toggled)
         column.addWidget(self.ocr_btn)
+        # Only while the OCR headline is switched on (the menu): what the box
+        # reads goes into that headline, which is not on show otherwise.
+        from .ocrfield import is_on as _ocr_shown
+
+        self.ocr_btn.setVisible(_ocr_shown())
 
         # ONE BUTTON PER NEWSPAD, rather than a menu. Sending a clipping on is
         # something done over and over while a second newspad is built, and a
@@ -578,6 +583,7 @@ class PreviewDialog(QDialog):
                                              lambda: self._pixmap)
                 box.readWanted.connect(self._ocr_box_read)
                 box.closed.connect(lambda: self.ocr_btn.setChecked(False))
+            box.span_full_width()
             box.follow()
             box.show()
             box.setFocus(Qt.OtherFocusReason)
@@ -1089,10 +1095,17 @@ class PreviewDialog(QDialog):
             self.findRequested.emit(words)
             self.told("Searching the list for this headline")
     def show_ocr(self, on: bool) -> None:
-        """Show or hide the OCR headline line - the menu's switch."""
+        """The menu's switch: the OCR headline's line, and the OCR box's
+        button on the rail. Switched off, an open box is put away first."""
         line = getattr(self, "ocr_line", None)
         if line is not None:
             line.setVisible(bool(on))
+        button = getattr(self, "ocr_btn", None)
+        if button is not None:
+            if not on and button.isChecked():
+                button.setChecked(False)
+            button.setVisible(bool(on))
+            self._place_rail()
 
     def _size_reading(self) -> None:
         """Set the reading at the size its own script needs.

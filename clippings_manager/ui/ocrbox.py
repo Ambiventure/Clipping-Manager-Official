@@ -51,9 +51,11 @@ class OcrBox(QWidget):
         super().__init__(parent if parent is not None else canvas)
         self.canvas = canvas
         self.full = full_pixmap
-        # Across most of the picture, a third of the way down: where the
-        # headline most often is, and easy to move from anywhere.
-        self.box = [0.08, 0.10, 0.92, 0.24]
+        # THE WHOLE WIDTH OF THE CLIPPING, near the top: where the headline
+        # most often is. It used to start 84% as wide, leaving a strip of the
+        # clipping outside it at each side - and a headline set full measure
+        # ran out of the glass.
+        self.box = [0.0, 0.10, 1.0, 0.24]
         self._hold = ""
         self._from = QPoint()
         self._began: list = []
@@ -98,6 +100,15 @@ class OcrBox(QWidget):
                      picture.top() + int(top * picture.height()),
                      max(1, int((right - left) * picture.width())),
                      max(1, int((bottom - top) * picture.height())))
+
+    def span_full_width(self) -> None:
+        """As wide as the clipping again, where it is up and down.
+
+        Each time the box is opened: pulled in at the sides for one clipping,
+        it would otherwise open that narrow on every one after it."""
+        _left, top, _right, bottom = self.box
+        self.box = [0.0, top, 1.0, bottom]
+        self.update()
 
     def box_in_picture(self) -> tuple:
         """The box in the full-size picture's own pixels."""

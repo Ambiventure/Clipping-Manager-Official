@@ -2196,6 +2196,7 @@ class MainWindow(QMainWindow):
         self.board.divisionChanged.connect(lambda _c: self._refresh_board())
         self.board.addRequested.connect(self._add_into_section)
         self.board.exportRequested.connect(self._export_dossier)
+        self.board.buildRequested.connect(self._build_board_report)
         self.board.clearRequested.connect(self._clear_division)
         self.board.heading.groupSocial.connect(
             lambda: self._group_social(self.board_model))
@@ -5105,18 +5106,19 @@ class MainWindow(QMainWindow):
         One timer, restarted. While messages keep arriving it never fires; nine
         seconds after they stop, the strip comes down once.
         """
-        timer = getattr(self, "_status_timer", None)
+        # ONE PER STRIP. There are two - the report's, and the board's bar -
+        # and one shared timer was handed to whichever spoke last: a message
+        # on the report's strip took the board's away from it, and the
+        # board's last sentence then stood there for good.
+        timers = getattr(self, "_status_timers", None)
+        if timers is None:
+            timers = self._status_timers = {}
+        timer = timers.get(strip)
         if timer is None:
             timer = QTimer(self)
             timer.setSingleShot(True)
-            self._status_timer = timer
-        else:
-            timer.stop()
-            try:
-                timer.timeout.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-        timer.timeout.connect(strip.hide)
+            timer.timeout.connect(strip.hide)
+            timers[strip] = timer
         timer.start(self.QUIET_FOR)
 
     def _report(self, problems: list[str]) -> None:
@@ -5208,12 +5210,16 @@ class MainWindow(QMainWindow):
         return f"{division.name}({division.code})"
 
     @_pumps
-    def _export_jpegs(self, clips: list, where: str, stamp) -> None:
+    def _export_jpegs(self, clips: list, where: str, stamp, into=None,
+                      reveal: bool = True):
         """One picture per clipping, with the masthead burned in.
 
         A folder rather than a file: these go out one at a time on WhatsApp, and
         each carries its own newspaper name and date in the file name so it can be
         found again after it has been forwarded twice.
+
+        ``into`` is the folder already chosen - Build report's window names it
+        - and no folder is asked for. The folder written, or None.
         """
         from ..export import build_jpeg
         from ..export import layout as export_layout
@@ -5223,14 +5229,17 @@ class MainWindow(QMainWindow):
         style = export_layout.HeadingStyle.from_settings(
             self.board.heading.settings())
 
-        chosen = QFileDialog.getExistingDirectory(
-            self, "Where should the JPEGs go?", str(Path.home() / "Documents"),
-        )
-        if not chosen:
-            return
-
-        folder = Path(chosen) / (build_jpeg.folder_name(self._division_tag(), stamp)
-                                 + self._export_suffix())
+        if into is not None:
+            folder = Path(into)
+        else:
+            chosen = QFileDialog.getExistingDirectory(
+                self, "Where should the JPEGs go?", str(Path.home() / "Documents"),
+            )
+            if not chosen:
+                return None
+            folder = Path(chosen) / (build_jpeg.folder_name(self._division_tag(),
+                                                            stamp)
+                                     + self._export_suffix())
         progress = QProgressDialog(
             "Writing the pictures…", "Stop", 0, len(clips), self)
         progress.setWindowTitle("Exporting JPEGs")
@@ -5251,18 +5260,20 @@ class MainWindow(QMainWindow):
                 f"{type(exc).__name__}: {exc}\n\n"
                 f"Nothing was lost — your clippings are still on the board.",
             )
-            return
+            return None
         progress.setValue(len(clips))
 
         if not result.count:
             self._flash("No pictures could be written.", "bad")
-            return
+            return None
         note = f"Wrote {result.count} JPEG{'s' if result.count != 1 else ''} to "
         note += folder.name + "."
         if result.warnings:
             note += f" {len(result.warnings)} could not be written."
         self._flash(note, "good" if not result.warnings else "info")
-        self._reveal(folder)
+        if reveal:
+            self._reveal(folder)
+        return folder
 
     def _reveal(self, folder: Path) -> None:
         """Open the folder, so the pictures can be picked up straight away."""
@@ -5411,35 +5422,99 @@ class MainWindow(QMainWindow):
         self._flash(f"Cleared {len(ids)} clipping(s) — Ctrl+Z brings them back.",
                     "info")
 
-    def _export_dossier(self, kind: str) -> None:
-        """Build the sentiment dossier for the division the board is showing.
-
-        The board's own Download buttons come here rather than to the newspad
-        dialog: a dossier is one division, grouped by sentiment, and it takes its
-        settings from the report layout panel instead of the cover card.
-        """
-        from ..export import build_sentiment
-        from ..export import layout as export_layout
-
+    def _dossier_ready(self):
+        """(clippings, division, date) for a report off the board, or None
+        when there is nothing to build or a date on it will not do."""
         clips = [c for c in self.board.visible_clips() if c.include]
         if not clips:
             self._flash("There is nothing on the board to export.", "bad")
-            return
-
+            return None
         division = self.board.active_division()
         stamp = self.cover.report_date()
-        # The strict rule, on the way out. The fields refuse a future date as it
-        # is typed; this catches one that arrived any other way - a session saved
-        # on another day, or a clock that was wrong and has since been put right.
-        #
-        # BOTH dates, because they are two different dates. The stamp above dates
-        # the file; the dossier's own cover carries its own, set on the board's
-        # cover card, and checking only the first one left the second unchecked
-        # on every route out - PDF, Word, burned and pictures alike.
+        # BOTH dates, as _export_dossier explains.
         if not datefield.refuse_future(self, stamp, "dossier"):
-            return
+            return None
         if not self.board.cover.date_is_sound(self):
+            return None
+        return clips, division, stamp
+
+    def _dossier_stem(self, stamp, burned: bool = False) -> str:
+        """The department's usual name for a report off the board."""
+        tail = " (burned headlines)" if burned else ""
+        return (f"News Coverage - {self._division_tag()} - "
+                f"{stamp.strftime('%d.%m.%Y')}{tail}{self._export_suffix()}")
+
+    def _build_board_report(self) -> None:
+        """The board's Build report: its window, then everything it chose.
+
+        One window for all four - PDF, Word, burned headlines and pictures -
+        with the file's name, its folder and the report's layout; the
+        building is the board's own, the same that its Download buttons did.
+        """
+        from ..export import build_jpeg
+        from .report_builder import BoardReportDialog
+
+        ready = self._dossier_ready()
+        if ready is None:
             return
+        clips, division, stamp = ready
+        ask = BoardReportDialog(
+            self, clippings=len(clips), where=self._division_tag(),
+            stamp=stamp, standard=self._dossier_stem(stamp),
+            suffix=self._export_suffix(),
+            choices=self.board.export_choices(),
+            cover_on=bool(self.board.cover.cover_config().enabled))
+        if ask.exec() != QDialog.Accepted:
+            return
+        # The layout goes back on the board, where the session keeps it.
+        self.board.set_export_choices(ask.choices())
+        self.touch_session()
+
+        made: list = []
+        for kind in ask.outputs():
+            if kind == "jpeg":
+                usual = (build_jpeg.folder_name(self._division_tag(), stamp)
+                         + self._export_suffix())
+                folder = self._export_jpegs(
+                    clips, division.code if division else "ALL", stamp,
+                    into=ask.pictures_folder(usual),
+                    reveal=ask.shows_folder() and not made)
+                if folder is not None and not made:
+                    made.append(folder)
+                continue
+            made.extend(self._build_dossier(
+                clips, division, stamp, ask.targets(kind),
+                burned=kind == "burned"))
+        files = [path for path in made if Path(path).is_file()]
+        if files and ask.opens_after():
+            from .burned_dialog import BurnedReportDialog
+
+            BurnedReportDialog.open_file(files[0])
+        if files and ask.shows_folder():
+            from .export_dialog import ExportDialog
+
+            ExportDialog._show_in_folder(Path(files[0]))
+
+    def _export_dossier(self, kind: str) -> None:
+        """Build the sentiment dossier for the division the board is showing.
+
+        A dossier is one division, grouped by sentiment, and it takes its
+        settings from the board's report layout rather than the cover card.
+        The board's Build report comes in by _build_board_report; this one
+        asks for one kind at a time, with a Save box.
+        """
+        ready = self._dossier_ready()
+        if ready is None:
+            return
+        clips, division, stamp = ready
+
+        # The strict rule, on the way out (_dossier_ready). The fields refuse
+        # a future date as it is typed; that catches one that arrived any other
+        # way - a session saved on another day, or a clock that was wrong and
+        # has since been put right. BOTH dates, because they are two different
+        # dates: the stamp dates the file; the dossier's own cover carries its
+        # own, set on the board's cover card, and checking only the first one
+        # left the second unchecked on every route out.
         where = division.code if division else "ALL"
 
         if kind == "jpeg":
@@ -5451,9 +5526,7 @@ class MainWindow(QMainWindow):
         # different things to send and the file names have to say which is which.
         burned = kind == "burned"
         suffix = "docx" if kind == "docx" else "pdf"
-        tail = " (burned headlines)" if burned else ""
-        stem = (f"News Coverage - {self._division_tag()} - "
-                f"{stamp.strftime('%d.%m.%Y')}{tail}{self._export_suffix()}")
+        stem = self._dossier_stem(stamp, burned)
 
         open_after = False
         if burned:
@@ -5478,6 +5551,22 @@ class MainWindow(QMainWindow):
                 return
             targets = [(suffix, Path(target))]
 
+        made = self._build_dossier(clips, division, stamp, targets,
+                                   burned=burned)
+        if made and open_after:
+            from .burned_dialog import BurnedReportDialog
+
+            BurnedReportDialog.open_file(made[0])
+
+    def _build_dossier(self, clips: list, division, stamp, targets: list,
+                       burned: bool = False) -> list:
+        """Write one report off the board in every format of ``targets``
+        [(format, path)], from one burn when it is burned. The paths written."""
+        from ..export import build_sentiment
+        from ..export import layout as export_layout
+
+        if not targets:
+            return []
         chosen = self.board.export_options()
         cover = self.board.cover.cover_config()
         # The card's own "Enable Cover Page" is the switch, and the only one.
@@ -5556,7 +5645,7 @@ class MainWindow(QMainWindow):
                 "are still on the board.",
             )
         if not made:
-            return
+            return []
 
         names = ", ".join(Path(r.path).name for r in made)
         note = f"Built {names} ({made[0].clippings} clippings)."
@@ -5564,11 +5653,7 @@ class MainWindow(QMainWindow):
             note += f" {len(notes)} note"
             note += "s." if len(notes) != 1 else "."
         self._flash(note, "good")
-
-        if open_after:
-            from .burned_dialog import BurnedReportDialog
-
-            BurnedReportDialog.open_file(made[0].path)
+        return [Path(r.path) for r in made]
 
     # ------------------------------------------------------ the same twice
     def _is_board(self, pool) -> bool:
@@ -5835,6 +5920,19 @@ class MainWindow(QMainWindow):
         """
         duplicates.forget_measurements(clips)
 
+    def _report_pass_on_board(self) -> bool:
+        """The press report's own check, running while the board is on show.
+
+        The other way round from _quiet_board_pass_off_screen, and the same
+        trouble: _flash writes to the strip of the screen on show, so the
+        report's "Reading clippings… 24 of 40" went up on the board's bar -
+        where nobody had imported anything, and where it then stood long
+        after the reading had finished. The report's strip hears it instead
+        when the report is on show again."""
+        pool = self._duplicate_pool
+        return (pool is not None and not self._is_board(pool)
+                and self.mode == "sentiment")
+
     def _quiet_board_pass_off_screen(self) -> bool:
         """A category's automatic check running while the press report is on
         show. _flash writes to the strip of the screen on show, so anything it
@@ -6012,7 +6110,7 @@ class MainWindow(QMainWindow):
         # to say the same sentence over and over.
         if done != total and done % 8:
             return
-        if self._quiet_board_pass_off_screen():
+        if self._quiet_board_pass_off_screen() or self._report_pass_on_board():
             return
         said = f"Reading clippings… {done} of {total}"
         if said == getattr(self, "_last_progress", ""):
@@ -6180,9 +6278,10 @@ class MainWindow(QMainWindow):
                     # not be read was never compared with anything.
                     note += f" {unread} could not be read well enough to compare."
                 self._flash(note, "good")
-        elif results:
+        elif results and not self._report_pass_on_board():
             # Only worth saying when something was actually read. A check that
-            # found nothing new to look at should pass without comment.
+            # found nothing new to look at should pass without comment - and
+            # never on the board's bar: this is the press report's news.
             if found:
                 self._flash(
                     f"{found} clipping(s) look like repeats — badged, and "

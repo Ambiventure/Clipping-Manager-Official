@@ -1,8 +1,11 @@
 """Whether the OCR headline is shown, and the switch that decides it.
 
-One setting, read wherever the OCR box is drawn - the row in the list and the
-preview - and kept with the rest of the settings, so it is the same the next
-time the program starts.
+One switch, read wherever the OCR headline is shown - the row in the list, and
+in the preview both the headline's line and the OCR box's button.
+
+OFF EVERY TIME THE PROGRAM STARTS. The office asked for that: the readings are
+switched on when somebody wants to look at them, for as long as the program is
+open, and a new day starts without them. So it is not kept with the settings.
 
 Only the FIELD is switched off. The duplicate check goes on reading every
 picture regardless, because comparing two headlines is half of how it tells a
@@ -22,43 +25,29 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from . import theme
 
-#: Where it is kept among the settings.
-SETTING = "ocr_headline"
-
 #: The two colours the switch is asked to show: on is green, off is red.
 ON = QColor("#16A34A")
 OFF = QColor("#DC2626")
+
+#: Where the switch stands at every start.
+AT_START = False
 
 _on: Optional[bool] = None
 
 
 def is_on() -> bool:
-    """Whether the OCR box is shown. On unless somebody has turned it off."""
-    global _on
-    if _on is None:
-        try:
-            from .export_dialog import load_settings
-
-            _on = bool(load_settings().get(SETTING, True))
-        except Exception:  # noqa: BLE001 - no settings yet means the default
-            _on = True
-    return _on
+    """Whether the OCR headline is shown. Off until somebody turns it on."""
+    return AT_START if _on is None else _on
 
 
 def set_on(value: bool) -> None:
-    """Remember it, for this run and the next."""
+    """For as long as the program is open - see the note at the top."""
     global _on
     _on = bool(value)
-    try:
-        from .export_dialog import load_settings, save_settings
-
-        save_settings({**load_settings(), SETTING: _on})
-    except Exception:  # noqa: BLE001 - the switch still works for this run
-        pass
 
 
 def forget() -> None:
-    """Read the setting again next time. For tests."""
+    """Back to how every start begins. For tests."""
     global _on
     _on = None
 

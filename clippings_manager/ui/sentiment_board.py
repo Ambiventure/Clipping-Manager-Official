@@ -54,7 +54,7 @@ from ..core.models import Section
 from . import icons, theme
 from .clip_list import MIME as ROW_MIME
 from .clip_list import ClipList
-from .fluid import ElidedLabel, FlowLayout
+from .fluid import ElidedLabel
 from .layout_card import HeadingLayoutCard
 from .scroll import (
     WHEEL_PIXELS,
@@ -804,7 +804,9 @@ class SentimentColumn(QListView):
             if event.key() == Qt.Key_Escape:
                 self.cancel_editor()
                 return True
-        if obj is self._editor and event.type() == QEvent.FocusOut:
+        # getattr: the column's own scroll bars reach this filter while
+        # __init__ is still running, before there is an _editor.
+        if obj is getattr(self, "_editor", None) and event.type() == QEvent.FocusOut:
             # A drop hands focus back to the window a moment after the box
             # opens; committing on that would close it before anything is typed.
             if event.reason() in (Qt.ActiveWindowFocusReason,
@@ -973,6 +975,8 @@ class SentimentBoard(QWidget):
     divisionChanged = Signal(str)
     addRequested = Signal(str)            # section value to import into
     exportRequested = Signal(str)   # "pdf" | "docx" | "jpeg" | "burned"
+    # Build report, on the bar at the foot: the window with every choice.
+    buildRequested = Signal()
     clearRequested = Signal(str)    # the division code to empty
     titleEdited = Signal(int, str)
     urlEdited = Signal(int, str)
@@ -1184,158 +1188,76 @@ class SentimentBoard(QWidget):
         return strip
 
     def _build_export_row(self) -> QWidget:
-        """The dossier export bar, plus the formatting switches that feed it."""
+        """The foot of the board: one slim bar, and one button on it.
+
+        It used to be the whole export - a heading, the count, a status line,
+        a panel of layout options and four Download buttons - as tall as a
+        card. The office asked for a single Build report button, with the
+        choices in a window of their own the way the press report has them
+        (ui/report_builder). The layout choices are still built here, out of
+        sight, because they are this newspad's and its session keeps them
+        (export_choices); the window edits them."""
         strip = QFrame()
         strip.setObjectName("ExportStrip")
         # Kept, so the floating buttons can be placed above it rather than on
-        # top of it - they were covering the right-hand end of Download PDF.
+        # top of it.
         self.export_strip = strip
-        # ONE BORDER, ALL THE WAY ROUND. It used to be a 3px orange top on a
-        # 1px grey frame: Qt draws a rounded box of mixed border widths by
-        # laying the thick side over the thin one and stopping it dead at the
-        # corner, so the orange ran along the top, was cut off square where the
-        # curve began, and the rest of the bar was a hairline nobody could see.
-        # It read as a border that had not been finished.
         strip.setStyleSheet(
             f"#ExportStrip {{ background: {theme.SURFACE};"
-            f" border: 2px solid {theme.ORANGE_DEEP};"
-            f" border-radius: 16px; }}"
+            f" border: 1px solid {theme.HAIRLINE_STRONG};"
+            f" border-radius: 12px; }}"
             f"#ExportStrip QLabel {{ background: transparent; border: none; }}"
         )
-        outer = QVBoxLayout(strip)
-        outer.setContentsMargins(18, 13, 16, 14)
-        outer.setSpacing(11)
-
-        row = QHBoxLayout()
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(14, 6, 7, 6)
         row.setSpacing(10)
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
-        lead = QLabel("EXPORT SENTIMENT DOSSIER")
+
+        lead = QLabel("SENTIMENT REPORT")
         lead.setStyleSheet(
-            f"color: {theme.ORANGE}; font-size: 11px; font-weight: 800;"
-            f" letter-spacing: .05em;"
+            f"color: {theme.ORANGE}; font-size: 10px; font-weight: 800;"
+            f" letter-spacing: .06em;"
         )
-        # ELIDED, OR IT DECIDES HOW WIDE THE PROGRAM IS. A plain QLabel asks
-        # for one unbroken line, and this one is handed whole sentences -
-        # switching Collect on puts up "Collecting into the sentiment board,
-        # Neutral column..." and the label then wanted 811 pixels. That became
-        # the export strip's minimum, then the board's, then the WINDOW'S:
-        # measured, a 760-wide window jumped to 1119 the moment Collect was
-        # switched on, which on a half-screen window walks its right edge off
-        # the desktop. Nothing on this bar may set the window's width; the
-        # whole sentence is on the tooltip, where it costs nothing.
+        row.addWidget(lead)
+        # The division and the count, so the button says what it builds.
+        # ELIDED: nothing on this bar may decide how wide the window is - a
+        # plain label handed a long sentence once pushed a 760-wide window out
+        # to 1119.
+        self.export_label = ElidedLabel(floor=120)
+        self.export_label.setStyleSheet(
+            f"color: {theme.SLATE_TEXT_LIGHT}; font-size: 11px;"
+        )
+        row.addWidget(self.export_label, 1)
+        # What the window has to say while the board is on show - an import
+        # onto it, a report built from it. It comes down on its own.
         self.status = ElidedLabel(floor=90)
         self.status.setObjectName("BoardStatus")
         self.status.setStyleSheet(
             f"#BoardStatus {{ color: {theme.NAVY}; background: {theme.NAVY_WASH};"
-            f" border: 1px solid {theme.NAVY_BAND_LINE}; border-radius: 9px;"
-            f" padding: 4px 10px; font-size: 11px; font-weight: 700; }}"
+            f" border: 1px solid {theme.NAVY_BAND_LINE}; border-radius: 8px;"
+            f" padding: 2px 9px; font-size: 11px; font-weight: 700; }}"
         )
         self.status.hide()
+        row.addWidget(self.status, 1)
 
-        # It carries the division name and the clipping count, so it grows with
-        # the longest division. Elided rather than wrapped: the strip is a single
-        # bar and a second line would push the Download buttons about.
-        self.export_label = ElidedLabel(floor=120)
-        self.export_label.setStyleSheet(
-            f"color: {theme.SLATE_TEXT_LIGHT}; font-size: 12px;"
-        )
-        titles.addWidget(lead)
-        titles.addWidget(self.export_label)
-        titles.addWidget(self.status)
-        row.addLayout(titles)
-        # No stretch between the two: the buttons' own layout takes what is left
-        # and ranges them right, so they keep one line for as long as one line
-        # fits and only then wrap.
-
-        self.options_btn = QPushButton("Report layout options")
-        self.options_btn.setCheckable(True)
-        self.options_btn.setCursor(Qt.PointingHandCursor)
-        # The translucent orange was mixed for a black ground; on white the
-        # same alpha composites to a washed-out smear.
-        self.options_btn.setStyleSheet(
-            f"QPushButton {{ background: {theme.ORANGE_WASH};"
-            f" color: {theme.ORANGE_INK}; border: 1px solid {theme.ORANGE};"
-            " border-radius: 11px; padding: 8px 14px; font-size: 12px;"
-            " font-weight: 700; }"
-            f"QPushButton:hover {{ background: #FBE4D2; }}"
-            f"QPushButton:checked {{ background: #FBE4D2;"
-            f" border: 1px solid {theme.ORANGE_DEEP}; }}"
-        )
-        self.options_btn.toggled.connect(self._toggle_options)
-        # The five buttons wrap rather than sitting in one unbreakable line.
-        # A FlowLayout's minimum width is its widest single button, not the sum,
-        # and the sum is what pins a window open: adding the burned-headlines
-        # button to a plain row raised the board's floor far enough that the
-        # columns could no longer be squeezed into overflowing, which is the
-        # behaviour the window has to keep at 721px.
-        buttons = FlowLayout(spacing=8, vertical_spacing=6,
-                             alignment=Qt.AlignRight)
-        buttons.addWidget(self.options_btn)
-
-        word = QPushButton("Download Word")
-        word.setCursor(Qt.PointingHandCursor)
-        # Navy, not blue: #2563EB is the Neutral column's colour, and on a light
-        # strip the collision reads as a category chip rather than a button.
-        word.setStyleSheet(
-            f"QPushButton {{ background: {theme.NAVY}; color: white;"
-            " border: none; border-radius: 11px; padding: 9px 16px;"
-            " font-size: 12px; font-weight: 700; }"
-            f"QPushButton:hover {{ background: {theme.NAVY_HOVER}; }}"
-        )
-        pdf = QPushButton("Download PDF")
-        pdf.setCursor(Qt.PointingHandCursor)
-        # White on brand ORANGE is 2.9:1 - this button was never readable.
-        pdf.setStyleSheet(
+        self.build_btn = QPushButton("Build report")
+        self.build_btn.setCursor(Qt.PointingHandCursor)
+        self.build_btn.setToolTip(
+            "PDF, Word, burned headlines or JPEG pictures - choose in the "
+            "window that opens, with the file's name and where it goes.")
+        self.build_btn.setStyleSheet(
             f"QPushButton {{ background: {theme.ORANGE_INK}; color: white;"
-            " border: none; border-radius: 11px; padding: 9px 16px;"
-            " font-size: 12px; font-weight: 700; }}"
+            " border: none; border-radius: 9px; padding: 7px 18px;"
+            " font-size: 12px; font-weight: 700; }"
             f"QPushButton:hover {{ background: {theme.ORANGE_DEEP}; }}"
         )
-        # The third way the department sends coverage: single pictures, forwarded
-        # on WhatsApp, where the masthead has to be in the image or it is lost.
-        jpegs = QPushButton("Download JPEGs")
-        jpegs.setCursor(Qt.PointingHandCursor)
-        jpegs.setToolTip(
-            "One JPEG per clipping, with the newspaper, date and page printed "
-            "into the picture."
-        )
-        jpegs.setStyleSheet(
-            f"QPushButton {{ background: {theme.SURFACE}; color: {theme.NAVY};"
-            f" border: 2px solid {theme.NAVY}; border-radius: 11px;"
-            " padding: 7px 14px; font-size: 12px; font-weight: 700; }"
-            f"QPushButton:hover {{ background: {theme.NAVY_WASH}; }}"
-        )
-        # The fourth way: the same report, but with each clipping's headline
-        # and address drawn INTO the picture. A page of it can be forwarded, or
-        # a picture lifted out of the Word file, and the words come too - which
-        # they do not when the heading is text sitting above the image.
-        burned = QPushButton("Report with Burned \U0001F525 Headlines")
-        burned.setCursor(Qt.PointingHandCursor)
-        burned.setToolTip("Report with Images with Headlines as one")
-        burned.setStyleSheet(
-            f"QPushButton {{ background: {theme.SURFACE};"
-            f" color: {theme.ORANGE_INK};"
-            f" border: 2px solid {theme.ORANGE_INK}; border-radius: 11px;"
-            " padding: 7px 14px; font-size: 12px; font-weight: 700; }"
-            f"QPushButton:hover {{ background: {theme.ORANGE_WASH}; }}"
-        )
-        # Clearing the board for a division is at the TOP of the board now,
-        # beside the count of what it would clear (_build_heading) - it was
-        # here, among the export buttons, and was not found.
+        self.build_btn.clicked.connect(self.buildRequested.emit)
+        row.addWidget(self.build_btn)
 
-        burned.clicked.connect(lambda: self.exportRequested.emit("burned"))
-        jpegs.clicked.connect(lambda: self.exportRequested.emit("jpeg"))
-        word.clicked.connect(lambda: self.exportRequested.emit("docx"))
-        pdf.clicked.connect(lambda: self.exportRequested.emit("pdf"))
-        buttons.addWidget(jpegs)
-        buttons.addWidget(burned)
-        buttons.addWidget(word)
-        buttons.addWidget(pdf)
-        row.addLayout(buttons, 1)
-        outer.addLayout(row)
-
-        outer.addWidget(self._build_options_panel())
+        # The layout choices, kept where the session and the builder read
+        # them, and never shown on the bar.
+        panel = self._build_options_panel()
+        panel.setParent(strip)
+        panel.hide()
         return strip
 
     def _build_options_panel(self) -> QWidget:
@@ -1420,9 +1342,6 @@ class SentimentBoard(QWidget):
         panel.hide()
         self.options_panel = panel
         return panel
-
-    def _toggle_options(self, shown: bool) -> None:
-        self.options_panel.setVisible(shown)
 
     def _cover_folded(self, opened: bool, opening: bool = True) -> None:
         """Bring the cover customiser into view when it is opened.

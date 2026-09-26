@@ -55,16 +55,17 @@ CUSTOM_NAMES = 5
 CUSTOM_KEY = "custom_names"
 
 
-def custom_names() -> list:
-    """The office's own names, always CUSTOM_NAMES long."""
-    kept = load_settings().get(CUSTOM_KEY) or []
+def custom_names(key: str = CUSTOM_KEY) -> list:
+    """The office's own names, always CUSTOM_NAMES long. ``key`` picks which
+    five: the press report's, or the sentiment report's (report_builder)."""
+    kept = load_settings().get(key) or []
     names = [str(one or "").strip() for one in kept][:CUSTOM_NAMES]
     return names + [""] * (CUSTOM_NAMES - len(names))
 
 
-def save_custom_names(names: list) -> None:
+def save_custom_names(names: list, key: str = CUSTOM_KEY) -> None:
     saved = load_settings()
-    saved[CUSTOM_KEY] = [str(one or "").strip() for one in names][:CUSTOM_NAMES]
+    saved[key] = [str(one or "").strip() for one in names][:CUSTOM_NAMES]
     save_settings(saved)
 
 

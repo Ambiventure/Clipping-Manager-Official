@@ -62,12 +62,18 @@ def _site(url: str) -> str:
 class EntryDelegate(QStyledItemDelegate):
     """Draws group headers and clipping rows."""
 
+    #: How strongly a row being dragged is drawn where it came from.
+    CARRIED = 0.38
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.hover = HOVER_NONE          # (view row, region name)
-        self.drop_row = -1               # row the insertion line is drawn against
-        self.drop_below = False          # line under that row rather than over it
+        self.drop_row = -1               # row a drag would land against
+        self.drop_below = False          # under that row rather than over it
         self.dragging_ids: set[int] = set()
+        # How far down each row is drawn while a drag opens a gap for itself,
+        # row by row (ClipList._gap_tick). Empty when nothing is moving.
+        self.shifts: list = []
 
     # ------------------------------------------------------------ measuring
     def sizeHint(self, option, index) -> QSize:
@@ -114,6 +120,11 @@ class EntryDelegate(QStyledItemDelegate):
             return
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
+        row = index.row()
+        if 0 <= row < len(self.shifts) and self.shifts[row]:
+            # Slid down out of the way of a drag. Only where it is drawn: the
+            # list still hit-tests every row where it really is.
+            painter.translate(0, self.shifts[row])
         if entry.kind == ENTRY_GROUP:
             self._paint_group(painter, option, index, entry)
         else:
@@ -136,16 +147,26 @@ class EntryDelegate(QStyledItemDelegate):
         # a repeat, so saying it ninety times on ninety cards is the wrong
         # shape. It is said once, here, in a colour that means "delete this".
         repeats = getattr(model, "duplicate_files", {}).get(group.key, "")
+        # Being carried: all of its clippings are in the drag.
+        carried = bool(ids) and all(i in self.dragging_ids for i in ids)
 
-        if repeats:
-            fill, line = QColor("#3B0A0A"), QColor("#7F1D1D")
-        elif all_selected:
-            fill, line = QColor("#EAF0FB"), theme.QNAVY
+        if carried:
+            painter.setPen(QPen(theme.QORANGE, 2, Qt.DashLine))
+            painter.setBrush(QColor("#FFF8F3"))
         else:
-            fill, line = QColor("#FFFFFF"), theme.QHAIRLINE
-        painter.setPen(QPen(line, 1))
-        painter.setBrush(fill)
+            if repeats:
+                fill, line = QColor("#3B0A0A"), QColor("#7F1D1D")
+            elif all_selected:
+                fill, line = QColor("#EAF0FB"), theme.QNAVY
+            else:
+                fill, line = QColor("#FFFFFF"), theme.QHAIRLINE
+            painter.setPen(QPen(line, 1))
+            painter.setBrush(fill)
         painter.drawRoundedRect(QRectF(geo.card).adjusted(0.5, 0.5, -0.5, -0.5), 13, 13)
+        if carried:
+            # Greyed, the way a file being dragged in Explorer is: still there
+            # to see where it came from, plainly not where it is going.
+            painter.setOpacity(self.CARRIED)
 
         hover_row, hover_name = self.hover
         this_row = index.row()
@@ -276,8 +297,10 @@ class EntryDelegate(QStyledItemDelegate):
             rowlayout.CARD_RADIUS,
         )
 
-        if not clip.include:
-            painter.setOpacity(0.42)
+        # Carried: greyed where it was (the card's dashed edge stays bright).
+        dim = self.CARRIED if dragging else (0.42 if not clip.include else 1.0)
+        if dim < 1.0:
+            painter.setOpacity(dim)
 
         # --- checkbox -----------------------------------------------------
         if selected:
@@ -312,7 +335,7 @@ class EntryDelegate(QStyledItemDelegate):
                             index.model().opener_for(entry.row.id))
 
         # --- action buttons -----------------------------------------------
-        painter.setOpacity(1.0 if clip.include else 0.42)
+        painter.setOpacity(dim)
         for hit in geo.buttons:
             hovered = hover_row == this_row and hover_name == hit.name
             if hit.name in ("add_url", "add_title"):
@@ -322,26 +345,6 @@ class EntryDelegate(QStyledItemDelegate):
             self._paint_clip_button(painter, hit, hovered, entry)
 
         painter.setOpacity(1.0)
-
-        if self.drop_row == this_row:
-            self._paint_drop_line(painter, geo.card, self.drop_below)
-
-    def _paint_drop_line(self, painter, card, below: bool) -> None:
-        """Where the clippings will land: a line, with a cap at each end."""
-        y = (card.bottom() + rowlayout.ROW_GAP // 2) if below else (
-            card.top() - rowlayout.ROW_GAP // 2
-        )
-        painter.save()
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        pen = QPen(theme.QORANGE, 3)
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
-        painter.drawLine(card.left() + 8, y, card.right() - 8, y)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(theme.QORANGE)
-        for x in (card.left() + 8, card.right() - 8):
-            painter.drawEllipse(QPoint(x, y), 4, 4)
-        painter.restore()
 
     def _paint_bracket(self, painter, rect: QRect, entry: Entry, selected: bool) -> None:
         """The curly-bracket spine that ties one file's clippings together."""
