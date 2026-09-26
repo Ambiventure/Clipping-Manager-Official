@@ -30,6 +30,7 @@ would allow any licence you like.
 | numpy | 2.5.2 | BSD-3-Clause (with bundled components under their own permissive terms, listed in its LICENSE) | Ink-band detection, finding where to split a joined clipping |
 | tesserocr | 2.10.0 | MIT | Reading the headline off a clipping |
 | opencv-python-headless | 5.0.0.93 | Apache-2.0 | Finding WHERE the headline is on a cutting before anything is read. The wheel's FFmpeg video plug-in (LGPL) is left out of the build - nothing here reads video |
+| onnxruntime | 1.30.0 | MIT | Running PaddleOCR's models on the processor - the headline is read by PaddleOCR first, and by Tesseract beside it |
 | pywin32 | 312 | PSF | Accepting a drag from a browser the way Explorer does |
 | PyInstaller | 6.22.2 | GPL-2.0-or-later, with a bootloader exception | Building the .exe. The exception exists precisely so packaged programs are not forced to GPL |
 
@@ -70,6 +71,23 @@ License 2.0. https://github.com/tesseract-ocr/tessdata_best
 
 Apache 2.0 requires its licence text to accompany the files it covers, so a
 copy sits beside them as `clippings_manager/assets/tessdata/LICENSE`.
+
+**PaddleOCR models** — the PP-OCRv5 text detector and the Devanagari and English
+text readers (`PP-OCRv5_mobile_det.onnx`, `devanagari_PP-OCRv5_mobile_rec.onnx`,
+`en_PP-OCRv5_mobile_rec.onnx`) under `clippings_manager/assets/ppocr/`, from the
+PaddleOCR project (PaddlePaddle Authors), Apache License 2.0,
+https://github.com/PaddlePaddle/PaddleOCR — in the ONNX form published by the
+RapidOCR project (RapidAI), Apache License 2.0, https://github.com/RapidAI/RapidOCR.
+They are opened from there and never downloaded.
+
+**Word lists** — `words-hin.txt` and `words-eng.txt` in the same folder, from
+Tesseract's `langdata_lstm` (`hin.wordlist`, and the 50,000 most common words
+of `eng.wordlist`), Apache License 2.0,
+https://github.com/tesseract-ocr/langdata_lstm. They decide, where PaddleOCR
+and Tesseract read a word differently, which reading is a real word.
+
+The Apache 2.0 licence text sits beside both as
+`clippings_manager/assets/ppocr/LICENSE`.
 
 **The application icon** — `clippings_manager/assets/icon/`, drawn for this
 project.

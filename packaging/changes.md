@@ -16,6 +16,34 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.58
+
+Changed
+
+  * **The press report has one Build Report button.** It replaces Word and
+    Generate PDF. The window it opens has its own PDF and Word boxes, ticked
+    as they were last time.
+  * **The export window no longer asks for a cover picture.** The cover is the
+    one chosen on the cover card at the top of the page, and the window says
+    which cover the files will carry.
+  * **The sentiment board's button says Build Report too.**
+  * **Headlines are read by PaddleOCR and Tesseract together.** The program
+    still finds where the headline is first, and reads only that part of the
+    cutting. PaddleOCR reads it, Tesseract reads the same headline, and the
+    two readings are put together word by word.
+  * **Readings are far closer to the print.** PaddleOCR drops the marks on
+    Hindi letters ("ट्रनें" for "ट्रेनें"); Tesseract turns Hindi words into
+    English letters ("ve" for "रद्द"). Where the two differ, the word that is
+    a real Hindi or English word, written correctly, is kept. Checked against
+    the office's own cuttings, headlines read exactly right went from 12 in 40
+    to 25 in 40.
+  * **Figures read as figures.** A 1 read as an i inside a number was already
+    put right; now a Hindi figure mixed into a number is too ("१3" is 13).
+  * **Every clipping is read once more** at the next duplicate check, with the
+    new reading. A headline typed by hand is never read over.
+  * **Reading takes a little longer:** about six tenths of a second a cutting
+    instead of four. It still happens in the background.
+
 ## 2.0.57
 
 Changed

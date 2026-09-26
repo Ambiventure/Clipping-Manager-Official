@@ -1239,7 +1239,7 @@ class SentimentBoard(QWidget):
         self.status.hide()
         row.addWidget(self.status, 1)
 
-        self.build_btn = QPushButton("Build report")
+        self.build_btn = QPushButton("Build Report")
         self.build_btn.setCursor(Qt.PointingHandCursor)
         self.build_btn.setToolTip(
             "PDF, Word, burned headlines or JPEG pictures - choose in the "

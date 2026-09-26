@@ -1845,15 +1845,18 @@ class MainWindow(QMainWindow):
             f" background: transparent; border: none; }}")
         row.addWidget(self.last_action, 1)
 
-        self.btn_docx_out = QPushButton("Word (.docx)")
-        self.btn_docx_out.setObjectName("NavyOutline")
-        self.btn_pdf_out = QPushButton("Generate PDF")
-        self.btn_pdf_out.setObjectName("OrangeFilled")
-        for button in (self.btn_docx_out, self.btn_pdf_out):
-            button.setMinimumHeight(38)
-            button.setCursor(Qt.PointingHandCursor)
-        row.addWidget(self.btn_docx_out)
-        row.addWidget(self.btn_pdf_out)
+        # One button (2.0.58). There were two, Word and PDF, and both opened
+        # the same window - which has its own PDF and Word boxes, remembered
+        # from last time. The office asked for the one.
+        self.btn_build = QPushButton("Build Report")
+        self.btn_build.setObjectName("OrangeFilled")
+        self.btn_build.setMinimumHeight(38)
+        self.btn_build.setMinimumWidth(132)
+        self.btn_build.setCursor(Qt.PointingHandCursor)
+        self.btn_build.setToolTip(
+            "PDF, Word or both, the file name and the folder are chosen in "
+            "the window it opens.")
+        row.addWidget(self.btn_build)
         return bar
 
     # -- floating layers ---------------------------------------------------
@@ -2235,8 +2238,7 @@ class MainWindow(QMainWindow):
         self.batch_close.clicked.connect(
             lambda: (self._list_pool() or self.model).clear_selection())
 
-        self.btn_pdf_out.clicked.connect(lambda: self._export("pdf"))
-        self.btn_docx_out.clicked.connect(lambda: self._export("docx"))
+        self.btn_build.clicked.connect(lambda: self._export("pdf"))
 
         # Through the group, which follows the interface on screen (set_mode
         # makes its stack the active one). Bound straight to undo_stack, as it
@@ -4970,8 +4972,7 @@ class MainWindow(QMainWindow):
         self.ready.setText(
             f"<b>{included}</b> clipping{'s' if included != 1 else ''} ready for export"
         )
-        self.btn_pdf_out.setEnabled(included > 0)
-        self.btn_docx_out.setEnabled(included > 0)
+        self.btn_build.setEnabled(included > 0)
         self._say_last_action()
         self.clear_all_btn.setVisible(total > 0)
         if getattr(self, "board", None) is not None:

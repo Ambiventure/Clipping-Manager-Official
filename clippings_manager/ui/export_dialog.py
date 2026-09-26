@@ -1,7 +1,8 @@
-"""The export screen: date, formats, folder, cover, then build.
+"""The export screen: date, formats, name, folder, then build.
 
 Settings persist to the user's app-data folder, so tomorrow the dialog opens with
-last time's output folder and cover template already filled in.
+last time's output folder and formats already filled in. The cover is not chosen
+here: it is the newspad's cover card's, at the top of the page.
 """
 
 from __future__ import annotations
@@ -252,10 +253,8 @@ class ExportDialog(QDialog):
         # both lines a second time on top of it.
         self.cover_baked = cover_baked
         # The cover card's switch. False and neither builder writes a cover
-        # sheet; the box below still shows the picture row, because turning it
-        # back on should find the cover exactly as it was left.
+        # sheet, whatever picture the card holds.
         self.with_cover = bool(with_cover)
-        self._baked_path = str(cover_image or "") if cover_baked else ""
         self.results: list[str] = []
         self.setWindowTitle("Build the newspad")
         self.setModal(True)
@@ -379,34 +378,14 @@ class ExportDialog(QDialog):
         layout.addLayout(folder_row)
 
         # --- cover ---------------------------------------------------------
-        cover_row = QHBoxLayout()
-        # The newspad's own cover card's picture, or nothing. It used to fall
-        # back to the last picture chosen in this box - remembered in the one
-        # shared export.json - which put one report's cover on another
-        # newspad's report.
-        self.cover = QLineEdit(cover_image or "")
-        self.cover.setPlaceholderText("optional — your standard cover artwork")
-        pick_cover = QPushButton("Choose…")
-        clear_cover = QPushButton("Clear")
-        pick_cover.clicked.connect(self._pick_cover)
-        clear_cover.clicked.connect(lambda: self.cover.setText(""))
-        # Choosing a different picture here replaces the built cover, so the
-        # count and date have to come back as drawn text.
-        self.cover.textEdited.connect(self._cover_replaced)
-        pick_cover.clicked.connect(self._cover_replaced)
-        clear_cover.clicked.connect(self._cover_replaced)
-        cover_row.addWidget(QLabel("Cover image"))
-        cover_row.addWidget(self.cover, 1)
-        cover_row.addWidget(pick_cover)
-        cover_row.addWidget(clear_cover)
-        layout.addLayout(cover_row)
-
-        self.cover_note = QLabel(
-            "Built from the Cover Page Template, with the date and clipping "
-            "count already placed on it."
-        )
+        # The newspad's own cover card's, chosen at the top of the page, and
+        # nothing else. This window had a second place to pick a cover picture;
+        # the office asked for it to go (2.0.58): two places to set one thing,
+        # and a picture chosen here silently replaced the card's built cover.
+        self.cover_path = str(cover_image or "")
+        self.cover_note = QLabel(self._cover_words())
         self.cover_note.setObjectName("SubtleHint")
-        self.cover_note.setVisible(self.cover_baked)
+        self.cover_note.setWordWrap(True)
         layout.addWidget(self.cover_note)
 
         # The optional last page. Off unless it was ticked last time: a
@@ -553,13 +532,20 @@ class ExportDialog(QDialog):
         if self._name_is_ours:
             self._standard_name()
 
-    def _cover_replaced(self, *_args) -> None:
-        """Re-check rather than simply clear the flag: cancelling the file
-        dialog leaves the built cover in place, and it still carries its text."""
-        self.cover_baked = bool(
-            self._baked_path and self.cover.text().strip() == self._baked_path
-        )
-        self.cover_note.setVisible(self.cover_baked)
+    def _cover_words(self) -> str:
+        """Which cover the files will carry - said, not offered: it is chosen
+        on the cover card at the top of the page."""
+        if not self.with_cover:
+            return ("No cover sheet: it is switched off on the cover card at "
+                    "the top of the page.")
+        if self.cover_baked:
+            return ("The cover is the one on the cover card at the top of the "
+                    "page, with the date and the clipping count already on it.")
+        if self.cover_path:
+            return ("The cover is the picture chosen on the cover card at the "
+                    "top of the page.")
+        return ("The cover carries the count and the date. A cover picture is "
+                "chosen on the cover card at the top of the page.")
 
     def _pick_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -567,14 +553,6 @@ class ExportDialog(QDialog):
         )
         if folder:
             self.folder.setText(folder)
-
-    def _pick_cover(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Choose the cover artwork", "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
-        )
-        if path:
-            self.cover.setText(path)
 
     # -------------------------------------------------------------- building
     def _build(self) -> None:
@@ -603,9 +581,10 @@ class ExportDialog(QDialog):
             return
 
         stamp = self.date.date().toPython()
-        cover = self.cover.text().strip() or None
+        cover = self.cover_path or None
         if cover and not Path(cover).exists():
-            self.status.setText("That cover image is not there any more.")
+            self.status.setText("The cover picture chosen on the cover card is "
+                                "not there any more. Choose it again there.")
             return
 
         base = clean_name(self.file_name.text())

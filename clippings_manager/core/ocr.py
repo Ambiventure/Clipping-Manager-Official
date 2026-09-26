@@ -19,6 +19,11 @@ article at 70 out of 100, because the two scans carry different masthead strips
 DIFFERENT papers covering the same story scored 73. The two were inseparable.
 Matching on the headline alone puts the genuine copies at 100.
 
+TWO ENGINES. PaddleOCR (core/ppocr) reads the region the finder found first,
+and Tesseract reads the same region; the two readings are merged word by word
+(core/tandem), because the two go wrong in different ways. Tesseract alone is
+what reads when PaddleOCR cannot be loaded, and what reads the old way's band.
+
 Nothing here is required for the application to run. If the engine or its
 language data is missing - somebody running from source without it - every
 function quietly answers "I could not read this", and the clipping is simply
@@ -262,6 +267,18 @@ class Headline:
     text: str = ""
     confidence: int = 0
     engine: str = ""
+    #: The same region read by PaddleOCR and Tesseract together (core/tandem):
+    #: its words, the same without the region's label lines, and how sure
+    #: the two were. EVERY DECISION - is this a story, a label, sure enough
+    #: to need no second opinion - is taken on Tesseract's own reading above,
+    #: because the finder and the rules after it were measured on Tesseract's
+    #: readings: taken on the merged one, they chose the paper's nameplate
+    #: ("THESE DAYS", read cleanly where Tesseract garbled it) and the print
+    #: inside a photograph over the headline. These are the words kept once
+    #: the decisions are made. Empty when there was no PaddleOCR.
+    better: str = ""
+    better_bare: str = ""
+    better_confidence: int = 0
 
     @property
     def usable(self) -> bool:
@@ -325,6 +342,14 @@ def _fix_digits(text: str) -> str:
     return "".join(chars)
 
 
+#: Devanagari figures as the Latin ones the papers print. PaddleOCR's
+#: Devanagari reader knows both, and mixes them in one number - "१3 सितंबर"
+#: for "13 सितंबर", "४.0" for "4.0" - where the office's papers print Latin
+#: figures. A number is the same number in either script.
+_FIGURES = str.maketrans("\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f",
+                         "0123456789")
+
+
 def normalise(text: str) -> str:
     """One spelling, so two readings of the same words compare equal.
 
@@ -332,9 +357,11 @@ def normalise(text: str) -> str:
     letter and OCR does not always pick the same one; folded case, which only
     affects the Latin half and does nothing to Devanagari; and single spaces,
     because line breaks in a headline are a matter of column width. And a 1
-    read as an i inside a number is put back - see _fix_digits.
+    read as an i inside a number is put back - see _fix_digits - and a
+    Devanagari figure written as the Latin one (_FIGURES).
     """
-    text = _fix_digits(unicodedata.normalize("NFC", text or ""))
+    text = unicodedata.normalize("NFC", text or "").translate(_FIGURES)
+    text = _fix_digits(text)
     return " ".join(text.split()).lower()
 
 
@@ -350,9 +377,12 @@ def engine_name() -> str:
     try:
         import tesserocr
 
-        return f"tesseract {tesserocr.tesseract_version().split()[1]}"
+        name = f"tesseract {tesserocr.tesseract_version().split()[1]}"
     except Exception:  # noqa: BLE001
-        return "tesseract"
+        name = "tesseract"
+    from . import ppocr
+
+    return f"paddleocr + {name}" if ppocr.installed() else name
 
 
 def _open():
@@ -736,7 +766,12 @@ def two_stage(api, image):
             finding.chosen = region
             words = normalise(" ".join(line.text for line in kept))
             confidence = int(sum(line.confidence for line in kept) / len(kept))
-            return finding, Headline(words, confidence, kept[0].engine)
+            together = Headline(words, confidence, kept[0].engine)
+            if all(line.better for line in kept):
+                together.better = normalise(" ".join(line.better for line in kept))
+                together.better_confidence = int(
+                    sum(line.better_confidence for line in kept) / len(kept))
+            return finding, together
         # ONE BLOCK THAT CANNOT BE READ A LINE AT A TIME, with the label in
         # it - "State Vision, Page 1" over "Temporary augmentation of coach".
         # Its label lines are dropped, and what is left is taken only when it
@@ -744,7 +779,9 @@ def two_stage(api, image):
         # junk with the headline's tail in it beat the headline itself.
         if (not getattr(region, "lines", ()) and bare and bare != found.text
                 and found.confidence >= POOR_READING and not _scrappy(bare)):
-            trimmed = Headline(bare, found.confidence, found.engine)
+            trimmed = Headline(bare, found.confidence, found.engine,
+                               better=found.better_bare,
+                               better_confidence=found.better_confidence)
             if story(trimmed):
                 finding.chosen = region
                 return finding, trimmed
@@ -780,7 +817,7 @@ def headline_with(api, data: bytes) -> Headline:
         picture.load()
         finding, found = two_stage(api, picture)
         if found.text and found.confidence >= SURE and not _scrappy(found.text):
-            return Headline(found.text, found.confidence, stamp())
+            return _kept(found)
     except Exception:  # noqa: BLE001 - the old way still stands
         found = Headline()
     old = _old_way(api, data)
@@ -803,8 +840,16 @@ def headline_with(api, data: bytes) -> Headline:
                      or ((finder_sound or short) and _is_rejected_header(
                          api, picture, finding, old.text))):
         old = Headline()
-    chosen = _cleaner(found, old)
-    return Headline(chosen.text, chosen.confidence, stamp())
+    return _kept(_cleaner(found, old))
+
+
+def _kept(reading: Headline) -> Headline:
+    """The reading decided on, in the words it is kept in: the tandem's where
+    PaddleOCR read the region too, Tesseract's own where it did not (and
+    always for the old way's band, which only Tesseract reads)."""
+    if reading.better:
+        return Headline(reading.better, reading.better_confidence, stamp())
+    return Headline(reading.text, reading.confidence, stamp())
 
 
 #: A page number, "my city", or a date in figures: the office's label, or a
@@ -933,7 +978,7 @@ def _placed_words(api, picture, finding, seen=None) -> list:
     for region in getattr(finding, "rejected", ()):
         if region.note.startswith(("above a gap", "beside the article",
                                    "below the article")):
-            theirs = _read_region(api, seen, region)[0].text
+            theirs = _read_region(api, seen, region, tandem=False)[0].text
             if theirs:
                 kept.append(theirs)
     finding.placed_words = kept
@@ -1174,9 +1219,10 @@ BY_HAND = "hand"
 #: that what it read before should be read again - once, at the next
 #: duplicate check. " +found" was 2.0.52 to 2.0.55; " +found2" is 2.0.56,
 #: which learned the divisions' stamps, labels, post headers and dates with
-#: figures in them from the office's own report pages. A reading typed, or
-#: read with the OCR box, is the person's (BY_HAND) and is never read again.
-FOUND_FIRST = " +found2"
+#: figures in them from the office's own report pages; " +found3" is 2.0.58,
+#: PaddleOCR and Tesseract reading together. A reading typed, or read with
+#: the OCR box, is the person's (BY_HAND) and is never read again.
+FOUND_FIRST = " +found3"
 
 
 def stamp() -> str:
@@ -1339,12 +1385,12 @@ def read_box(data: bytes, box: tuple, api=None) -> Headline:
                         line = read_region(api, picture, part)
                         if (line.text and not _is_furniture(line.text)
                                 and not _nameplate(line.text)):
-                            texts.append(line.text)
-                            sure.append(line.confidence)
+                            texts.append(line.better or line.text)
+                            sure.append(line.better_confidence or line.confidence)
                     continue
                 if found.text:
-                    texts.append(found.text)
-                    sure.append(found.confidence)
+                    texts.append(found.better or found.text)
+                    sure.append(found.better_confidence or found.confidence)
             if texts:
                 return Headline(normalise(" ".join(texts)),
                                 int(sum(sure) / len(sure)), engine_name())
@@ -1354,7 +1400,10 @@ def read_box(data: bytes, box: tuple, api=None) -> Headline:
         crop, size = _clear_box_edges(crop)
         region = headfind.Region(0, 0, crop.width, crop.height,
                                  type_height=size or crop.height / 2.5)
-        return read_region(api, crop, region)
+        found = read_region(api, crop, region)
+        if found.better:
+            return Headline(found.better, found.better_confidence, found.engine)
+        return found
     except Exception:  # noqa: BLE001 - a box that will not read reads empty
         return Headline()
 
@@ -1567,11 +1616,20 @@ def read_region(api, image, region) -> Headline:
     is dropped (_without_labels).
     """
     whole, bare = _read_region(api, image, region)
-    return Headline(bare, whole.confidence, whole.engine) if bare else Headline()
+    if not bare:
+        return Headline()
+    return Headline(bare, whole.confidence, whole.engine,
+                    better=whole.better_bare, better_confidence=whole.better_confidence)
 
 
-def _read_region(api, image, region):
-    """(the reading, the same reading without its label lines)."""
+def _read_region(api, image, region, tandem: bool = True):
+    """(the reading, the same reading without its label lines).
+
+    PaddleOCR first, then Tesseract, on the same region, merged word by word
+    (core/tandem) - see _paddle_lines. ``tandem`` False is Tesseract alone:
+    the finder's turned-away blocks are only compared with, and are read as
+    they always were.
+    """
     if api is None or image is None or region is None:
         return Headline(), ""
     try:
@@ -1594,6 +1652,9 @@ def _read_region(api, image, region):
                 break
         if median < 100:
             crop = ImageOps.invert(crop)
+        # PaddleOCR is shown the region as it is: its detector sizes the type
+        # itself. Tesseract wants it at READ_TYPE_HEIGHT.
+        lines = _paddle_lines(crop, region) if tandem else None
         scale = READ_TYPE_HEIGHT / max(1.0, float(region.type_height or 0) or
                                        crop.height / 2.0)
         scale = max(0.4, min(4.0, scale))
@@ -1608,16 +1669,148 @@ def _read_region(api, image, region):
             api.SetImage(crop)
             text = api.GetUTF8Text() or ""
             confidence = int(api.MeanTextConf() or 0)
+            sure = _word_certainty(api) if lines is not None else []
             text = _numbers_again(api, crop, text)
         finally:
             api.SetPageSegMode(was)
         whole = normalise(text)
-        if not whole:
-            return Headline(), ""
-        return (Headline(whole, confidence, engine_name()),
-                normalise(_without_labels(text)))
+        bare = normalise(_without_labels(text))
+        if lines is None:
+            if not whole:
+                return Headline(), ""
+            return Headline(whole, confidence, engine_name()), bare
+        return _together(whole, bare, confidence, sure, lines)
     except Exception:  # noqa: BLE001 - never let a reading break anything
         return Headline(), ""
+
+
+#: PaddleOCR's lines inside a region that are kept: as tall as this share of
+#: its tallest line - the headline's own - and read at least this surely.
+#: Below that they are the first line of the body text under the headline,
+#: or specks the detector made a line of.
+PADDLE_LINE_HEIGHT = 0.55
+PADDLE_LINE_SURE = 0.5
+
+
+def _paddle_lines(crop, region):
+    """PaddleOCR's lines in the region, in reading order; None when there is
+    no PaddleOCR to read with, and Tesseract then reads alone."""
+    from . import ppocr
+
+    engine = ppocr.engine()
+    if engine is None:
+        return None
+    try:
+        import numpy as np
+
+        grey = np.asarray(crop.convert("L"))
+        lines = engine.read(np.stack([grey] * 3, axis=-1),
+                            float(region.type_height or 0))
+    except Exception:  # noqa: BLE001 - Tesseract reads alone
+        return None
+    if not lines:
+        return []
+    tallest = max(line.height for line in lines)
+    return [line for line in lines
+            if line.height >= PADDLE_LINE_HEIGHT * tallest
+            and line.score >= PADDLE_LINE_SURE]
+
+
+def _word_certainty(api) -> list:
+    """[(word as normalised, certainty 0..1)] of Tesseract's last reading."""
+    try:
+        import tesserocr
+
+        level = tesserocr.RIL.WORD
+        walk = api.GetIterator()
+        found = []
+        while walk is not None:
+            said = walk.GetUTF8Text(level) or ""
+            certainty = float(walk.Confidence(level) or 0) / 100.0
+            for word in normalise(said).split():
+                found.append((word, certainty))
+            if not walk.Next(level):
+                break
+        return found
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _tess_words(text: str, sure: list) -> list:
+    """Tesseract's reading as tandem Words, each with its own certainty.
+
+    The reading is the one kept - numbers read again, label lines dropped -
+    so its words are matched back to the iterator's; one it does not have
+    takes the reading's average.
+    """
+    import difflib
+
+    from . import tandem
+
+    words = text.split()
+    usual = (sum(c for _w, c in sure) / len(sure)) if sure else 0.5
+    out = [tandem.Word(word, usual) for word in words]
+    match = difflib.SequenceMatcher(None, [w for w, _c in sure], words,
+                                    autojunk=False)
+    for op, i1, i2, j1, j2 in match.get_opcodes():
+        if op == "equal":
+            for a, b in zip(range(i1, i2), range(j1, j2)):
+                out[b].sure = sure[a][1]
+    return out
+
+
+def _paddle_words(lines) -> list:
+    """PaddleOCR's lines as tandem Words: each word as sure as its least sure
+    letter - one doubtful letter is a doubtful word."""
+    from . import tandem
+
+    out = []
+    for line in lines:
+        at = 0
+        for piece in line.text.split(" "):
+            start, end = at, at + len(piece)
+            at = end + 1
+            if not piece:
+                continue
+            letters = line.sure[start:end] or [line.score]
+            for word in normalise(piece).split():
+                out.append(tandem.Word(word, min(letters)))
+    return out
+
+
+def _paddle_bare(lines) -> list:
+    """PaddleOCR's lines without the label lines at the top and the foot -
+    _without_labels, for lines already apart."""
+    lines = [line for line in lines if _ADDRESS.sub("", line.text).strip()]
+    while len(lines) > 1 and _label_line(lines[0].text):
+        lines = lines[1:]
+    while len(lines) > 1 and _label_line(lines[-1].text):
+        lines = lines[:-1]
+    return lines
+
+
+def _together(whole: str, bare: str, confidence: int, sure: list, lines: list):
+    """Tesseract's reading, with PaddleOCR's and Tesseract's merged beside it.
+
+    Two merges, as there were two readings: the whole region, and the region
+    without its label lines. The certainty is the words': where both engines
+    read a word alike it is as sure as the surer of them.
+    """
+    from . import tandem
+
+    if not whole:
+        return Headline(), ""
+    kept = [word for word in _paddle_words(_paddle_bare(lines))
+            if not _ADDRESS.match(word.text)]
+    merged = tandem.merge(_tess_words(whole, sure), _paddle_words(lines))
+    merged_bare = tandem.merge(_tess_words(bare, sure), kept)
+    reading = Headline(whole, confidence, engine_name())
+    if merged:
+        reading.better = " ".join(word.text for word in merged)
+        reading.better_bare = " ".join(word.text for word in merged_bare)
+        reading.better_confidence = int(round(
+            100 * sum(w.sure for w in merged) / len(merged)))
+    return reading, bare
 
 
 def _headline_block(lines: list) -> list:

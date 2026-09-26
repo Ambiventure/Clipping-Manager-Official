@@ -220,6 +220,35 @@ def run(sample: str | None = None) -> tuple[bool, str]:
                else f" - COULD NOT READ A TEST HEADLINE ({trouble})" if trouble
                else " - COULD NOT READ A TEST HEADLINE" if reader else "")))
 
+        # PADDLEOCR, which reads first (core/ppocr, core/tandem). It is three
+        # model files and ONNX Runtime's library, and a build without them
+        # still reads - with Tesseract alone, a good deal worse on Hindi - so
+        # the only proof that it is in the build is to have it read the test
+        # headline itself.
+        paddle_read, paddle_why = "", ""
+        try:
+            from .core import ppocr
+
+            engine = ppocr.engine()
+            test_sheet = locals().get("sheet")
+            if engine is None:
+                paddle_why = ppocr.why_not() or "not in this build"
+            elif test_sheet is not None:
+                import numpy as np
+
+                strip = np.asarray(test_sheet.crop((0, 0, 980, 118)).convert("L"))
+                found_lines = engine.read(np.stack([strip] * 3, axis=-1), 54.0)
+                paddle_read = ocr.normalise(" ".join(x.text for x in found_lines))
+        except Exception as exc:  # noqa: BLE001
+            paddle_why = f"{type(exc).__name__}: {exc}"
+        passed &= bool(paddle_read)
+        lines.append(_line(
+            bool(paddle_read), "PaddleOCR (reads first; Tesseract checks it)",
+            f"{ppocr.version() if not paddle_why else 'PaddleOCR'} - read back "
+            f"{paddle_read!r}" if paddle_read
+            else f"COULD NOT READ THE TEST HEADLINE ({paddle_why})" if paddle_why
+            else "COULD NOT READ THE TEST HEADLINE"))
+
         # THE TWO STAGES, AND THE HELPER THAT RUNS THEM. OpenCV has to be in the
         # build to find a headline, and the helper is this same program started
         # a second time - so the only proof that either works in a packaged

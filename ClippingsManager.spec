@@ -44,6 +44,14 @@ datas = [
     # whole thing would stop working with the network unplugged.
     ("clippings_manager/assets/tessdata/*.traineddata",
      "clippings_manager/assets/tessdata"),
+    # PaddleOCR, which reads the headline first (core/ppocr): its PP-OCRv5
+    # text detector and its Devanagari and English readers, as ONNX files
+    # (Apache 2.0), and the word lists the two readings are judged against
+    # (core/tandem; Tesseract's own, Apache 2.0). Opened from here, never
+    # downloaded - a machine with no connection reads exactly the same.
+    ("clippings_manager/assets/ppocr/*.onnx", "clippings_manager/assets/ppocr"),
+    ("clippings_manager/assets/ppocr/words-*.txt", "clippings_manager/assets/ppocr"),
+    ("clippings_manager/assets/ppocr/LICENSE", "clippings_manager/assets/ppocr"),
 ]
 
 hiddenimports = [
@@ -82,6 +90,16 @@ hiddenimports += [
     "clippings_manager.core.headfind",
     "clippings_manager.core.ocrworker",
     "multiprocessing.connection",
+]
+
+# PADDLEOCR runs on ONNX Runtime, imported only when the first headline is
+# read. The contributed hook brings its libraries (onnxruntime.dll and the
+# providers' shared library); the package and the two modules that use it are
+# named so they are never left out for being imported inside a function.
+hiddenimports += [
+    "onnxruntime",
+    "clippings_manager.core.ppocr",
+    "clippings_manager.core.tandem",
 ]
 
 # Qt ships far more than a desktop tool needs, and every megabyte is a megabyte the
