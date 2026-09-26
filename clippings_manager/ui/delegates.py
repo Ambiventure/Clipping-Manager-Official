@@ -191,7 +191,7 @@ class EntryDelegate(QStyledItemDelegate):
         drawer = {
             "word": icons.file_word, "pdf": icons.file_pdf,
             "clipboard": icons.image, "image": icons.image,
-            "arranged": icons.layers,
+            "link": icons.globe, "arranged": icons.layers,
         }.get(group.source_kind, icons.image)
         drawer(painter, icon_box, QColor(style["fg"]))
         font = painter.font()

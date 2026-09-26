@@ -41,6 +41,17 @@ ENTRY_CLIP = "clip"
 LOOSE_KEY = "__loose__"
 LOOSE_TITLE = "Clipboard images"
 
+# A page captured from a link - the Links window, the browser inside the
+# program, Take from my Chrome - has a bracket of its own, under the
+# clipboard's: the office asked for links apart from the pictures pasted in,
+# and by this name (2.0.59).
+LINKS_KEY = "__links__"
+LINKS_TITLE = "Imported links"
+
+# The brackets that are not files. Neither is ever "a file already imported":
+# each is a pile of unrelated clippings that happen to sit together.
+HAND_KEYS = frozenset((LOOSE_KEY, LINKS_KEY))
+
 
 def thumbnail_png(clip: Clip, size: QSize = THUMB_SIZE) -> Optional[bytes]:
     """The clipping rendered down to display size, as PNG bytes.
@@ -175,7 +186,7 @@ class Row:
     clip: Clip
     id: int
     thumbnail: Optional[QPixmap] = None
-    source_kind: str = "image"     # word | pdf | clipboard | image
+    source_kind: str = "image"     # word | pdf | clipboard | link | image
     source_name: str = ""          # the file it came from
     group_key: str = ""            # rows sharing this sit under one bracket
     # The name and badge of the bracket a "Move to" filed this row under, for
@@ -900,39 +911,47 @@ class ClipModel(QAbstractListModel):
             self.by_id_map[row.id] = row
         self.rebuild()
 
-    def loose_insert_point(self) -> int:
-        """Where the next hand-added clipping goes: after the last loose one.
+    def loose_insert_point(self, key: str = LOOSE_KEY) -> int:
+        """Where the next hand-added clipping goes: after the last one of its
+        bracket - the clipboard's, or ``key`` LINKS_KEY for a captured link.
 
         Drop three images and they land first, second, third at the top of the
-        list rather than at the bottom behind the division documents.
+        list rather than at the bottom behind the division documents. The
+        first captured link starts its bracket under the clipboard's, so both
+        hand-added brackets lead the list.
         """
         last = -1
         for i, row in enumerate(self.rows):
-            if row.group_key == LOOSE_KEY:
+            if row.group_key == key:
                 last = i
+        if last < 0 and key != LOOSE_KEY:
+            return self.loose_insert_point(LOOSE_KEY)
         return last + 1
 
-    def scoped_insert_point(self) -> int:
+    def scoped_insert_point(self, key: str = LOOSE_KEY) -> int:
         """Where a clipping added into the scope goes, as a place in the pool.
 
-        After the last loose clipping in the category, as the press report
-        puts them; at the top of the category when it has none; and in an
-        empty category wherever the pool's own rule says - which is where a
-        clipping collected into an empty column has always gone. Without a
-        scope it is loose_insert_point.
+        After the last clipping of its bracket in the category, as the press
+        report puts them - a captured link's bracket starting under the
+        category's clipboard one; at the top of the category when it has
+        neither; and in an empty category wherever the pool's own rule says -
+        which is where a clipping collected into an empty column has always
+        gone. Without a scope it is loose_insert_point.
         """
         if self.scope is None:
-            return self.loose_insert_point()
+            return self.loose_insert_point(key)
         first = last = -1
         for index, row in enumerate(self.rows):
             if not self.scope.holds(row.clip):
                 continue
             if first < 0:
                 first = index
-            if row.group_key == LOOSE_KEY:
+            if row.group_key == key:
                 last = index
         if last >= 0:
             return last + 1
+        if key != LOOSE_KEY:
+            return self.scoped_insert_point(LOOSE_KEY)
         if first >= 0:
             return first
         return self.loose_insert_point()

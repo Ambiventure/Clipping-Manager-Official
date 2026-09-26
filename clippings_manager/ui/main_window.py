@@ -81,6 +81,9 @@ from .layout_card import HeadingLayoutCard
 from . import scroll
 from .scroll import CardScroll
 from .model import (
+    HAND_KEYS,
+    LINKS_KEY,
+    LINKS_TITLE,
     LOOSE_KEY,
     LOOSE_TITLE,
     ClipModel,
@@ -653,6 +656,7 @@ class MainWindow(QMainWindow):
                         blob_name=blob,
                         blob_of=data if blob else None,
                     )
+                    self._to_imported_links(row)
                     row.thumb_png = self.store.get_thumb(blob) if blob else None
                     if row.thumb_png is None:
                         row.thumb_png = thumbnail_png(clip)
@@ -2552,6 +2556,22 @@ class MainWindow(QMainWindow):
             if (section is not None or on_board) and not clip.division:
                 clip.division = division
 
+    @staticmethod
+    def _to_imported_links(row: Row) -> None:
+        """A captured link a newspad from before 2.0.59 filed with the pasted
+        pictures goes under "Imported links", where it is filed now.
+
+        Only the bracket's name changes: the clipping keeps its place, because
+        the list's order is the report's page order. One that somebody moved
+        under "Clipboard images" themselves ("Move to" left its home_title)
+        stays where they put it.
+        """
+        if (row.group_key == LOOSE_KEY and not row.home_title
+                and getattr(row.clip, "source_file", "") == "link"):
+            row.group_key = LINKS_KEY
+            row.source_kind = "link"
+            row.source_name = LINKS_TITLE
+
     def _clip_from_image(self, path: Path) -> Clip:
         from PIL import Image
 
@@ -2569,7 +2589,8 @@ class MainWindow(QMainWindow):
         )
 
     def _add_loose(self, clips: list[Clip], quiet: bool = False,
-                   tidy: bool | None = None, reveal: bool = True) -> list:
+                   tidy: bool | None = None, reveal: bool = True,
+                   links: bool = False) -> list:
         """Hand-added clippings share one group and land at the top, in order.
 
         ``quiet`` is Collect from WhatsApp, where the person is in Chrome, not
@@ -2579,14 +2600,23 @@ class MainWindow(QMainWindow):
         ``tidy`` overrides the Layout card's "trim the phone's bars" for these
         clippings only (None: as the card says), and ``reveal`` False leaves
         the page where it is - both Collect's options for the session.
+
+        ``links`` is a page captured from a link: it goes under the "Imported
+        links" bracket, not "Clipboard images" - the office wants the two
+        apart - which starts under the clipboard's, at the top of the list.
         """
         if self._refuse_if_read_only():
             return []
         target = self.pool()
         self._stamp_pending(clips)
         tidied = self._tidy_screenshots(clips, tidy)
-        rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
-        at = target.loose_insert_point()
+        if links:
+            key = LINKS_KEY
+            rows = target.make_rows(clips, "link", LINKS_TITLE, LINKS_KEY)
+        else:
+            key = LOOSE_KEY
+            rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
+        at = target.loose_insert_point(key)
         scope = getattr(target, "scope", None)
         if (target is getattr(self, "board_model", None) and scope is not None
                 and clips and all(scope.holds(clip) for clip in clips)):
@@ -2595,7 +2625,7 @@ class MainWindow(QMainWindow):
             # kept for a clipping that went to another category (Collect's
             # column option), which would otherwise be put among this one's,
             # and scoped_insert_point falls back to it in an empty category.
-            at = target.scoped_insert_point()
+            at = target.scoped_insert_point(key)
         self.stack_for(target).push(
             commands.AddClips(
                 target, rows,
@@ -2826,7 +2856,7 @@ class MainWindow(QMainWindow):
             # A column a board button armed for its own import is put back.
             self._pending_section = clip.section
         try:
-            rows = self._add_loose([clip], quiet=True) or []
+            rows = self._add_loose([clip], quiet=True, links=True) or []
         finally:
             if on_board:
                 self._pending_section = saved
@@ -6380,9 +6410,10 @@ class MainWindow(QMainWindow):
             # of unrelated pictures that happen to sit together. If most of a
             # morning's forwards happened to repeat one division's report,
             # marking the bracket "already imported" would invite deleting the
-            # lot, and the ones that were not repeats would go with them.
+            # lot, and the ones that were not repeats would go with them. The
+            # same for "Imported links", a pile of unrelated pages.
             for key, other in repeats.items()
-            if key and key != LOOSE_KEY and other != LOOSE_KEY
+            if key and key not in HAND_KEYS and other not in HAND_KEYS
             and key not in foreign
         }
 

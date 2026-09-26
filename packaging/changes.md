@@ -16,6 +16,21 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.59
+
+Changed
+
+  * **Captured links have their own group, "Imported links".** Pages taken
+    from the Links window, the browser inside the program or Take from my
+    Chrome no longer go in with the pasted pictures under Clipboard images.
+    The new group sits under Clipboard images at the top of the list, with a
+    Link badge, on the press report and on the sentiment board alike.
+  * **Links already in a newspad move to Imported links** when it is opened,
+    each keeping its place in the list, so the report's pages stay in the
+    same order. A link you moved under Clipboard images yourself stays there.
+
+---
+
 ## 2.0.58
 
 Changed

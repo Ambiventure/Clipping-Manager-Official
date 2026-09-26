@@ -147,6 +147,9 @@ SOURCE_STYLES = {
     "word":      {"label": "Word",      "fg": "#1E40AF", "bg": "#DBEAFE", "line": "#93C5FD"},
     "pdf":       {"label": "PDF",       "fg": "#991B1B", "bg": "#FEE2E2", "line": "#FCA5A5"},
     "clipboard": {"label": "Clipboard", "fg": "#5B21B6", "bg": "#EDE9FE", "line": "#C4B5FD"},
+    # Pages captured from links - the "Imported links" bracket. Teal, which
+    # no other badge uses.
+    "link":      {"label": "Link",      "fg": "#0F766E", "bg": "#CCFBF1", "line": "#5EEAD4"},
     "image":     {"label": "Photo",     "fg": "#065F46", "bg": "#D1FAE5", "line": "#6EE7B7"},
     # The headings of a list that "Filter and arrange" has sorted - "Hindi",
     # "Dainik Jagran" - which are not files at all.
