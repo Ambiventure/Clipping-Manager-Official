@@ -297,7 +297,8 @@ class Result(QFrame):
     picked = Signal(int)
     ticked = Signal()
 
-    def __init__(self, number: int, row, which: str, says: str, parent=None):
+    def __init__(self, number: int, row, which: str, says: str, parent=None,
+                 where: str = ""):
         super().__init__(parent)
         self.row_id = row.id
         self.number = number
@@ -346,7 +347,9 @@ class Result(QFrame):
             f" font-size: {theme.reading_size(says, 12)}px;"
             " font-weight: 600;")
         head.setWordWrap(False)
-        said_where = QLabel(which)
+        # Where it is, when the number alone does not say: on the board's four
+        # columns every column counts from 1, so "3" is three clippings.
+        said_where = QLabel(f"{which}  ·  {where}" if where else which)
         said_where.setStyleSheet(
             f"color: {theme.MUTED}; font-size: 10px; font-weight: 700;")
         words.addWidget(head)
@@ -375,6 +378,16 @@ class FindBox(QFrame):
     #: (menu, row ids) - the Move to menu is opening; the window fills it,
     #: because only the window knows which files are in the list.
     moveMenuOpening = Signal(object, list)
+
+    PRIORITY_TIP = ("Give every ticked result the same priority - or clear "
+                    "it. They move to where that priority sits in the list, "
+                    "as one step that Ctrl+Z takes back.")
+    TOP_TIP = ("Send the ticked results to the top of the list, in the order "
+               "they are in now.")
+    BOTTOM_TIP = ("Send the ticked results to the bottom of the list, in the "
+                  "order they are in now.")
+    MOVE_TIP = ("Move the ticked results into another file's group, at its "
+                "end - exactly as Move to on the selection bar does.")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -441,27 +454,20 @@ class FindBox(QFrame):
         # doing something to them should not mean finding them all again in
         # a list of a hundred and sixty.
         self.priority_btn = QPushButton("Priority ▾")
-        self.priority_btn.setToolTip(
-            "Give every ticked result the same priority - or clear it. They "
-            "move to where that priority sits in the list, as one step that "
-            "Ctrl+Z takes back.")
+        self.priority_btn.setToolTip(self.PRIORITY_TIP)
         self.priority_menu = QMenu(self)
         self.priority_menu.aboutToShow.connect(self._fill_priority)
         self.priority_btn.setMenu(self.priority_menu)
         self.top_btn = QPushButton("Top")
-        self.top_btn.setToolTip("Send the ticked results to the top of the "
-                                "list, in the order they are in now.")
+        self.top_btn.setToolTip(self.TOP_TIP)
         self.top_btn.clicked.connect(
             lambda: self.arrangeWanted.emit(self.chosen(), "top"))
         self.bottom_btn = QPushButton("Bottom")
-        self.bottom_btn.setToolTip("Send the ticked results to the bottom of "
-                                   "the list, in the order they are in now.")
+        self.bottom_btn.setToolTip(self.BOTTOM_TIP)
         self.bottom_btn.clicked.connect(
             lambda: self.arrangeWanted.emit(self.chosen(), "bottom"))
         self.move_btn = QPushButton("Move to ▾")
-        self.move_btn.setToolTip(
-            "Move the ticked results into another file's group, at its end - "
-            "exactly as Move to on the selection bar does.")
+        self.move_btn.setToolTip(self.MOVE_TIP)
         self.move_menu = QMenu(self)
         self.move_menu.setToolTipsVisible(True)
         self.move_menu.aboutToShow.connect(
@@ -500,6 +506,10 @@ class FindBox(QFrame):
         body.setContentsMargins(10, 9, 10, 10)
         body.addWidget(self.area, 1)
         outer.addLayout(body, 1)
+        #: Whether Priority, Top, Bottom and Move to can act here. They act on
+        #: a LIST - the press report's, or a category of the board opened out
+        #: as one - and over the board's four columns of cards there is none.
+        self.list_actions = True
         self.hide()
 
     #: Every result on show, in order.
@@ -546,12 +556,19 @@ class FindBox(QFrame):
         self.priority_menu.addAction("Clear priority").triggered.connect(
             lambda _c=False: self.priorityWanted.emit(self.chosen(), 0))
 
+    #: Said on the four buttons while there is no list for them to act on.
+    NO_LIST = ("Open a category as a list first - over the four columns of "
+               "cards there is no list order to change.")
+
     def _count_changed(self) -> None:
         many = len(self.chosen())
         self.shift_btn.setEnabled(bool(many))
-        for button in (self.priority_btn, self.top_btn, self.bottom_btn,
-                       self.move_btn):
-            button.setEnabled(bool(many))
+        for button, tip in ((self.priority_btn, self.PRIORITY_TIP),
+                            (self.top_btn, self.TOP_TIP),
+                            (self.bottom_btn, self.BOTTOM_TIP),
+                            (self.move_btn, self.MOVE_TIP)):
+            button.setEnabled(bool(many) and self.list_actions)
+            button.setToolTip(tip if self.list_actions else self.NO_LIST)
         self.all_btn.setText("Select all" if not self.results()
                              or not all(r.tick.isChecked()
                                         for r in self.results())
@@ -575,7 +592,10 @@ class FindBox(QFrame):
             action.triggered.connect(
                 lambda _c=False, n=number: self.shiftWanted.emit(self.chosen(), n))
 
-    def show_results(self, found: list, numbers) -> None:
+    def show_results(self, found: list, numbers, places=None,
+                     list_actions: bool = True) -> None:
+        """``places``: row id -> a word on where it is, or None for none."""
+        self.list_actions = bool(list_actions)
         while self.column.count() > 1:
             item = self.column.takeAt(0)
             widget = item.widget()
@@ -589,7 +609,9 @@ class FindBox(QFrame):
                 + (f", showing the first {MOST_RESULTS}"
                    if len(found) >= MOST_RESULTS else ""))
         for row, which, says in found:
-            result = Result(numbers(row.id), row, which, says, self.holder)
+            where = places(row.id) if places is not None else ""
+            result = Result(numbers(row.id), row, which, says, self.holder,
+                            where=where or "")
             result.picked.connect(self.picked.emit)
             result.ticked.connect(self._count_changed)
             self.column.insertWidget(self.column.count() - 1, result)
@@ -683,6 +705,9 @@ class FindBar(QWidget):
     priorityWanted = Signal(list, int)
     arrangeWanted = Signal(list, str)
     moveMenuOpening = Signal(object, list)
+    #: The results were put away - the field emptied, or down to one letter.
+    #: The preview stops walking them then: there are none on screen.
+    closed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -765,11 +790,37 @@ class FindBar(QWidget):
         self.box = None
         self._rows = lambda: []
         self._numbers = lambda _id: 0
+        self._places = None
+        self._list_actions = lambda: True
 
-    def serve(self, rows, numbers) -> None:
-        """Where the clippings come from, and what each one is numbered."""
+    def serve(self, rows, numbers, places=None, list_actions=None) -> None:
+        """Where the clippings come from, and what each one is numbered.
+
+        ``places`` names where a result is when its number alone does not;
+        ``list_actions`` says whether the results' Priority, Top, Bottom and
+        Move to have a list to act on. Both are asked at every search, since
+        the answer changes with what is on screen.
+        """
         self._rows = rows
         self._numbers = numbers
+        self._places = places
+        if list_actions is not None:
+            self._list_actions = list_actions
+
+    def result_ids(self) -> list:
+        """The results on show, in their order - empty when the box is shut."""
+        box = self.box
+        if box is None or not box.isVisible():
+            return []
+        return [result.row_id for result in box.results()]
+
+    def look_again(self) -> None:
+        """Search again because what is on screen changed - the other
+        interface, another division, a category opened or closed. Only while
+        results are up: a shut box stays shut."""
+        box = self.box
+        if box is not None and box.isVisible():
+            self._look()
 
     def _ensure_box(self):
         if self.box is None:
@@ -806,7 +857,10 @@ class FindBar(QWidget):
 
     def close_box(self) -> None:
         if self.box is not None:
+            was = self.box.isVisible()
             self.box.hide()
+            if was:
+                self.closed.emit()
 
     def _look(self) -> None:
         wanted = self.field.text().strip()
@@ -815,7 +869,11 @@ class FindBar(QWidget):
             return
         found = search(self._rows(), wanted)
         box = self._ensure_box()
-        box.show_results(found, self._numbers)
+        try:
+            acts = bool(self._list_actions())
+        except Exception:  # noqa: BLE001 - a question, never a crash
+            acts = True
+        box.show_results(found, self._numbers, self._places, acts)
         self._place()
         # Remembered only when it found something. A search that matched
         # nothing is not worth offering back, and half a word typed on the way

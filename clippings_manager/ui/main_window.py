@@ -306,6 +306,9 @@ class MainWindow(QMainWindow):
         # (the clipping the preview is on, the one that was below it when it
         # got there). See _remember_after.
         self._preview_at: tuple = (None, None)
+        # (pool, [row ids]) while the preview walks search results - opened
+        # from one - and None while it walks the list. See _go_to_clip.
+        self._found_walk = None
         self._group_serial = itertools.count(1)
         self._last_clicked_id: int | None = None
         # The other end of a shift-click run in a board category's list. Its
@@ -784,7 +787,13 @@ class MainWindow(QMainWindow):
         standard = QWidget()
         # Built here because the strip below is laid out before the panel that
         # creates the rest of it, and this has to be in hand to be pinned.
+        #
+        # ABOVE BOTH INTERFACES, not on the press report's page. On that page
+        # the board had no search at all: the preview's "find this headline"
+        # typed into a field nobody could see. One field, pinned in the same
+        # place on both, looking through whichever interface is on show.
         self.find_bar = findbar.FindBar()
+        layout.addWidget(self.find_bar)
         standard_layout = QVBoxLayout(standard)
         standard_layout.setContentsMargins(0, 0, 0, 0)
         standard_layout.setSpacing(0)
@@ -845,7 +854,6 @@ class MainWindow(QMainWindow):
         self.list.follow_content(True)
         # The search field sits above the page and does not scroll with it -
         # see where it is built.
-        standard_layout.addWidget(self.find_bar)
         standard_layout.addWidget(self.body_scroll, 1)
         self.list.hide()
         self.pages.addWidget(standard)
@@ -1346,9 +1354,11 @@ class MainWindow(QMainWindow):
         # flip above it when they ran out of room, which read as a glitch.
         # Pinned, the field is always in the same place, the results always
         # hang downwards, and they have the whole window to fill.
-        self.find_bar.serve(lambda: list(self.pool().rows),
-                            lambda row_id: self.pool().number_of(row_id))
+        self.find_bar.serve(self._find_rows, self._find_number,
+                            places=self._find_place,
+                            list_actions=lambda: self._list_pool() is not None)
         self.find_bar.picked.connect(self._go_to_clip)
+        self.find_bar.closed.connect(self._found_closed)
         self.find_bar.shiftWanted.connect(self._shift_found_to)
         self.find_bar.priorityWanted.connect(self._found_priority)
         self.find_bar.arrangeWanted.connect(self._found_arrange)
@@ -2119,6 +2129,9 @@ class MainWindow(QMainWindow):
             functools.partial(self._on_label_edited, pool=board_pool))
         listed.urlEdited.connect(
             functools.partial(self._on_url_edited, pool=board_pool))
+        # A reading corrected in the category's OCR box. It was never
+        # connected, and a correction typed there was dropped without a word.
+        listed.readEdited.connect(self._ocr_corrected)
         listed.previewRequested.connect(self.open_preview)
         listed.reorderRequested.connect(
             functools.partial(self._on_reorder, pool=board_pool))
@@ -2179,6 +2192,10 @@ class MainWindow(QMainWindow):
         # Anything that changes a clipping goes through one of these.
         self.model.countsChanged.connect(self.touch_session)
         self.board_model.countsChanged.connect(self.touch_session)
+        # Clippings arriving while the OCR headline is on are read for it -
+        # nothing at all while it is off. See _fill_readings.
+        self.model.countsChanged.connect(self._fill_soon)
+        self.board_model.countsChanged.connect(self._fill_soon)
         self.undo_stack.indexChanged.connect(lambda _i: self.touch_session())
         self.board_undo.indexChanged.connect(lambda _i: self.touch_session())
         # A step done, undone or done again can take a paper's last clipping
@@ -2211,6 +2228,10 @@ class MainWindow(QMainWindow):
         self.board.urlEdited.connect(self._on_board_url)
         self.board.cardDeleted.connect(self._on_board_delete)
         self.board.cardRotated.connect(self._on_board_rotate)
+        # A card's OCR strip does what the list's OCR box does.
+        self.board.ocrEdited.connect(self._ocr_corrected)
+        self.board.rereadRequested.connect(self._reread_headline)
+        self.board.findReadRequested.connect(self._find_reading)
         # Deliberately NOT connected to _update_counts: the dossier cover does
         # not change any clipping count, and routing it through the recount put
         # set_division and _touch in a loop.
@@ -3212,6 +3233,11 @@ class MainWindow(QMainWindow):
             self._sync_english_button()
             self._update_selection_ui()
             self._place_floating()
+        # What the search looks through on the board is what the board shows,
+        # and that has just changed. After the scope, which it reads.
+        bar = getattr(self, "find_bar", None)
+        if self.mode == "sentiment" and bar is not None:
+            bar.look_again()
         # Collect's bar names the column a collected photo goes in, which is
         # the one opened out.
         collector = getattr(self, "collector", None)
@@ -3844,14 +3870,71 @@ class MainWindow(QMainWindow):
             said += f" The rest stopped: {trouble}"
         self._flash(said, "good" if not trouble else "bad")
 
+    # ------------------------------------------------------------ the search
+    def _board_list_open(self) -> bool:
+        """Whether the board is on show with a category opened out as a list."""
+        board = getattr(self, "board", None)
+        return (self.mode == "sentiment" and board is not None
+                and bool(board.focused)
+                and getattr(self.board_model, "scope", None) is not None)
+
+    def _find_rows(self) -> list:
+        """What the search looks through: what the interface on show holds.
+
+        The press report: every clipping in its list, as it always has. The
+        board: what the board is showing for the division on show - the
+        category opened out as a list, or else all the columns' cards, column
+        by column. A result from another division would open a clipping that
+        is nowhere on screen.
+        """
+        if self.mode != "sentiment":
+            return list(self.model.rows)
+        if self._board_list_open():
+            return list(self.board_model.scoped_rows())
+        board = getattr(self, "board", None)
+        return board.shown_rows() if board is not None else []
+
+    def _find_number(self, row_id: int) -> int:
+        """A result's number: the one its row or its card carries."""
+        if self.mode != "sentiment":
+            return self.model.number_of(row_id)
+        if self._board_list_open():
+            return self.board_model.number_of(row_id)
+        board = getattr(self, "board", None)
+        return board.card_place(row_id)[1] if board is not None else 0
+
+    def _find_place(self, row_id: int) -> str:
+        """Which column a result's card is in, over the board's four columns -
+        where every column counts from 1."""
+        if self.mode != "sentiment" or self._board_list_open():
+            return ""
+        board = getattr(self, "board", None)
+        return board.card_place(row_id)[0] if board is not None else ""
+
     def _go_to_clip(self, row_id: int) -> None:
         """Scroll the list to a clipping and open it - what picking a search
         result does. The clipping is not selected or ticked: finding one is
-        not the same as choosing it."""
+        not the same as choosing it.
+
+        The preview then walks THE RESULTS: Next is the next result, and
+        after the last comes the first again. They are taken in the order the
+        box shows them as the result is picked, and that order is kept, so a
+        priority given on the way - which moves the clipping in the list - does
+        not change which result comes next.
+        """
         pool = self.pool()
         if pool.row_for(row_id) is None:
             return
-        view = self.list if self.mode == "standard" else None
+        found = self.find_bar.result_ids()
+        if self.mode == "sentiment":
+            board = getattr(self, "board", None)
+            if self._board_list_open():
+                self._reveal_in_board_list(row_id)
+            elif board is not None:
+                board.reveal_card(row_id)
+            self.open_preview(row_id, found=found)
+            return
+        view = self.list
         if view is not None:
             try:
                 # The list is one long page of entries; the clipping's own
@@ -3866,7 +3949,19 @@ class MainWindow(QMainWindow):
                         break
             except Exception:  # noqa: BLE001 - a view that cannot, still opens
                 pass
-        self.open_preview(row_id)
+        self.open_preview(row_id, found=found)
+
+    def _found_closed(self) -> None:
+        """The results were put away: the preview walks the list again, from
+        where it is."""
+        if getattr(self, "_found_walk", None) is None:
+            return
+        self._found_walk = None
+        preview = self.preview
+        if preview is not None and preview.isVisible() and preview.row is not None:
+            here = preview.row.id
+            self._refresh_preview(here)
+            self._remember_after(here)
 
     def _say_last_action(self) -> None:
         """The last thing done on the interface that is open.
@@ -4153,10 +4248,15 @@ class MainWindow(QMainWindow):
             class _Relay(QObject):
                 done = Signal(int, str, int, str, str)
                 boxed = Signal(int, str)
+                # The OCR field's own reading - see _fill_readings.
+                filled = Signal(object)
+                fill_ended = Signal(int)
 
             relay = self._relay = _Relay(self)
             relay.done.connect(self._reread_done)
             relay.boxed.connect(self._box_done)
+            relay.filled.connect(self._reading_filled)
+            relay.fill_ended.connect(self._fill_ended)
         return relay
 
     def _reread_done(self, clip_id: int, text: str, confidence: int,
@@ -4183,6 +4283,10 @@ class MainWindow(QMainWindow):
             preview.find_read_btn.setEnabled(bool(now))
             preview.told("Read again" if now else "Nothing could be read")
         pool.refresh_all()
+        # A card's OCR strip reads the clipping itself: a repaint is enough.
+        board = getattr(self, "board", None)
+        if board is not None:
+            board.repaint_cards()
         self.touch_session()
         if not now:
             self._flash("Nothing could be read off that picture.", "info")
@@ -4234,8 +4338,20 @@ class MainWindow(QMainWindow):
                 view.viewport().update()
             except Exception:  # noqa: BLE001 - a view that is not there yet
                 pass
+        # The board's cards carry the OCR headline too, on a strip of their
+        # own - a strip taller while it is on.
+        board = getattr(self, "board", None)
+        if board is not None:
+            board.ocr_switched()
         if self.preview is not None:
             self.preview.show_ocr(on)
+        # Something to show in it: what nobody has read yet is read now, and
+        # reading for the field stops the moment it is switched off. The
+        # duplicate check is not touched either way - see _fill_readings.
+        if on:
+            self._fill_soon()
+        else:
+            self._stop_fill()
         self._flash("OCR headline shown" if on else
                    "OCR headline hidden - the duplicate check still reads "
                    "the pictures")
@@ -4261,7 +4377,272 @@ class MainWindow(QMainWindow):
             # Emptied on purpose: let the next check read the picture again.
             row.clip.ocr_engine = ""
             row.clip.headline_confidence = 0
+            # But not the OCR field's own reading, straight back into the box
+            # that was just emptied - see _fill_readings.
+            self._fill_skip.add(row.clip.uid)
         self.touch_session()
+        # Shown wherever else this clipping is on screen: corrected on a card,
+        # it is corrected in the open preview, and the other way round.
+        preview = self.preview
+        if (preview is not None and preview.isVisible()
+                and preview.row is not None and preview.row.id == clip_id
+                and preview.ocr_edit.text() != words):
+            preview.ocr_edit.setText(words)
+            preview.find_read_btn.setEnabled(bool(words.strip()))
+        self._readings_changed()
+
+    # ------------------------------------------ the OCR field's own reading
+    #: How long after the last change the clippings with no reading are
+    #: gathered up - so forty arriving at once are one pass, not forty.
+    FILL_SETTLE_MS = 1500
+    #: How often a paused reading looks to see whether the check is done.
+    FILL_WAIT_S = 0.25
+
+    @property
+    def _fill_skip(self) -> set:
+        """Uids emptied by hand, which the OCR field does not read again."""
+        return self.__dict__.setdefault("_fill_skipped", set())
+
+    def _readings_changed(self) -> None:
+        """A reading arrived or was corrected: the lists and the cards show it.
+
+        Once, a moment later, however many arrived: a row with a reading is a
+        box taller than one without (see delegates.reading_for), so the lists
+        are laid out again, and on a hundred and sixty rows that is not a
+        thing to do per keystroke or per clipping read.
+        """
+        timer = getattr(self, "_readings_timer", None)
+        if timer is None:
+            timer = self._readings_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(250)
+            timer.timeout.connect(self._show_readings)
+        timer.start()
+
+    def _show_readings(self) -> None:
+        if self._gone():
+            return
+        for view in (self.list, getattr(self.board, "focus_list", None)):
+            if view is None:
+                continue
+            try:
+                view.scheduleDelayedItemsLayout()
+                view.viewport().update()
+            except Exception:  # noqa: BLE001 - a view that is not there yet
+                pass
+        board = getattr(self, "board", None)
+        if board is not None:
+            board.repaint_cards()
+
+    def _fill_running(self) -> bool:
+        stop = getattr(self, "_fill_stop", None)
+        return stop is not None and not stop.is_set()
+
+    def _fill_soon(self) -> None:
+        """Ask for the OCR field's reading, once things have settled."""
+        if not ocrfield.is_on() or self._gone():
+            return
+        timer = getattr(self, "_fill_timer", None)
+        if timer is None:
+            timer = self._fill_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(self.FILL_SETTLE_MS)
+            timer.timeout.connect(self._fill_readings)
+        timer.start()
+
+    def _stop_fill(self) -> None:
+        """Stop reading for the OCR field. What it has read stays read; what
+        is still on its way is dropped (the generation is over)."""
+        timer = getattr(self, "_fill_timer", None)
+        if timer is not None:
+            timer.stop()
+        stop = getattr(self, "_fill_stop", None)
+        if stop is not None:
+            stop.set()
+        self._fill_stop = None
+        self._fill_again = False
+        self._fill_gen = getattr(self, "_fill_gen", 0) + 1
+
+    def _wants_reading(self, row) -> bool:
+        """A clipping never read at all - no words, no reader's stamp.
+
+        A reading the check made, even an empty one, is its business and is
+        left alone; so is one corrected by hand, one being read again this
+        moment, and one emptied by hand.
+        """
+        clip = getattr(row, "clip", None)
+        if clip is None or not getattr(clip, "image_bytes", b""):
+            return False
+        if str(getattr(clip, "ocr_text", "") or "").strip():
+            return False
+        if str(getattr(clip, "ocr_engine", "") or ""):
+            return False
+        if clip.uid in self._fill_skip:
+            return False
+        return row.id not in self.__dict__.get("_reading_now", set())
+
+    def _fill_readings(self) -> None:
+        """Read the headline off every clipping on show that has none.
+
+        FOR THE OCR FIELD ALONE, and only while it is switched on. The
+        duplicate check reads a clipping only when a comparison needs it: a
+        division's file on its own reads nothing, and the board's four
+        columns are never compared at all. So with the switch on, the OCR boxes
+        stood empty on exactly the clippings nobody had compared - which, on
+        the board, was nearly every one. This reads those.
+
+        IT NEVER CHANGES THE DUPLICATE CHECK. It stands aside whenever the
+        check is reading; it reads the same picture (``image_bytes``) with
+        the same reader, so a reading it leaves is the one the check would have
+        made; and it writes only onto a clipping that still has no reading
+        when the answer comes back. Switched off, it stops - and the check
+        goes on exactly as it always has. The switch is off at every start, so
+        until somebody turns it on this never runs at all.
+
+        The interface on show first, the division on show first on the board:
+        what is on screen fills in first.
+        """
+        if not ocrfield.is_on() or self._gone():
+            return
+        if self._fill_running():
+            self._fill_again = True       # once this one ends
+            return
+        from ..core import ocrworker
+
+        if not ocr.available():
+            return
+        rows: list = []
+        seen: set = set()
+        board = getattr(self, "board", None)
+        if self.mode == "sentiment":
+            first = board.shown_rows() if board is not None else []
+            order = [*first, *self.board_model.rows, *self.model.rows]
+        else:
+            order = [*self.model.rows, *self.board_model.rows]
+        for row in order:
+            if row.id in seen:
+                continue
+            seen.add(row.id)
+            if self._wants_reading(row):
+                rows.append(row)
+        if not rows:
+            return
+        # The clipping goes along only to be LOOKED at, never written to: just
+        # before its turn, whether the check has read it in the meantime - a
+        # morning's import is read by the check while this waits, and reading
+        # all of it a second time would be a minute and a half for nothing.
+        work = [(row.clip.uid, row.clip.image_bytes, row.clip) for row in rows]
+
+        # A reader of this process's own only when no helper will start -
+        # built here, on the window's thread, as it must be (see reader.py).
+        engine = None
+        if not ocrworker.available():
+            made = ocr.build_engines(1)
+            engine = made[0] if made else None
+            if engine is None:
+                return
+        self._fill_gen = getattr(self, "_fill_gen", 0) + 1
+        gen = self._fill_gen
+        import threading
+        import time
+        from collections import deque
+
+        stop = threading.Event()
+        self._fill_stop = stop
+        self._fill_again = False
+        relay = self._reading_relay()
+        queue = deque(work)
+        lock = threading.Lock()
+        lanes = 1 if engine is not None else max(1, min(ocrworker.MOST, len(work)))
+        left = [lanes]
+
+        def lane():
+            try:
+                while not stop.is_set():
+                    # The duplicate check first: while it reads, this waits,
+                    # so the check has every helper it would have had.
+                    while self._duplicates_running and not stop.is_set():
+                        time.sleep(self.FILL_WAIT_S)
+                    with lock:
+                        if stop.is_set() or not queue:
+                            break
+                        uid, data, clip = queue.popleft()
+                    if (str(getattr(clip, "ocr_text", "") or "").strip()
+                            or getattr(clip, "ocr_engine", "")
+                            or getattr(clip, "image_bytes", None) is not data):
+                        continue            # read, or changed, meanwhile
+                    if stop.is_set():
+                        # Asked again at the last moment: a helper asked for
+                        # after the window has closed would be started afresh.
+                        break
+                    try:
+                        if engine is None:
+                            found = ocrworker.read_headline(data)
+                        else:
+                            found = ocr.headline_with(engine, data)
+                    except Exception:  # noqa: BLE001 - it will not read
+                        found = None
+                    if found is None or stop.is_set():
+                        continue
+                    try:
+                        relay.filled.emit((gen, uid, found.text,
+                                           int(found.confidence),
+                                           found.engine or "", data))
+                    except RuntimeError:     # the window has gone
+                        break
+            finally:
+                with lock:
+                    left[0] -= 1
+                    last = left[0] == 0
+                if last:
+                    if engine is not None:
+                        ocr.close_engines([engine])
+                    try:
+                        relay.fill_ended.emit(gen)
+                    except RuntimeError:
+                        pass
+
+        for number in range(lanes):
+            threading.Thread(target=lane, name=f"ocr-field-{number}",
+                             daemon=True).start()
+
+    def _reading_filled(self, got) -> None:
+        """One reading for the OCR field, back on the window's thread."""
+        gen, uid, text, confidence, engine, data = got
+        if gen != getattr(self, "_fill_gen", 0) or self._gone():
+            return
+        clip = None
+        for pool in (self.model, self.board_model):
+            for row in pool.rows:
+                if row.clip is not None and row.clip.uid == uid:
+                    clip = row.clip
+                    break
+            if clip is not None:
+                break
+        # Deleted; its picture turned or trimmed while it was read; or read
+        # meanwhile - by the check, or by hand. Each keeps what it has.
+        if (clip is None or clip.image_bytes is not data
+                or str(clip.ocr_text or "").strip() or clip.ocr_engine
+                or uid in self._fill_skip):
+            return
+        clip.ocr_text = text
+        clip.headline_confidence = confidence
+        clip.ocr_engine = engine or ocr.stamp()
+        preview = self.preview
+        if (preview is not None and preview.isVisible()
+                and preview.row is not None and preview.row.clip is clip):
+            preview.ocr_edit.setText(str(text or "").strip())
+            preview.find_read_btn.setEnabled(bool(str(text or "").strip()))
+        self._readings_changed()
+        self.touch_session()
+
+    def _fill_ended(self, gen: int) -> None:
+        if gen != getattr(self, "_fill_gen", 0):
+            return
+        self._fill_stop = None
+        if getattr(self, "_fill_again", False) and not self._gone():
+            self._fill_again = False
+            self._fill_soon()
 
     def _copy_clip_picture(self, clip_id: int) -> None:
         """This clipping's picture, as it prints, on the clipboard.
@@ -4337,16 +4718,22 @@ class MainWindow(QMainWindow):
         """Whichever pool the open preview belongs to."""
         return getattr(self, "preview_model", None) or self.model
 
-    def open_preview(self, clip_id: int) -> None:
+    def open_preview(self, clip_id: int, found: list | None = None) -> None:
+        """``found``: the search results it was picked from, in order - the
+        preview then walks those alone (see _go_to_clip). Opened any other
+        way - the list, a card, the clipping a repeat is beside - it walks the
+        list again."""
         # Opened from the list and from a board card, so the id could belong to
         # either pool.
         model = self.pool_for(clip_id)
         if model is None:
             return
-        self.preview_model = model
         row = model.row_for(clip_id)
         if row is None:
             return
+        self.preview_model = model
+        self._found_walk = ((model, list(found))
+                            if found and clip_id in found else None)
         if self.preview is None:
             self.preview = PreviewDialog(model, self)
             self.preview.fieldChanged.connect(self._preview_field)
@@ -4390,7 +4777,8 @@ class MainWindow(QMainWindow):
         # The counter must count what is on screen. With a filter on it used to
         # read "3 / 40" while the list showed nine.
         position = (at + 1) if at is not None else 0
-        self.preview.show_row(row, position, len(walk))
+        self.preview.show_row(row, position, len(walk),
+                              found=self._found_rows() is not None)
         # Opening on a clipping is arriving at a place in the list.
         self._remember_after(clip_id)
         self.preview.show()
@@ -4402,7 +4790,8 @@ class MainWindow(QMainWindow):
         if self.preview and self.preview.isVisible() and row is not None:
             at, walk = self._preview_place(clip_id)
             self.preview.show_row(
-                row, (at + 1) if at is not None else 0, len(walk))
+                row, (at + 1) if at is not None else 0, len(walk),
+                found=self._found_rows() is not None)
             # Arriving at another clipping fixes a new place; drawing the same
             # one again - after a priority, a trim, a rename - does not.
             if clip_id != self._preview_at[0]:
@@ -4490,6 +4879,24 @@ class MainWindow(QMainWindow):
             return
         pool = self._preview_pool()
         position = pool.position_of(clip_id)
+        found = self._found_rows()
+        if found is not None and any(row.id == clip_id for row in found):
+            # Walking search results: the next result takes its place - the
+            # first again after the last one - never the list's next row.
+            at = next(i for i, row in enumerate(found) if row.id == clip_id)
+            self._preview_stack().push(commands.RemoveClips(pool, [clip_id]))
+            rest = self._found_rows()
+            if rest:
+                self._refresh_preview(rest[at % len(rest)].id)
+                return
+            # That was the last of them: the list again, from where it was.
+            self._found_walk = None
+            if pool.rows:
+                following = pool.rows[min(position, len(pool.rows) - 1)]
+                self._refresh_preview(following.id)
+            elif self.preview:
+                self.preview.close()
+            return
         if getattr(pool, "scope", None) is None:
             # The press report, and a card's preview over four columns: the
             # pool's own next row, filter or not, as it has always been.
@@ -4549,7 +4956,20 @@ class MainWindow(QMainWindow):
 
     def _preview_split(self, clip_id: int) -> None:
         at, _walk = self._preview_place(clip_id)
-        self._preview_stack().push(commands.Split(self._preview_pool(), clip_id))
+        pool = self._preview_pool()
+        walking = self._found_walk if self._found_rows() is not None else None
+        before, count = pool.position_of(clip_id), len(pool.rows)
+        self._preview_stack().push(commands.Split(pool, clip_id))
+        if walking is not None and clip_id in walking[1] and before is not None \
+                and before >= 0:
+            # Its two halves take its place among the results, as they take
+            # its place in the list - new clippings, with ids of their own.
+            grown = len(pool.rows) - count + 1
+            pieces = [row.id for row in pool.rows[before:before + grown]]
+            ids = walking[1]
+            where = ids.index(clip_id)
+            self._found_walk = (walking[0],
+                                ids[:where] + pieces + ids[where + 1:])
         walk = self._preview_walk()
         if at is not None and 0 <= at < len(walk):
             self._refresh_preview(walk[at].id)
@@ -4562,6 +4982,10 @@ class MainWindow(QMainWindow):
         preview was walking were two different things, and with a filter on the
         arrows wandered off through clippings nobody could see.
         """
+        found = self._found_rows()
+        if found is not None:
+            # Opened from a search result: the results, and nothing else.
+            return found
         pool = self._preview_pool()
         shown = pool.visible_rows() if hasattr(pool, "visible_rows") else None
         if shown is not None and getattr(pool, "scope", None) is not None:
@@ -4570,6 +4994,24 @@ class MainWindow(QMainWindow):
             # is not what was on screen.
             return list(shown)
         return list(shown) if shown else list(pool.rows)
+
+    def _found_rows(self):
+        """The search results the preview is walking, as the rows still here -
+        or None while it walks the list.
+
+        Rows, not the ids: a result deleted on the way is stepped over rather
+        than stepped onto. Only for the pool the preview is in; and once every
+        result has gone, the list is walked again rather than nothing.
+        """
+        walk = getattr(self, "_found_walk", None)
+        if not walk:
+            return None
+        pool, ids = walk
+        if pool is not self._preview_pool():
+            return None
+        rows = [pool.row_for(row_id) for row_id in ids]
+        rows = [row for row in rows if row is not None]
+        return rows or None
 
     def _preview_place(self, row_id: int):
         """Where this clipping sits in the walk, or None if it is filtered out."""
@@ -4593,6 +5035,10 @@ class MainWindow(QMainWindow):
         """
         at, walk = self._preview_place(row_id)
         after = walk[at + 1].id if at is not None and at + 1 < len(walk) else None
+        if (at is not None and after is None and len(walk) > 1
+                and self._found_rows() is not None):
+            # Search results go round: after the last, the first again.
+            after = walk[0].id
         self._preview_at = (row_id, after)
 
     def _preview_priority(self, row_id: int, level: int) -> None:
@@ -4638,7 +5084,11 @@ class MainWindow(QMainWindow):
             self._refresh_preview(walk[0 if step > 0 else -1].id)
             return
         position = at + step
-        if 0 <= position < len(walk):
+        if self._found_rows() is not None and walk:
+            # Search results go round, both ways: Next on the last result is
+            # the first, and Previous on the first is the last.
+            position %= len(walk)
+        if 0 <= position < len(walk) and position != at:
             self._refresh_preview(walk[position].id)
 
     # ------------------------------------------------------- context menu
@@ -4848,6 +5298,14 @@ class MainWindow(QMainWindow):
         # The navy bar follows the list on show: the report's ticks in the
         # report, a category's in its list, and nothing over four columns.
         self._update_selection_ui()
+
+        # The search field is the same on both, and what it looks through is
+        # not: results up from the other interface are looked for again here.
+        bar = getattr(self, "find_bar", None)
+        if bar is not None:
+            bar.look_again()
+        # With the OCR headline on, the interface now on show is read first.
+        self._fill_soon()
 
         self.mode_badge.setText(
             "Division sentiment" if sentiment_mode else "Daily newspad"
@@ -7097,6 +7555,9 @@ class MainWindow(QMainWindow):
         generation it belongs to is over.
         """
         pending = ""
+        # The OCR field's reading is for the clippings on screen, and these
+        # are about to leave it. It is asked for again by the ones that come.
+        self._stop_fill()
         timer = self._duplicate_timer
         if timer is not None and timer.isActive():
             timer.stop()
@@ -7616,6 +8077,9 @@ class MainWindow(QMainWindow):
         # Before anything else, so a background pass that finishes during the
         # close finds the door shut rather than a half-deleted window.
         self._closing = True
+        # The OCR field's reading, which asks nothing more of the helpers once
+        # told - they are about to be stopped.
+        self._stop_fill()
         collector = getattr(self, "collector", None)
         if collector is not None:
             collector.stop("closing")

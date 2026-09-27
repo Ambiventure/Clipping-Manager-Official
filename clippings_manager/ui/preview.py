@@ -176,6 +176,7 @@ class PreviewDialog(QDialog):
         self._connected = False
         self._zoom_index = ZOOM_STEPS.index(1.0)
         self._position = self._total = 0
+        self._found = False
         self._pixmap: QPixmap | None = None
 
         self.setWindowTitle("Clipping")
@@ -784,7 +785,10 @@ class PreviewDialog(QDialog):
             f" border-top: 1px solid #26324A; }}"
             f"QLabel {{ color: #94A3B8; font-size: 11px; background: transparent; }}"
             f"QLineEdit, QComboBox {{ background: #1E293B; border: 1px solid #33415A;"
-            f" border-radius: 8px; padding: 7px 9px; color: #E2E8F0; font-size: 12px; }}"
+            f" border-radius: 8px; padding: 7px 9px; color: #E2E8F0; font-size: 12px;"
+            # Words picked out with the mouse, in yellow - see theme.HIGHLIGHT.
+            f" selection-background-color: {theme.HIGHLIGHT};"
+            f" selection-color: {theme.HIGHLIGHT_INK}; }}"
             f"QLineEdit:focus, QComboBox:focus {{ border-color: {theme.ORANGE}; }}"
             # The popup comes from theme.py by name now. Written by hand here,
             # it set a selection background and no selection colour - and Qt
@@ -1233,12 +1237,15 @@ class PreviewDialog(QDialog):
             DARK_BUTTON + f"QPushButton {{ color: {now.colour}; }}")
 
     # -------------------------------------------------------------- loading
-    def show_row(self, row, position: int = 0, total: int = 0) -> None:
+    def show_row(self, row, position: int = 0, total: int = 0,
+                 found: bool = False) -> None:
+        """``found``: the arrows are going through search results, not the
+        list - the counter says so, and neither end stops them."""
         self.row = row
         clip = row.clip
         self._loading = True
         # Kept so the view can draw this same clipping again after a trim.
-        self._position, self._total = position, total
+        self._position, self._total, self._found = position, total, found
         if self.canvas.trimming:
             self.canvas.stop_trim()
             self._show_trim_buttons(False)
@@ -1261,8 +1268,18 @@ class PreviewDialog(QDialog):
         self.provenance.setText("  ·  ".join(str(b) for b in bits if b))
         self._show_twin(row)
         self._paint_bubbles(priority_of(clip))
-        if total:
+        if total and found:
+            # Round and round: after the last result comes the first again,
+            # so the buttons never go grey - unless there is only the one.
+            self.position.setText(f"Result {position} of {total}")
+            self.position.setToolTip(
+                "The arrows go through the search results only - after the "
+                "last one comes the first again.")
+            self.prev_btn.setEnabled(total > 1)
+            self.next_btn.setEnabled(total > 1)
+        elif total:
             self.position.setText(f"{position} / {total}")
+            self.position.setToolTip("")
             self.prev_btn.setEnabled(position > 1)
             self.next_btn.setEnabled(position < total)
 
@@ -1507,7 +1524,7 @@ class PreviewDialog(QDialog):
         self._show_trim_buttons(False)
         self.notice.hide()
         if self.row is not None:
-            self.show_row(self.row, self._position, self._total)
+            self.show_row(self.row, self._position, self._total, self._found)
 
     def _trim_moved(self) -> None:
         """What the box is worth, said while it is being dragged."""

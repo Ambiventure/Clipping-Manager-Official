@@ -16,6 +16,41 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.60
+
+Changed
+
+  * **Selected text in the preview is highlighted in yellow.** Words picked
+    out with the mouse in the preview's boxes were dark blue on dark blue
+    and could not be seen. They are now dark on a bright yellow band.
+  * **Next and Previous go through the search results only.** Open a
+    clipping from the search results and the arrow keys and the arrow
+    buttons walk those results, in the order the results list shows them.
+    After the last result comes the first again, and the other way round.
+    The counter says "Result 2 of 5".
+  * **Setting a priority on the way does not change what comes next.** As in
+    the list, Next still goes to the result that was next when you arrived.
+  * **The search field is on the sentiment board too**, in the same place as
+    on the press report. It looks through the cards on show for the
+    division, or through the one category you have opened out. Each result
+    says which column it is in. Its Next and Previous work the same way.
+  * **The OCR headline is on the sentiment board's cards.** While the OCR
+    headline switch in the menu is on, every card has an OCR line with the
+    two round buttons: read the picture again, and find the story. Click the
+    line to correct it. Switched off, the line goes.
+  * **The OCR headline fills itself in while the switch is on.** Clippings
+    that had never been read, on the board and on the press report, are now
+    read in the background so the OCR box has something in it. Nothing is
+    read for it while the switch is off. The duplicate check works exactly
+    as before either way.
+
+Fixed
+
+  * A reading corrected in the OCR box of a category opened out on the board
+    was not kept. It is now.
+
+---
+
 ## 2.0.59
 
 Changed

@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 
 from ..core import sentiment
 from ..core.models import Section
-from . import icons, theme
+from . import icons, ocrfield, theme
 from .clip_list import MIME as ROW_MIME
 from .clip_list import ClipList
 from .fluid import ElidedLabel
@@ -141,7 +141,17 @@ CARD_ACTIONS = 26
 CARD_SECOND = 30
 CARD_HEIGHT = (CARD_PAD * 2 + CARD_HEAD + CARD_IMAGE + CARD_TITLE + CARD_SECOND
                + CARD_ACTIONS + 14)
+# The OCR headline's strip, under the two text strips, while the OCR headline
+# is switched on in the menu - the same switch as the list's OCR box and the
+# preview's OCR line (see ocrfield). The same reading, with the same two round
+# buttons: read the picture again, and find the story with the search.
+CARD_OCR = 30
 CARD_GAP = 10
+
+
+def card_height() -> int:
+    """A card's height: one strip taller while the OCR headline is shown."""
+    return CARD_HEIGHT + (CARD_OCR if ocrfield.is_on() else 0)
 THUMB = 76
 ALL_DIVISIONS = sentiment.ALL_DIVISIONS
 #: Qt's "no ceiling" for a widget's height, which is what the column strip
@@ -212,7 +222,7 @@ def card_geometry(rect: QRect, section: Optional[Section] = None) -> dict:
     the others close the gap rather than leaving a hole where it would be.
     """
     card = QRect(rect.left() + 8, rect.top() + CARD_GAP // 2,
-                 max(140, rect.width() - 18), CARD_HEIGHT)
+                 max(140, rect.width() - 18), card_height())
     inner = card.adjusted(CARD_PAD, CARD_PAD, -CARD_PAD, -CARD_PAD)
 
     y = inner.top()
@@ -237,7 +247,18 @@ def card_geometry(rect: QRect, section: Optional[Section] = None) -> dict:
     # field will occupy, so pressing it does not move anything.
     add = QRect(second.left(), second.top() + 3, 92, 18)
 
-    y = second.bottom() + 8
+    # The OCR headline, only while it is switched on. Under both text strips
+    # rather than between them, so switching it moves nothing but the line of
+    # chips below - the strips a person types into stay where they were.
+    ocr = reread = find_read = QRect()
+    if ocrfield.is_on():
+        y = second.bottom() + 6
+        ocr = QRect(inner.left(), y, inner.width(), CARD_TITLE - 6)
+        find_read = QRect(ocr.right() - 22, ocr.top() + 3, 18, 18)
+        reread = QRect(find_read.left() - 22, ocr.top() + 3, 18, 18)
+        y = ocr.bottom() + 8
+    else:
+        y = second.bottom() + 8
     actions = QRect(inner.left(), y, inner.width(), CARD_ACTIONS - 6)
 
     # The chips take the room between the word "Move:" and the two buttons at
@@ -276,6 +297,7 @@ def card_geometry(rect: QRect, section: Optional[Section] = None) -> dict:
         "clear": clear, "second": second, "clear_second": clear_second,
         "add": add, "actions": actions, "chips": chips, "buttons": buttons,
         "move_label": move_label,
+        "ocr": ocr, "reread": reread, "find_read": find_read,
     }
 
 
@@ -303,7 +325,7 @@ class CardDelegate(QStyledItemDelegate):
         room = CARD_WIDTH
         if isinstance(view, QAbstractItemView):
             room = min(CARD_WIDTH, max(180, view.viewport().width() - 4))
-        return QSize(room, CARD_HEIGHT + CARD_GAP)
+        return QSize(room, card_height() + CARD_GAP)
 
     # ------------------------------------------------------------ hit test
     def fields(self) -> tuple:
@@ -335,6 +357,13 @@ class CardDelegate(QStyledItemDelegate):
             return f"add:{second}"
         if geometry["title"].contains(point):
             return f"field:{first}"
+        # The OCR strip's two round buttons first, since they sit inside it.
+        # Null rectangles while the switch is off, which contain nothing.
+        for name in ("reread", "find_read"):
+            if geometry[name].contains(point):
+                return name
+        if geometry["ocr"].contains(point):
+            return "field:ocr"
 
         for name, box in geometry["chips"]:
             if box.contains(point):
@@ -347,6 +376,8 @@ class CardDelegate(QStyledItemDelegate):
     def field_rect(self, rect: QRect, field: str = "") -> QRect:
         """Where a named strip is drawn, for the editor to sit exactly on it."""
         geometry = card_geometry(rect, self.section)
+        if field == "ocr":
+            return geometry["ocr"]
         first, _second = self.fields()
         return geometry["title"] if (not field or field == first) \
             else geometry["second"]
@@ -406,6 +437,51 @@ class CardDelegate(QStyledItemDelegate):
             QRectF(mark.right() + 4, box.top(), box.width() - 22, box.height()),
             Qt.AlignVCenter | Qt.AlignLeft,
             "Add URL" if field == "url" else "Add title")
+
+    def _paint_ocr(self, painter, geometry: dict, clip, editing: bool) -> None:
+        """The OCR headline's strip: what was read off the picture, and the
+        list's two round buttons beside it - read it again, and find it.
+
+        Set as the list's OCR box sets it: a size up for Hindi, in the dark
+        slate that is readable word by word, because this is the line
+        somebody checks against the picture.
+        """
+        if editing:
+            return              # a real text box is sitting on top of it
+        box = geometry["ocr"]
+        font = painter.font()
+        painter.setPen(QPen(QColor("#E7EAF0"), 1))
+        painter.setBrush(QColor(theme.PANEL))
+        painter.drawRoundedRect(QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+        font.setPixelSize(9)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#9AA4AB"))
+        painter.drawText(QRect(box.left() + 8, box.top(), 34, box.height()),
+                         Qt.AlignVCenter | Qt.AlignLeft, "OCR:")
+        said = " ".join(str(getattr(clip, "ocr_text", "") or "").split())
+        font.setPixelSize(theme.reading_size(said, 11) if said else 11)
+        font.setBold(False)
+        font.setWeight(QFont.DemiBold if said else QFont.Normal)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        room = QRect(box.left() + 42, box.top(),
+                     max(10, geometry["reread"].left() - 6 - (box.left() + 42)),
+                     box.height())
+        painter.setPen(QColor("#334155") if said else QColor("#9AA4AB"))
+        painter.drawText(room, Qt.AlignVCenter | Qt.AlignLeft,
+                         metrics.elidedText(said or "not read yet",
+                                            Qt.ElideRight, room.width()))
+        for name in ("reread", "find_read"):
+            hovered = self.hover_hit == name
+            rect = QRectF(geometry[name])
+            painter.setPen(QPen(theme.QNAVY if hovered else theme.QHAIRLINE, 1))
+            painter.setBrush(QColor(theme.NAVY_WASH) if hovered
+                             else QColor("#F4F6FA"))
+            painter.drawEllipse(rect.adjusted(0.5, 0.5, -0.5, -0.5))
+            mark = QRectF(rect.center().x() - 5.5, rect.center().y() - 5.5, 11, 11)
+            drawer = icons.rotate if name == "reread" else icons.search
+            drawer(painter, mark, theme.QNAVY if hovered else theme.QMUTED)
 
     def paint(self, painter: QPainter, option, index) -> None:
         row = index.data(Qt.UserRole)
@@ -515,6 +591,10 @@ class CardDelegate(QStyledItemDelegate):
         if not showing[second]:
             self._paint_add(painter, geometry["add"], second,
                             self.hover_hit == f"add:{second}")
+        if not geometry["ocr"].isNull():
+            self._paint_ocr(painter, geometry, clip,
+                            self.editing_id == row.id
+                            and self.editing_field == "ocr")
 
         # --- move chips and the two actions ---------------------------------
         actions = geometry["actions"]
@@ -565,6 +645,10 @@ class SentimentColumn(QListView):
     urlEdited = Signal(int, str)         # clip id, new web address
     cardDeleted = Signal(int)
     cardRotated = Signal(int)
+    # The OCR strip: a reading corrected by hand, and its two round buttons.
+    ocrEdited = Signal(int, str)         # clip id, the corrected reading
+    readAgain = Signal(int)
+    findReading = Signal(int)
 
     def __init__(self, section: Section, parent=None):
         super().__init__(parent)
@@ -665,6 +749,10 @@ class SentimentColumn(QListView):
             self.commit_editor()
             self.cardRotated.emit(row.id)
             return
+        if hit in ("reread", "find_read"):
+            self.commit_editor()
+            (self.readAgain if hit == "reread" else self.findReading).emit(row.id)
+            return
         if hit and hit.startswith("move:"):
             self.commit_editor()
             target = dict(moves_to(self.section)).get(hit.split(":", 1)[1])
@@ -706,7 +794,7 @@ class SentimentColumn(QListView):
             return super().mouseMoveEvent(event)
         grabbed = self.delegate.hit_at(self.visualRect(index), self._press,
                                        row.clip)
-        if grabbed in ("check", "delete", "rotate") or (
+        if grabbed in ("check", "delete", "rotate", "reread", "find_read") or (
                 grabbed and grabbed.split(":", 1)[0] in
                 ("field", "clear", "add")):
             return super().mouseMoveEvent(event)
@@ -722,6 +810,8 @@ class SentimentColumn(QListView):
     # -- typing the headline ----------------------------------------------
     def open_editor_for(self, clip_id: int, field: str = "") -> None:
         """Put a real text box over one of the card's strips and focus it."""
+        if field == "ocr" and not ocrfield.is_on():
+            return              # switched off, the card has no OCR strip
         for row in range(self.model().rowCount()):
             index = self.model().index(row, 0)
             entry = index.data(Qt.UserRole)
@@ -734,15 +824,22 @@ class SentimentColumn(QListView):
             editor = QLineEdit(self.viewport())
             editor.setGeometry(rect)
             web = wanted == "url"
-            editor.setText((entry.clip.url or "").strip() if web
-                           else entry.clip.effective_label)
-            editor.setPlaceholderText(
-                "Paste the article link" if web
-                else "Headline for this clipping")
+            reading = wanted == "ocr"
+            if reading:
+                said = str(getattr(entry.clip, "ocr_text", "") or "").strip()
+                editor.setText(said)
+                editor.setPlaceholderText("The headline, as the picture says it")
+            else:
+                editor.setText((entry.clip.url or "").strip() if web
+                               else entry.clip.effective_label)
+                editor.setPlaceholderText(
+                    "Paste the article link" if web
+                    else "Headline for this clipping")
+            size = (theme.reading_size(editor.text(), 11) if reading else 11)
             editor.setStyleSheet(
                 f"background: {theme.SURFACE}; border: 2px solid"
                 f" {theme.SENTIMENT_STYLES[self.section.value]['colour']};"
-                f" border-radius: 7px; padding: 2px 8px; font-size: 11px;"
+                f" border-radius: 7px; padding: 2px 8px; font-size: {size}px;"
                 f" color: {theme.INK};"
             )
             editor.selectAll()
@@ -770,12 +867,21 @@ class SentimentColumn(QListView):
         self.delegate.editing_id = None
         self.delegate.editing_field = ""
         text = editor.text().strip()
+        typed = editor.isModified()
         editor.removeEventFilter(self)
         editor.deleteLater()
         self.viewport().update()
-        if clip_id is not None:
-            signal = self.urlEdited if field == "url" else self.titleEdited
-            signal.emit(clip_id, text)
+        if clip_id is None:
+            return
+        if field == "ocr":
+            # Only a reading somebody actually changed. A correction is marked
+            # as theirs and is never read over again, so a box opened and
+            # closed untouched must not mark the machine's reading as one.
+            if typed:
+                self.ocrEdited.emit(clip_id, text)
+            return
+        signal = self.urlEdited if field == "url" else self.titleEdited
+        signal.emit(clip_id, text)
 
     def cancel_editor(self) -> None:
         if self._editor is None:
@@ -982,6 +1088,10 @@ class SentimentBoard(QWidget):
     urlEdited = Signal(int, str)
     cardDeleted = Signal(int)
     cardRotated = Signal(int)
+    # A card's OCR strip: corrected by hand, read again, looked for.
+    ocrEdited = Signal(int, str)
+    rereadRequested = Signal(int)
+    findReadRequested = Signal(int)
     optionsChanged = Signal()
 
     def __init__(self, config: dict, parent=None):
@@ -1613,6 +1723,9 @@ class SentimentBoard(QWidget):
             view.urlEdited.connect(self.urlEdited)
             view.cardDeleted.connect(self.cardDeleted)
             view.cardRotated.connect(self.cardRotated)
+            view.ocrEdited.connect(self.ocrEdited)
+            view.readAgain.connect(self.rereadRequested)
+            view.findReading.connect(self.findReadRequested)
             column_layout.addWidget(view, 1)
 
             self.columns[slug] = view
@@ -2096,12 +2209,63 @@ class SentimentBoard(QWidget):
     def visible_clips(self) -> list:
         """The clippings the board is showing, in the order the columns show
         them - which is the order the dossier prints them in."""
+        return [row.clip for row in self.shown_rows()]
+
+    def shown_rows(self) -> list:
+        """The rows behind visible_clips: what the search looks through over
+        the four columns, so a result is always a card somebody can see."""
         ordered = []
         for section in sentiment.COLUMNS:
             for row in self._rows:
                 if sentiment.shows(row.clip, section, self.active):
-                    ordered.append(row.clip)
+                    ordered.append(row)
         return ordered
+
+    def card_place(self, clip_id: int) -> tuple:
+        """(the category's name, the number on the card) - "#3" is the third
+        card of ITS column, so a number alone does not say which card."""
+        for value, view in self.columns.items():
+            for place, row in enumerate(view.model().rows):
+                if row.id == clip_id:
+                    style = theme.SENTIMENT_STYLES.get(value, {})
+                    return style.get("label", value), place + 1
+        return "", 0
+
+    def reveal_card(self, clip_id: int) -> None:
+        """Bring a card into view in its column - what picking a search
+        result does, as it scrolls the press report's list to the row."""
+        for value, view in self.columns.items():
+            for place, row in enumerate(view.model().rows):
+                if row.id != clip_id:
+                    continue
+                try:
+                    view.scrollTo(view.model().index(place, 0),
+                                  QAbstractItemView.EnsureVisible)
+                    panel = self.column_panels.get(value)
+                    if panel is not None:
+                        self.column_scroll.ensureWidgetVisible(panel, 0, 0)
+                except Exception:  # noqa: BLE001 - a card that cannot, still opens
+                    pass
+                return
+
+    def repaint_cards(self) -> None:
+        """Paint the cards again - a reading arrived or was corrected."""
+        for view in self.columns.values():
+            view.viewport().update()
+
+    def ocr_switched(self) -> None:
+        """The OCR headline switched on or off in the menu.
+
+        Every card is a strip taller or shorter, so each column lays its
+        cards out again rather than only repainting them: its cards are all
+        one size, and it measures that size afresh only when laid out. A box
+        open on an OCR strip is closed first - kept if typed in.
+        """
+        for view in self.columns.values():
+            if getattr(view, "_editing_field", "") == "ocr":
+                view.settle_editor(view.editing_id())
+            view.scheduleDelayedItemsLayout()
+            view.viewport().update()
 
     def active_division(self):
         return sentiment.division_by_code(self.active, self.config)

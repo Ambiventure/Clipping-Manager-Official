@@ -118,6 +118,13 @@ SLATE_INK = "#E2E8F0"          # text on the slate panels; 11.87:1 on DARK_PANEL
 SLATE_EDGE = "#33415A"         # their hairline
 DARK_BAR = "#0F172A"
 DARK_VIEWPORT = "#0A0F1D"
+# Selected text in the slate fields. They used to take the global NAVY, which
+# is 1.03:1 against the slate - words picked out with the mouse looked exactly
+# like words that were not. A highlighter yellow with near-black ink reads at
+# 13.4:1, and the band stands 11:1 off the field, so what is selected is
+# never in doubt. A pair: one is never set without the other.
+HIGHLIGHT = "#FDE047"
+HIGHLIGHT_INK = "#111827"
 
 # --- sentiment columns ------------------------------------------------------
 # Each column gets a strong colour for its header and accents, a very light fill
