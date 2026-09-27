@@ -16,6 +16,22 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.61
+
+Fixed
+
+  * **A box you click to type in keeps its words the same size.** Clicking
+    the LABEL, OCR or URL box of a clipping in the list, or the TITLE, LINK
+    or OCR line of a card on the board, used to shrink the words, push them
+    to the left and hide the box's name. They now stay exactly as they
+    were: the same size, bold where they were bold, Hindi a size up as
+    before, and the name still showing. On the press report and on the
+    sentiment board alike.
+  * The empty LABEL box being typed in asks for the newspaper's name, as
+    the label is for. It used to ask for a headline.
+
+---
+
 ## 2.0.60
 
 Changed

@@ -404,18 +404,25 @@ class ClipList(QListView):
         if not rect.isValid():
             return
         self._editing_field = field
-        editor = QLineEdit(self.viewport())
+        # Set as the box under it is painted - the same size and weight, the
+        # words where they were, the tag kept (see delegates.editor_for). A
+        # plain line edit shrank them to 12px the moment the box was pressed.
+        model = self.model()
+        selected = bool(getattr(model, "is_selected", lambda _i: False)(
+            entry.row.id))
+        editor = self.delegate.editor_for(self.viewport(), rect, field,
+                                          selected, self.viewport().font())
         editor.setGeometry(rect)
         if field == "url":
-            editor.setText(entry.row.clip.url)
+            editor.setText(entry.row.clip.url or "")
             editor.setPlaceholderText("Web address — prints under the image")
         elif field == "read":
             editor.setText(str(getattr(entry.row.clip, "ocr_text", "") or ""))
             editor.setPlaceholderText("What the reader made of this picture")
         else:
             editor.setText(entry.row.clip.effective_label)
-            editor.setPlaceholderText("Headline — prints above the image")
-        editor.selectAll()
+            editor.setPlaceholderText("Label — the newspaper's name")
+        editor.select_from_start()
         editor.show()
         editor.setFocus()
         editor.returnPressed.connect(self._commit_and_advance)

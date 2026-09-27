@@ -15,9 +15,46 @@ from PySide6.QtWidgets import QStyledItemDelegate
 from ..core import copied
 from ..core.models import priority_of
 from . import icons, ocrfield, rowlayout, theme
+from .fieldedit import FieldEditor
 from .model import ENTRY_CLIP, ENTRY_GROUP, Entry
 
 HOVER_NONE = (-1, "")
+
+#: How each of a row's three boxes is set: its tag, the pixel size of its words
+#: (Hindi a size up - theme.reading_size), and their ink. The text box that
+#: opens over a box to type in it is set from these same numbers (editor_for),
+#: so opening it moves and resizes nothing - it used to shrink the words to
+#: the application's 12px and push them against the left edge.
+FIELD_LOOK = {
+    "label": ("LABEL", 13, theme.INK),
+    # SET TO BE READ. It was a pale slate at the same size as the rest, and a
+    # reading is the one field somebody actually has to READ - they are
+    # checking it word by word against the picture. A point larger, and dark
+    # enough to be read at a glance: #334155 is about 10:1 on the box, against
+    # the 5.8:1 it had. Still not the near black the printed headline uses,
+    # because the two are different things and should not look like one
+    # field repeated.
+    "read": ("OCR", 14, "#334155"),
+    "url": ("URL", 13, "#1D4ED8"),
+}
+#: The tag's chip: the size of its letters, the room either side of them, and
+#: where it sits inside the box.
+TAG_PX = 9
+TAG_PAD = 12
+TAG_LEFT = 5
+TAG_TOP = 6
+#: The words start this far past the chip, and stop this far short of the
+#: box's right-hand edge.
+TEXT_GAP = 12
+TEXT_RIGHT = 10
+
+
+def tag_width(font: QFont, tag: str) -> int:
+    """How wide a box's tag chip is, in the faces the row is painted in."""
+    small = QFont(font)
+    small.setPixelSize(TAG_PX)
+    small.setBold(True)
+    return QFontMetrics(small).horizontalAdvance(tag) + TAG_PAD
 
 
 def reading_for(clip) -> bool:
@@ -443,34 +480,38 @@ class EntryDelegate(QStyledItemDelegate):
         painter.restore()
 
     def _paint_fields(self, painter, geo, clip, selected) -> None:
-        """The headline box, the address box, or whichever of them there is."""
-        if not geo.label.isNull() and geo.label.isValid():
-            self._paint_field(
-                painter, geo.label, clip, selected, "LABEL",
-                clip.effective_label,
-                "Label — the newspaper's name, or leave it blank",
-                theme.QINK,
-            )
-        if not geo.read.isNull() and geo.read.isValid():
-            # SET TO BE READ. It was a pale slate at the same size as the rest,
-            # and a reading is the one field somebody actually has to READ -
-            # they are checking it word by word against the picture. A point
-            # larger, and dark enough to be read at a glance: #334155 is about
-            # 10:1 on the box, against the 5.8:1 it had. Still not the near
-            # black the printed headline uses, because the two are different
-            # things and should not look like one field repeated.
-            self._paint_field(
-                painter, geo.read, clip, selected, "OCR",
-                str(getattr(clip, "ocr_text", "") or ""),
-                "Nothing read from this picture yet",
-                QColor("#334155"), size=14,
-            )
-        if not geo.url.isNull() and geo.url.isValid():
-            self._paint_field(
-                painter, geo.url, clip, selected, "URL", clip.url,
-                "Web address — prints under the image",
-                QColor("#1D4ED8"),
-            )
+        """The headline box, the address box, or whichever of them there is.
+        Each set as FIELD_LOOK says."""
+        boxes = (
+            ("label", geo.label, clip.effective_label,
+             "Label — the newspaper's name, or leave it blank"),
+            ("read", geo.read, str(getattr(clip, "ocr_text", "") or ""),
+             "Nothing read from this picture yet"),
+            ("url", geo.url, clip.url, "Web address — prints under the image"),
+        )
+        for field, rect, text, placeholder in boxes:
+            if rect.isNull() or not rect.isValid():
+                continue
+            tag, size, ink = FIELD_LOOK[field]
+            self._paint_field(painter, rect, clip, selected, tag, text or "",
+                              placeholder, QColor(ink), size=size)
+
+    def editor_for(self, parent, rect: QRect, field: str, selected: bool,
+                   font: QFont) -> FieldEditor:
+        """The text box that opens over one of a row's boxes - set exactly as
+        _paint_field sets the box, so the words stay the size and weight and
+        in the place they were, and the tag stays where it was."""
+        tag, size, ink = FIELD_LOOK.get(field, FIELD_LOOK["label"])
+        chip = tag_width(font, tag)
+        return FieldEditor(
+            parent, font=font, text_x=chip + TEXT_GAP, right=TEXT_RIGHT,
+            size=size, lift=True, filled_weight=700, empty_weight=400,
+            ink=theme.NAVY if selected else ink, border=theme.NAVY,
+            border_px=1, radius=10, tag=tag,
+            tag_rect=QRectF(TAG_LEFT, TAG_TOP, chip,
+                            max(8, rect.height() - 2 * TAG_TOP)),
+            tag_px=TAG_PX, tag_ink="#64748B", tag_fill="#EEF2F7",
+            tag_radius=5)
 
     def _paint_field(self, painter, rect: QRect, clip, selected, tag: str,
                      text: str, placeholder: str, ink, size: int = 13) -> None:
@@ -489,14 +530,15 @@ class EntryDelegate(QStyledItemDelegate):
         painter.setBrush(theme.QSURFACE)
         painter.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
 
+        # The chip is measured by tag_width, which editor_for uses as well:
+        # the box that opens for typing draws its tag in the same place.
+        chip = tag_width(painter.font(), tag)
         tag_font = painter.font()
-        tag_font.setPixelSize(9)
+        tag_font.setPixelSize(TAG_PX)
         tag_font.setBold(True)
         painter.setFont(tag_font)
-        tag_metrics = QFontMetrics(tag_font)
-        tag_width = tag_metrics.horizontalAdvance(tag) + 12
-        tag_rect = QRectF(rect.left() + 5, rect.top() + 6,
-                          tag_width, rect.height() - 12)
+        tag_rect = QRectF(rect.left() + TAG_LEFT, rect.top() + TAG_TOP,
+                          chip, rect.height() - 2 * TAG_TOP)
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor("#EEF2F7"))
         painter.drawRoundedRect(tag_rect, 5, 5)
@@ -514,7 +556,7 @@ class EntryDelegate(QStyledItemDelegate):
         font.setBold(bool(text.strip()))
         painter.setFont(font)
         metrics = QFontMetrics(font)
-        text_rect = rect.adjusted(int(tag_width) + 12, 0, -10, 0)
+        text_rect = rect.adjusted(chip + TEXT_GAP, 0, -TEXT_RIGHT, 0)
         if text.strip():
             painter.setPen(theme.QNAVY if selected else ink)
         elif clip.title_in_image and tag == "LABEL":

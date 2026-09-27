@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 from ..core import sentiment
 from ..core.models import Section
 from . import icons, ocrfield, theme
+from .fieldedit import FieldEditor
 from .clip_list import MIME as ROW_MIME
 from .clip_list import ClipList
 from .fluid import ElidedLabel
@@ -147,6 +148,16 @@ CARD_HEIGHT = (CARD_PAD * 2 + CARD_HEAD + CARD_IMAGE + CARD_TITLE + CARD_SECOND
 # buttons: read the picture again, and find the story with the search.
 CARD_OCR = 30
 CARD_GAP = 10
+# Where a strip's tag and words sit, from the strip's left edge, and the size
+# they are set at. The text box that opens over a strip to type in it is set
+# from these same numbers (SentimentColumn.open_editor_for): it used to pad its
+# words 12px from the edge over a strip that painted them 46px in, so the words
+# jumped left and the tag vanished the moment the strip was pressed.
+STRIP_TAG_X = 8
+STRIP_TAG_W = 34
+STRIP_TEXT_X = 46
+OCR_TEXT_X = 42
+STRIP_PX = 11
 
 
 def card_height() -> int:
@@ -394,10 +405,11 @@ class CardDelegate(QStyledItemDelegate):
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor("#9AA4AB"))
-        painter.drawText(QRect(box.left() + 8, box.top(), 34, box.height()),
+        painter.drawText(QRect(box.left() + STRIP_TAG_X, box.top(), STRIP_TAG_W,
+                               box.height()),
                          Qt.AlignVCenter | Qt.AlignLeft,
                          "LINK:" if field == "url" else "TITLE:")
-        font.setPixelSize(11)
+        font.setPixelSize(STRIP_PX)
         font.setBold(False)
         painter.setFont(font)
         metrics = QFontMetrics(font)
@@ -411,7 +423,8 @@ class CardDelegate(QStyledItemDelegate):
                              else "click to add a headline")
             ink = theme.QINK
         painter.setPen(ink if shown else QColor("#9AA4AB"))
-        room = QRect(box.left() + 46, box.top(), box.width() - 74, box.height())
+        room = QRect(box.left() + STRIP_TEXT_X, box.top(),
+                     box.width() - STRIP_TEXT_X - 28, box.height())
         painter.drawText(room, Qt.AlignVCenter | Qt.AlignLeft,
                          metrics.elidedText(name, Qt.ElideRight, room.width()))
         if shown:
@@ -457,16 +470,18 @@ class CardDelegate(QStyledItemDelegate):
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor("#9AA4AB"))
-        painter.drawText(QRect(box.left() + 8, box.top(), 34, box.height()),
+        painter.drawText(QRect(box.left() + STRIP_TAG_X, box.top(), STRIP_TAG_W,
+                               box.height()),
                          Qt.AlignVCenter | Qt.AlignLeft, "OCR:")
         said = " ".join(str(getattr(clip, "ocr_text", "") or "").split())
-        font.setPixelSize(theme.reading_size(said, 11) if said else 11)
+        font.setPixelSize(theme.reading_size(said, STRIP_PX) if said else STRIP_PX)
         font.setBold(False)
         font.setWeight(QFont.DemiBold if said else QFont.Normal)
         painter.setFont(font)
         metrics = QFontMetrics(font)
-        room = QRect(box.left() + 42, box.top(),
-                     max(10, geometry["reread"].left() - 6 - (box.left() + 42)),
+        room = QRect(box.left() + OCR_TEXT_X, box.top(),
+                     max(10, geometry["reread"].left() - 6
+                         - (box.left() + OCR_TEXT_X)),
                      box.height())
         painter.setPen(QColor("#334155") if said else QColor("#9AA4AB"))
         painter.drawText(room, Qt.AlignVCenter | Qt.AlignLeft,
@@ -821,10 +836,26 @@ class SentimentColumn(QListView):
             self.scrollTo(index, QAbstractItemView.EnsureVisible)
             wanted = field or self.delegate.fields()[0]
             rect = self.delegate.field_rect(self.visualRect(index), wanted)
-            editor = QLineEdit(self.viewport())
-            editor.setGeometry(rect)
             web = wanted == "url"
             reading = wanted == "ocr"
+            # Set as the strip is painted (CardDelegate._paint_strip and
+            # _paint_ocr): the same size and weight, the words where they
+            # were, the tag kept where it was.
+            editor = FieldEditor(
+                self.viewport(), font=self.viewport().font(),
+                text_x=OCR_TEXT_X if reading else STRIP_TEXT_X, right=10,
+                size=STRIP_PX, lift=reading,
+                filled_weight=600 if reading else 400, empty_weight=400,
+                ink=("#334155" if reading else "#1D4ED8" if web
+                     else theme.INK),
+                background=theme.SURFACE,
+                border=theme.SENTIMENT_STYLES[self.section.value]["colour"],
+                border_px=2, radius=7,
+                tag="OCR:" if reading else "LINK:" if web else "TITLE:",
+                tag_rect=QRectF(STRIP_TAG_X, 0, STRIP_TAG_W, rect.height()),
+                tag_px=9, tag_ink="#9AA4AB", tag_fill=None,
+                tag_centred=False)
+            editor.setGeometry(rect)
             if reading:
                 said = str(getattr(entry.clip, "ocr_text", "") or "").strip()
                 editor.setText(said)
@@ -835,14 +866,10 @@ class SentimentColumn(QListView):
                 editor.setPlaceholderText(
                     "Paste the article link" if web
                     else "Headline for this clipping")
-            size = (theme.reading_size(editor.text(), 11) if reading else 11)
-            editor.setStyleSheet(
-                f"background: {theme.SURFACE}; border: 2px solid"
-                f" {theme.SENTIMENT_STYLES[self.section.value]['colour']};"
-                f" border-radius: 7px; padding: 2px 8px; font-size: {size}px;"
-                f" color: {theme.INK};"
-            )
-            editor.selectAll()
+            # setText is not an edit: the box starts unmodified, so opening
+            # and closing it untouched changes nothing.
+            editor.setModified(False)
+            editor.select_from_start()
             editor.show()
             editor.setFocus()
             editor.returnPressed.connect(self.commit_editor)
