@@ -12,7 +12,7 @@ back - the original pixels are never touched. See core/models.CropRect.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QLabel
 
@@ -38,7 +38,27 @@ class TrimCanvas(QLabel):
         self._holding = ""
         self._from = QPoint()
         self._began: list = []
+        # The frame round the picture while its clipping is selected in the
+        # list (2.0.62): a colour, or None for no frame. See set_ring.
+        self.ring = None
         self.setMouseTracking(True)
+
+    def set_ring(self, colour) -> None:
+        """Frame the picture in this colour, or take the frame away (None).
+
+        Drawn in the room OUTSIDE the picture - the viewport's padding leaves
+        at least eighteen pixels round it at any zoom - so it never covers a
+        pixel of the clipping, and where the picture is (_picture) does not
+        move: the trim box and the OCR glass measure from that.
+        """
+        wanted = QColor(colour) if colour else None
+        if wanted is not None and not wanted.isValid():
+            wanted = None
+        if (wanted is None) == (self.ring is None) and (
+                wanted is None or wanted == self.ring):
+            return
+        self.ring = wanted
+        self.update()
 
     # ------------------------------------------------------------- the box
     def start_trim(self) -> None:
@@ -190,8 +210,24 @@ class TrimCanvas(QLabel):
         super().mouseReleaseEvent(event)
 
     # -------------------------------------------------------------- paint
+    #: The frame of a selected clipping: how thick, and how far off the picture.
+    RING_WIDTH = 4
+    RING_GAP = 3
+
     def paintEvent(self, event):  # noqa: N802 - Qt's name
         super().paintEvent(event)
+        if self.ring is not None:
+            # Before the trim's own drawing, and whether or not a trim is on.
+            picture = self._picture()
+            if not picture.isNull():
+                reach = self.RING_GAP + self.RING_WIDTH / 2.0
+                frame = QRectF(picture).adjusted(-reach, -reach, reach, reach)
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setPen(QPen(self.ring, self.RING_WIDTH))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(frame, 4, 4)
+                painter.end()
         if not self.trimming:
             return
         picture, rect = self._picture(), self._box_rect()

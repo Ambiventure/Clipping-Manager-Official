@@ -832,6 +832,18 @@ BAND_GAP_SHARE = 0.8
 BAND_LOOK = 900
 BAND_TEXT = 420
 
+#: The date build_burned sets under a title (2.0.62) is one line more, and a
+#: large title with its date under it can run past BAND_TEXT: measured,
+#: "Dainik Jagran, Delhi, Page 4" at 48 point came to 451 px. The walk still
+#: stops there, exactly as it always has - but it notes the ONE line it
+#: stopped at when that line could be a date (no taller than the biggest date
+#: the card offers, 36 point, with its gap and a line box's slack, and no wider
+#: than "00/00/00" at that size), and _read_bands takes it off as well only if
+#: it READS as a date. Taken on its looks alone, it was any short line - the
+#: first line of a cutting whose own top is dark type on white among them.
+BAND_DATE = int(round((36 + 3 + 12) * BAND_DPI / 72.0))
+BAND_DATE_WIDE = int(round(36 * 0.62 * 8 * BAND_DPI / 72.0))
+
 #: How much of the band has to be OUR ink. The first is every pixel that is not
 #: white, measured against the line from white to the ink - which is where
 #: anti-aliasing puts the edge of a stroke - and the second is the middle of the
@@ -1026,16 +1038,26 @@ def _band_at(arr, ink) -> Optional[dict]:
     # taken as much as 6,000 inked pixels of it away with the band. Line by
     # line, not one of the 250 loses a pixel.
     found, line_from = None, pad
+    lines: list = []
+    maybe_date = None
     for is_white, start, stop in _runs(white[pad:]):
         if not is_white or (stop - start) < wanted:
             continue
         words_end, band_end = pad + start, pad + stop
         # Too tall for a line or two of type: this is a column of newsprint.
+        # The line it stops at is noted if it could be the date under a
+        # title - see BAND_DATE; _read_bands decides by reading it.
         if words_end - pad > BAND_TEXT:
+            block = arr[line_from:words_end]
+            if (found is not None and _date_sized(block)
+                    and _our_type(block, ink)):
+                maybe_date = (line_from, words_end, band_end)
             break
         if not _our_type(arr[line_from:words_end], ink):
             break
-        found, line_from = (words_end, band_end), band_end
+        found = (words_end, band_end)
+        lines.append((line_from, words_end))
+        line_from = band_end
     # Nothing on this edge is set off from the picture in our own ink, so only
     # the white margin itself is ours.
     if found is None:
@@ -1057,7 +1079,22 @@ def _band_at(arr, ink) -> Optional[dict]:
     # rule took was the cutting itself.
     words_end, band_end = found
     return {"words": (pad, words_end),
-            "end": min(band_end, words_end + int(round(BAND_GAP * pixels)))}
+            "end": min(band_end, words_end + int(round(BAND_GAP * pixels))),
+            # Each line of words the walk took, top to bottom: the last may
+            # be the date, which is read on its own - see _read_bands. And
+            # the line it stopped at, when that could be the date.
+            "lines": lines, "maybe_date": maybe_date}
+
+
+def _date_sized(block) -> bool:
+    """Whether one line of the band could be the date: no taller than the
+    biggest the card offers, and no wider than eight of its figures."""
+    import numpy as np
+
+    if not block.size or block.shape[0] > BAND_DATE:
+        return False
+    inked = np.flatnonzero((block.min(axis=2) < BAND_WHITE).any(axis=0))
+    return bool(len(inked)) and int(inked[-1] - inked[0]) + 1 <= BAND_DATE_WIDE
 
 
 def _picture_columns(arr, top: int, bottom: int) -> tuple:
@@ -1090,6 +1127,56 @@ def _picture_columns(arr, top: int, bottom: int) -> tuple:
     return side, width - side
 
 
+def _band_title(image, top: dict, width: int, height: int) -> str:
+    """The words burned above a clipping, without the date under them.
+
+    The band's LAST line is read on its own first. When it is the date
+    (2.0.62), the title is the lines above it, read without it: read as one
+    block with a date twice its size under it, the reader gave back the date
+    alone and the title was lost, and a page number wrapped onto a line of its
+    own came back as letters. When it is not - a report with no date under its
+    titles, as every report before 2.0.62 - the band is read exactly as it
+    always was, all at once.
+    """
+    def read(first: int, last: int) -> str:
+        return ocr.band_text(image.crop(
+            (0, max(0, first - BAND_MARGIN), width,
+             min(height, last + BAND_MARGIN))), lines=True)
+
+    first, last = top["words"]
+    lines = top.get("lines") or []
+    if top.get("dated"):
+        # The date was the line past the title's room, already taken off.
+        return undated(read(first, last))
+    if lines:
+        line_top, line_end = lines[-1]
+        if is_date_line(read(line_top, line_end)):
+            # The last line is the date: the title is what is above it, read
+            # without it - never the whole band, which with a date much
+            # bigger than the title came back as the date alone.
+            if len(lines) == 1:
+                return ""
+            return undated(read(first, lines[-2][1]))
+    return undated(read(first, last))
+
+
+def _take_date(image, top: dict, width: int, height: int) -> dict:
+    """The line the walk stopped at, taken off the clipping as well when it
+    reads as the date under the title - see BAND_DATE."""
+    maybe = top.get("maybe_date") if top else None
+    if not maybe:
+        return top
+    line_top, line_end, band_end = maybe
+    said = ocr.band_text(image.crop(
+        (0, max(0, line_top - BAND_MARGIN), width,
+         min(height, line_end + BAND_MARGIN))), lines=True)
+    if not is_date_line(said):
+        return top
+    pixels = BAND_DPI / 72.0
+    return {**top, "dated": True,
+            "end": min(band_end, line_end + int(round(BAND_GAP * pixels)))}
+
+
 def _read_bands(data: bytes) -> Optional[tuple]:
     """What a burned report drew on this picture: (the title, the crop) or None.
 
@@ -1115,6 +1202,7 @@ def _read_bands(data: bytes) -> Optional[tuple]:
         image = opened.convert("RGB")
         arr = np.asarray(image)
         top = _band_at(arr, BAND_INK)
+        top = _take_date(image, top, image.width, image.height)
         bottom = _band_at(arr[::-1], BAND_LINK_INK)
         # Our ink at one edge at least. A white margin on its own proves
         # nothing - a third of the office's own clippings have one - and
@@ -1132,14 +1220,54 @@ def _read_bands(data: bytes) -> Optional[tuple]:
 
         title = ""
         if top and top["words"]:
-            first, last = top["words"]
-            title = ocr.band_text(image.crop(
-                (0, max(0, first - BAND_MARGIN), width,
-                 min(height, last + BAND_MARGIN))))
+            title = _band_title(image, top, width, height)
 
     return title, CropRect(left=left / width, top=cut_top / height,
                            right=(width - right) / width,
                            bottom=(height - cut_bottom) / height)
+
+
+#: The date build_burned may set under the title (2.0.62), as the reader gives
+#: it back: a LINE of its own - the band's last - holding two slashes and
+#: figures. The reader misses or misreads a 1 beside a slash often (01/11/26
+#: came back "0//26", 11/10/26 "/0/26", 01/01/26 "04/0॥/26", 31/10/26
+#: "३]/0/26"), so what it gives for a figure counts as one: a Devanagari digit,
+#: O for 0, and l, I, i, |, ], [, !, the danda and the double danda for 1.
+#: Two slashes, because a title's own "PAGE 1" read alone came back
+#: "2/0(-- ]"; and no more than two other marks.
+_FIGURES_LIKE = str.maketrans({
+    "O": "0", "o": "0", "I": "1", "l": "1", "i": "1", "|": "1", "]": "1",
+    "[": "1", "!": "1", "\u0964": "1", "\u0965": "11",
+    **{chr(0x0966 + n): str(n) for n in range(10)}})
+
+
+def is_date_line(line: str) -> bool:
+    """Whether one line the reader gave back is the date build_burned set."""
+    said = "".join(str(line or "").split()).translate(_FIGURES_LIKE)
+    if not said or len(said) > 16:
+        return False
+    figures = sum(ch in "0123456789" for ch in said)
+    others = sum(ch not in "0123456789/" for ch in said)
+    return said.count("/") >= 2 and figures >= 2 and others <= 2
+
+
+def undated(title: str) -> str:
+    """The words burned above a clipping, without the date set under them.
+
+    Given the reader's lines (ocr.band_text(lines=True)), the last one goes
+    when it is the date: a burned title is the clipping's printed caption, and
+    the date is not part of it. Read back with it, a clipping came in named
+    "Dainik Jagran 28/09/26" - and one with no title at all, a web page, was
+    named after the day. Taken off as a whole line and never as a pattern in
+    the joined words, which took a real page number with it ("Amar Ujala, Page
+    4" came back "Amar Ujala, Page" when the reader dropped the date's first
+    figures). The lines left are joined with spaces, as the band always was.
+    """
+    lines = [" ".join(line.split()) for line in str(title or "").splitlines()]
+    lines = [line for line in lines if line]
+    if lines and is_date_line(lines[-1]):
+        lines.pop()
+    return " ".join(lines).strip()
 
 
 def candidates_of(clips) -> list:

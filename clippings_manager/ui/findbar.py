@@ -16,6 +16,13 @@ finds "Hydrogen" and "रेलवे" finds "रेलवे," - and then, only
 did not match that way, a fuzzy pass (rapidfuzz) that forgives a letter or two,
 because a headline read off a picture is never read perfectly. The fuzzy pass
 needs four letters before it will guess: on two it matched half the morning.
+And related words (2.0.62): another form of an English word - "derailment"
+finds "derailed" - or the same name spelt a letter apart. See RELATED_STEM.
+
+WHAT A RESULT SHOWS (2.0.62). The words found are marked in yellow on the line
+shown, and the line shown is the field holding most of what was looked for.
+Under it: which field that is, "close match" when it was only guessed at, and
+where the clipping came from - its column on the board, and its division.
 
 IT IS A LENS, NOT AN EDIT. Nothing is hidden, reordered, ticked or unticked -
 the list underneath is exactly as it was. Picking a result scrolls to that
@@ -27,6 +34,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Optional
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPixmap, QStandardItem, QStandardItemModel
@@ -34,7 +42,7 @@ from PySide6.QtWidgets import (QCheckBox, QCompleter, QDialog,
                                QDialogButtonBox, QFrame,
                                QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
                                QLineEdit, QMenu, QPushButton, QScrollArea,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -206,89 +214,506 @@ def parse(wanted: str) -> list:
     return [group for group in groups if group]
 
 
-def _looked_at(clip, term: Term) -> list:
-    """[(what it is called, what it says, folded)] for the fields a term asks
-    about - all of them when it asks for none."""
+def _looked_at(clip, term: Term, folded: Optional[dict] = None) -> list:
+    """[(its place in FIELDS, what it is called, what it says, folded)] for
+    the fields a term asks about - all of them when it asks for none.
+
+    ``folded`` keeps what each text folds to for the length of one search: a
+    field is folded once however many words are looked for in it, where it
+    used to be folded again for every one - an eleven-word headline sent by a
+    find button folded every field of the morning eleven times.
+    """
     wanted = term.fields
     out = []
-    for name, called in FIELDS:
+    for place, (name, called) in enumerate(FIELDS):
         if wanted and name not in wanted:
             continue
         says = _said(clip, name)
-        if says:
-            out.append((called, says, fold(says)))
+        if not says:
+            continue
+        if folded is None:
+            plain = fold(says)
+        else:
+            plain = folded.get(says)
+            if plain is None:
+                plain = folded[says] = fold(says)
+        out.append((place, called, says, plain))
     return out
 
 
-def _term_hit(clip, term: Term) -> tuple:
-    """(does this term match, which field, what it says)."""
-    folded = fold(term.words)
-    if not folded:
-        return False, "", ""
-    looked = _looked_at(clip, term)
-    for called, says, plain in looked:
-        if folded in plain:
-            return True, called, says
+#: RELATED WORDS (2.0.62). Beyond forgiving a misread letter, a word can be
+#: another form of the one looked for: "electrification" finds "electrified",
+#: "derailment" finds "derailed", "inspection" finds "inspected", and a paper
+#: spelt "Jagaran" in one file finds "Jagran" in another. Two words are related
+#: when they share a stem - the start they have in common runs to within four
+#: letters of the shorter, and is at least five letters long, and the shorter
+#: is at least three fifths the length of the longer - AND what is left of
+#: each after it is an English ending, one of them at least a plain one (the
+#: word as it is, a plural, a past tense, an -ing: RELATED_PLAIN); or when
+#: they are one spelling apart at six letters or more (rapidfuzz, 88 of 100).
+#:
+#: Each rule is there for a pair it had to keep apart. The length: "india"
+#: and "indianexpress". The endings: "passed" and "passenger", "transfer" and
+#: "transport", "election" and "electricity", which share five letters and
+#: nothing else. The plain one: two derived endings meet on unrelated words -
+#: "department" and "departure", "government" and "governor", "position" and
+#: "positive" - where a derived and a plain one meet on the same word:
+#: "diversion" and "diverted", "suspension" and "suspended", "collision" and
+#: "collided". Measured on four hundred words of railway news.
+#:
+#: For English words of five letters or more only. A Hindi word is already
+#: matched in all its forms, because folding takes the vowel signs off it
+#: (यात्री finds यात्रियों). Measured on every English word in the office's
+#: saved newspads and a list of the searches a railway office makes: 88 keeps
+#: "resumes" away from "rescues" (86), and the stem rule's worst catch was
+#: "stationery" for "stations".
+RELATED_STEM = 5
+RELATED_SLACK = 4
+RELATED_SHARE = 0.6
+#: The plain endings: the word itself, its plural, its past, its -ing - with
+#: the doubled letter a short word takes before them (transfer, transferred).
+RELATED_PLAIN = frozenset((
+    "", "s", "es", "e", "d", "ed", "ded", "ted", "sed", "led", "red", "ped",
+    "ned", "ged", "ing", "ings", "ling", "ring", "ting", "ning", "ping",
+    "ging", "ies", "ied"))
+#: And the derived ones, which may meet a plain one but never each other.
+#: Not -er or -or: an agent is somebody else - the director is not what was
+#: directed, the engineer not the engine, the counter not the count.
+RELATED_DERIVED = frozenset((
+    "ion", "ions", "tion", "tions", "sion", "sions", "ption", "ation",
+    "ations", "ication", "ications", "lation", "lations", "ment", "ments",
+    "ement", "ements", "ery", "al", "ally", "ly", "ity", "ified", "ify",
+    "ive", "ist", "ists", "ise", "ised", "ize", "ized", "isation",
+    "ization", "ure", "ance", "ence", "ant", "ent", "age"))
+RELATED_ENDINGS = RELATED_PLAIN | RELATED_DERIVED
+#: A "y" meets only the plural and the past that replace it: facility and
+#: facilities, injury and injuries - never police and policy.
+RELATED_Y = frozenset(("ies", "ied", "ier", "iest"))
+#: The railway's own everyday words, whose longer forms mean something else
+#: - "training" is not a train, "boarding" not the Railway Board, "department"
+#: not a departure. Nearly every clipping holds one of these, so a search for
+#: the longer word would bring back the whole morning. They are found as
+#: typed, and by the forgiving pass, but never as another word's form.
+RELATED_NEVER = ("train", "track", "board", "drive", "engine", "count",
+                 "press", "coach", "depart", "govern", "gener", "posit",
+                 "hospital", "polic", "station", "servic", "direct",
+                 "conduct", "divers", "stat")
+RELATED_TYPO = 88
+RELATED_TYPO_LETTERS = 6
+_LATIN_WORD = re.compile(r"[a-z]+")
+
+
+def _common_start(one: str, other: str) -> int:
+    count = 0
+    for a, b in zip(one, other):
+        if a != b:
+            break
+        count += 1
+    return count
+
+
+def related_word(wanted: str, word: str) -> bool:
+    """Whether a word on a clipping is a form of the word looked for - see
+    RELATED_STEM. Both folded; the same word is not "related", it is found."""
+    if wanted == word or len(wanted) < RELATED_STEM or len(word) < RELATED_STEM:
+        return False
+    if not (_LATIN_WORD.fullmatch(wanted) and _LATIN_WORD.fullmatch(word)):
+        return False
+    shorter, longer = sorted((len(wanted), len(word)))
+    shared = _common_start(wanted, word)
+    stem = wanted[:shared]
+    everyday = any(stem.startswith(base) and shared <= len(base) + 2
+                   for base in RELATED_NEVER)
+    if (not everyday
+            and shared >= max(RELATED_STEM, shorter - RELATED_SLACK)
+            and shorter >= RELATED_SHARE * longer):
+        # The cut may sit up to two letters back from where the two part:
+        # electrifi|cation and electrifi|ed meet as electrif|ication, |ied.
+        for cut in range(shared, max(shared - 3, 3), -1):
+            one, other = wanted[cut:], word[cut:]
+            if (one in RELATED_ENDINGS and other in RELATED_ENDINGS
+                    and (one in RELATED_PLAIN or other in RELATED_PLAIN)):
+                return True
+            if (one == "y" and other in RELATED_Y) or (
+                    other == "y" and one in RELATED_Y):
+                return True
+    if everyday:
+        return False
+    if min(len(wanted), len(word)) < RELATED_TYPO_LETTERS:
+        return False
+    try:
+        from rapidfuzz import fuzz
+    except Exception:  # noqa: BLE001 - without it, stems alone
+        return False
+    return fuzz.ratio(wanted, word) >= RELATED_TYPO
+
+
+def _related_in(wanted: str, plain: str) -> bool:
+    """Whether a folded field holds a word related to a one-word term."""
+    return any(related_word(wanted, word) for word in plain.split())
+
+
+def _field_hits(clip, term: Term, folded: Optional[dict] = None,
+                related: bool = True) -> dict:
+    """{place in FIELDS: "exact" or "close"} - every field this term is in.
+
+    Exact first: where the words are there as typed, those are the answer and
+    nothing is guessed at. Otherwise, for a word that is not a quoted phrase
+    and has four letters to go on, the forgiving pass - a letter or two misread
+    (partial_ratio) - and for a single English word its other forms
+    (related_word). ``related`` False keeps a -word to the old rule, so a
+    minus leaves out what it always left out and no more.
+    """
+    wanted = fold(term.words)
+    if not wanted:
+        return {}
+    looked = _looked_at(clip, term, folded)
+    exact = {place: "exact" for place, _c, _s, plain in looked if wanted in plain}
+    if exact:
+        return exact
     # A phrase is asked for exactly; only a loose word is guessed at.
-    if term.phrase or len(folded.replace(" ", "")) < LEAST_FUZZY:
-        return False, "", ""
+    if term.phrase or len(wanted.replace(" ", "")) < LEAST_FUZZY:
+        return {}
     try:
         from rapidfuzz import fuzz
     except Exception:  # noqa: BLE001 - without it, the plain pass is the search
+        return {}
+    close = {}
+    single = related and " " not in wanted
+    for place, _called, _says, plain in looked:
+        if fuzz.partial_ratio(wanted, plain) >= FUZZY_AT or (
+                single and _related_in(wanted, plain)):
+            close[place] = "close"
+    return close
+
+
+def _term_hit(clip, term: Term) -> tuple:
+    """(does this term match, which field, what it says) - the first field in
+    FIELDS order it is in. Kept for anything that asks one term at a time."""
+    hits = _field_hits(clip, term, related=not term.negated)
+    if not hits:
         return False, "", ""
-    for called, says, plain in looked:
-        if fuzz.partial_ratio(folded, plain) >= FUZZY_AT:
-            return True, called, says
-    return False, "", ""
+    place = min(hits)
+    name, called = FIELDS[place]
+    return True, called, _said(clip, name)
+
+
+def match_detail(clip, wanted: str, folded: Optional[dict] = None,
+                 groups: Optional[list] = None) -> tuple:
+    """(does it match, which field, what it says, found only by guessing).
+
+    A group matches when every plain term in it does and no negated one does;
+    the query matches when any group does. The field reported - the line the
+    result shows - is the one that holds most of what was looked for, words
+    found as typed counting for more than words guessed at, the earlier field
+    winning a tie: so the line on show is the one with the most of it to mark.
+    """
+    groups = parse(wanted) if groups is None else groups
+    if not groups:
+        return False, "", "", False
+    asked = "".join(fold(term.words).replace(" ", "")
+                    for group in groups for term in group if not term.negated)
+    if len(asked) < LEAST_LETTERS:
+        return False, "", "", False
+    # A side of an OR found only by guessing is kept in reserve: a later side
+    # found as typed is the answer - its line, and no "close match" - whichever
+    # order the two were typed in.
+    reserve = None
+    for group in groups:
+        scores: dict = {}
+        held, guessed = True, False
+        for term in group:
+            hits = _field_hits(clip, term, folded, related=not term.negated)
+            if term.negated:
+                if hits:
+                    held = False
+                    break
+                continue
+            if not hits:
+                held = False
+                break
+            if all(kind == "close" for kind in hits.values()):
+                guessed = True
+            for place, kind in hits.items():
+                scores[place] = scores.get(place, 0) + (2 if kind == "exact" else 1)
+        if held and scores:
+            place = max(scores, key=lambda at: (scores[at], -at))
+            name, called = FIELDS[place]
+            answer = (True, called, _said(clip, name), guessed)
+            if not guessed:
+                return answer
+            if reserve is None:
+                reserve = answer
+    return reserve or (False, "", "", False)
 
 
 def matches(clip, wanted: str) -> tuple:
     """(does it match, which field, what that field says) for one clipping.
+    See match_detail, which also says whether it was only found by guessing."""
+    hit, which, says, _guessed = match_detail(clip, wanted)
+    return hit, which, says
 
-    A group matches when every plain term in it does and no negated one does;
-    the query matches when any group does. What is reported as the reason is
-    the first field that actually matched, so the result always says why.
+
+def search_detail(rows, wanted: str) -> tuple:
+    """([(row, which, says, guessed)], how many matched in all), in list order.
+
+    Never more than MOST_RESULTS. When more matched than that, the ones found
+    as typed are kept before the ones guessed at - a looser match must not
+    push a real one off the end of the box - and what is kept is shown in
+    list order all the same: the order is the list's, and the preview walks
+    it (MainWindow._go_to_clip).
     """
     groups = parse(wanted)
-    if not groups:
-        return False, "", ""
-    asked = "".join(fold(term.words).replace(" ", "")
-                    for group in groups for term in group if not term.negated)
-    if len(asked) < LEAST_LETTERS:
-        return False, "", ""
-    for group in groups:
-        why_field, why_says = "", ""
-        held = True
-        for term in group:
-            hit, called, says = _term_hit(clip, term)
-            if term.negated:
-                if hit:
-                    held = False
-                    break
-                continue
-            if not hit:
-                held = False
-                break
-            if not why_field:
-                why_field, why_says = called, says
-        if held and why_field:
-            return True, why_field, why_says
-    return False, "", ""
-
-
-def search(rows, wanted: str) -> list:
-    """[(row, which field matched, what it says)], in list order."""
+    folded: dict = {}
     found = []
     for row in rows:
         clip = getattr(row, "clip", None)
         if clip is None:
             continue
-        hit, which, says = matches(clip, wanted)
+        hit, which, says, guessed = match_detail(clip, wanted, folded, groups)
         if hit:
-            found.append((row, which, says))
-            if len(found) >= MOST_RESULTS:
-                break
-    return found
+            found.append((row, which, says, guessed))
+    total = len(found)
+    if total > MOST_RESULTS:
+        sure = [one for one in found if not one[3]]
+        keep = sure[:MOST_RESULTS]
+        if len(keep) < MOST_RESULTS:
+            spare = MOST_RESULTS - len(keep)
+            keep_ids = {id(one) for one in keep}
+            keep += [one for one in found
+                     if one[3] and id(one) not in keep_ids][:spare]
+        order = {id(one): at for at, one in enumerate(found)}
+        found = sorted(keep, key=lambda one: order[id(one)])
+    return found, total
+
+
+def search(rows, wanted: str) -> list:
+    """[(row, which field matched, what it says)], in list order."""
+    found, _total = search_detail(rows, wanted)
+    return [(row, which, says) for row, which, says, _guessed in found]
+
+
+# ------------------------------------------------------ marking the words
+#: The characters a word is made of, for widening a mark to whole words: a
+#: mark that began or ended inside a Devanagari cluster would change how the
+#: cluster is shaped (measured: 315 px of line became 330).
+_WORD_CHARS = re.compile(r"[\wऀ-ॿ̀-ͯ‌‍]", re.UNICODE)
+
+
+def fold_map(text: str) -> tuple:
+    """(what fold() makes of the text, and for each of its characters the
+    place in the text it came from) - so a word found in the folded text can
+    be marked where it stands in the text as written."""
+    source = str(text or "")
+    chars: list = []
+    origin: list = []
+    for place, char in enumerate(source):
+        piece = unicodedata.normalize("NFKD", char).casefold()
+        piece = "".join(ch for ch in piece if not unicodedata.combining(ch))
+        piece = _MARKS.sub("", piece)
+        for ch in piece:
+            chars.append(ch)
+            origin.append(place)
+    out: list = []
+    where: list = []
+    quiet = False
+    for ch, place in zip(chars, origin):
+        if _QUIET.fullmatch(ch):
+            if not quiet:
+                out.append(" ")
+                where.append(place)
+            quiet = True
+            continue
+        quiet = False
+        out.append(ch)
+        where.append(place)
+    while out and out[0] == " ":
+        out.pop(0)
+        where.pop(0)
+    while out and out[-1] == " ":
+        out.pop()
+        where.pop()
+    return "".join(out), where
+
+
+def _near_word(part: str, plain: str) -> list:
+    """Where one word of a search sits in a folded line: as typed, or the
+    forgiving pass's window trimmed to the one word it covers."""
+    out = [(hit.start(), hit.end())
+           for hit in re.finditer(re.escape(part), plain)]
+    if out:
+        return out
+    try:
+        from rapidfuzz import fuzz
+
+        near = fuzz.partial_ratio_alignment(part, plain)
+    except Exception:  # noqa: BLE001
+        return []
+    if near is None or near.score < FUZZY_AT:
+        return []
+    pieces = [(near.dest_start + piece.start(), near.dest_start + piece.end())
+              for piece in re.finditer(r"[^ ]+",
+                                       plain[near.dest_start:near.dest_end])]
+    return [max(pieces, key=lambda span: span[1] - span[0])] if pieces else []
+
+
+def _looks_like(want: str, words: str) -> bool:
+    """Whether a marked stretch resembles what was searched: it holds it, or
+    it is near it - a letter or two misread (rapidfuzz ratio over 70), or
+    another form of it."""
+    if not words:
+        return False
+    if want in words or words in want:
+        return True
+    try:
+        from rapidfuzz import fuzz
+    except Exception:  # noqa: BLE001 - without it, keep the mark
+        return True
+    for part in want.split():
+        for word in words.split():
+            if (part in word or fuzz.ratio(part, word) >= 70
+                    or related_word(part, word)):
+                return True
+    return False
+
+
+def _widen(text: str, start: int, end: int) -> tuple:
+    """Out to the edges of the words the span touches."""
+    while start > 0 and _WORD_CHARS.match(text[start - 1]):
+        start -= 1
+    while end < len(text) and _WORD_CHARS.match(text[end]):
+        end += 1
+    return start, end
+
+
+#: The fields a term asking by name is allowed to mark, by what a result calls
+#: the field it shows.
+_CALLED = {
+    "label": ("printed_caption", "label"),
+    "OCR headline": ("ocr_text",),
+    "newspaper": ("newspaper",),
+    "edition": ("edition",),
+    "link": ("url",),
+}
+
+
+def marks(says: str, wanted: str, which: str = "") -> list:
+    """[(start, end)] in ``says``: the words the search found there, as whole
+    words, for marking in yellow.
+
+    Every plain term, found as typed; where a term was not, what the forgiving
+    pass matched and its related forms. A minus term is never marked. A term
+    of one letter (की and के fold to one) marks nothing, and one of two marks
+    only the words it starts, or every word of a Hindi line would light up.
+    """
+    text = str(says or "")
+    if not text:
+        return []
+    plain, origin = fold_map(text)
+    if not plain:
+        return []
+    names = _CALLED.get(which, ())
+    spans: list = []
+    for group in parse(wanted):
+        for term in group:
+            if term.negated:
+                continue
+            if term.fields and names and not set(term.fields) & set(names):
+                continue
+            want = fold(term.words)
+            letters = len(want.replace(" ", ""))
+            if letters < 2:
+                continue
+            found: list = []
+            for hit in re.finditer(re.escape(want), plain):
+                start, end = hit.start(), hit.end()
+                if letters == 2 and start > 0 and plain[start - 1] != " ":
+                    continue            # two letters: only where a word starts
+                found.append((start, end))
+            if not found and not term.phrase and letters >= LEAST_FUZZY:
+                if " " in want:
+                    # Words looked for together - a route, "delhi-ambala" -
+                    # each found on its own: one window over both carried the
+                    # mark of a short reading on to the word beside it.
+                    for part in want.split():
+                        if len(part) >= LEAST_FUZZY:
+                            found.extend(_near_word(part, plain))
+                else:
+                    # The forgiving pass's window, trimmed to the one word it
+                    # covers (see _near_word), and the word's other forms.
+                    found.extend(_near_word(want, plain))
+                    at = 0
+                    for word in plain.split(" "):
+                        if related_word(want, word):
+                            found.append((at, at + len(word)))
+                        at += len(word) + 1
+            for start, end in found:
+                if end <= start or start >= len(origin):
+                    continue
+                first = origin[start]
+                last = origin[min(end, len(origin)) - 1] + 1
+                first, last = _widen(text, first, last)
+                # A mark on a word that looks nothing like what was searched
+                # - the forgiving pass matched across two words, "ch in" in
+                # "Kavach installation" for "chain" - marks nothing.
+                if not _looks_like(want, fold(text[first:last])):
+                    continue
+                spans.append((first, last))
+    spans.sort()
+    merged: list = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+#: How much of a line a result shows, and how far before the first marked
+#: word it starts when that word is further along than this.
+SHOWN = 150
+LEAD = 40
+
+
+def marked_html(says: str, spans: list, colour: str = "",
+                ink: str = "") -> str:
+    """The line as rich text, the marked words on yellow. Every piece of the
+    text is escaped - a headline that happens to hold "<b>" is words.
+
+    Long lines are cut to SHOWN characters at a word, and when the first mark
+    lies further along than LEAD the line starts a few words before it, after
+    an ellipsis: a result is one line, and a mark out of sight is no mark.
+    """
+    import html as _html
+
+    text = str(says or "")
+    colour = colour or theme.HIGHLIGHT
+    ink = ink or theme.HIGHLIGHT_INK
+    begin = 0
+    if spans and spans[0][0] > LEAD:
+        begin = spans[0][0] - LEAD // 2
+        space = text.rfind(" ", 0, begin)
+        begin = space + 1 if space >= 0 else begin
+    end = min(len(text), begin + SHOWN)
+    if end < len(text):
+        space = text.rfind(" ", begin, end)
+        if space > begin + SHOWN // 2:
+            end = space
+    out = ["… " if begin > 0 else ""]
+    at = begin
+    for start, stop in spans:
+        if stop <= begin or start >= end:
+            continue
+        start, stop = max(start, begin), min(stop, end)
+        out.append(_html.escape(text[at:start]))
+        out.append(
+            f'<span style="background-color:{colour}; color:{ink};'
+            f' font-weight:800;">{_html.escape(text[start:stop])}</span>')
+        at = stop
+    out.append(_html.escape(text[at:end]))
+    if end < len(text):
+        out.append(" …")
+    return "".join(out)
 
 
 class Result(QFrame):
@@ -298,7 +723,7 @@ class Result(QFrame):
     ticked = Signal()
 
     def __init__(self, number: int, row, which: str, says: str, parent=None,
-                 where: str = ""):
+                 where: str = "", wanted: str = "", guessed: bool = False):
         super().__init__(parent)
         self.row_id = row.id
         self.number = number
@@ -338,7 +763,13 @@ class Result(QFrame):
 
         words = QVBoxLayout()
         words.setSpacing(1)
-        head = QLabel(says[:150])
+        # THE WORDS FOUND, MARKED IN YELLOW - the same yellow as selected text
+        # in the preview - as whole words, so a Hindi cluster is never cut in
+        # two by a mark. Rich text, every piece of it escaped.
+        self.spans = marks(says, wanted, which) if wanted else []
+        head = QLabel()
+        head.setTextFormat(Qt.RichText)
+        head.setText(marked_html(says, self.spans))
         # Hindi a size larger, the same as the boxes on a row - a headline in
         # Devanagari at the size the English is set at reads smaller than it,
         # and a result is read at a glance or it is no use.
@@ -347,11 +778,28 @@ class Result(QFrame):
             f" font-size: {theme.reading_size(says, 12)}px;"
             " font-weight: 600;")
         head.setWordWrap(False)
+        # Never wider than the box it is in: a one-line label otherwise asks
+        # for its whole length, and the words marked at the end of a long
+        # headline sat past a sideways scroll.
+        head.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        head.setMinimumWidth(40)
+        self.head = head
         # Where it is, when the number alone does not say: on the board's four
-        # columns every column counts from 1, so "3" is three clippings.
-        said_where = QLabel(f"{which}  ·  {where}" if where else which)
+        # columns every column counts from 1, so "3" is three clippings; and
+        # the division it came from, which the file it was imported in says.
+        parts = [which]
+        if guessed:
+            parts.append("close match")
+        if where:
+            parts.append(where)
+        said_where = QLabel("  \u00b7  ".join(part for part in parts if part))
         said_where.setStyleSheet(
             f"color: {theme.MUTED}; font-size: 10px; font-weight: 700;")
+        said_where.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        source = str(getattr(row, "source_name", "") or "").strip()
+        if source:
+            said_where.setToolTip(f"From {source}")
+        self.said_where = said_where
         words.addWidget(head)
         words.addWidget(said_where)
         line.addLayout(words, 1)
@@ -593,25 +1041,30 @@ class FindBox(QFrame):
                 lambda _c=False, n=number: self.shiftWanted.emit(self.chosen(), n))
 
     def show_results(self, found: list, numbers, places=None,
-                     list_actions: bool = True) -> None:
-        """``places``: row id -> a word on where it is, or None for none."""
+                     list_actions: bool = True, wanted: str = "",
+                     total: Optional[int] = None) -> None:
+        """``places``: row id -> a word on where it is, or None for none.
+        ``found`` is search_detail's (row, which, says, guessed) - or the
+        older (row, which, says); ``total`` how many matched in all."""
         self.list_actions = bool(list_actions)
         while self.column.count() > 1:
             item = self.column.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        total = len(found) if total is None else max(int(total), len(found))
         if not found:
             self.said.setText("Nothing matches that.")
         else:
             self.said.setText(
-                f"{len(found)} clipping{'s' if len(found) != 1 else ''}"
-                + (f", showing the first {MOST_RESULTS}"
-                   if len(found) >= MOST_RESULTS else ""))
-        for row, which, says in found:
+                f"{total} clipping{'s' if total != 1 else ''}"
+                + (f", showing {len(found)}" if total > len(found) else ""))
+        for one in found:
+            row, which, says = one[0], one[1], one[2]
+            guessed = bool(one[3]) if len(one) > 3 else False
             where = places(row.id) if places is not None else ""
             result = Result(numbers(row.id), row, which, says, self.holder,
-                            where=where or "")
+                            where=where or "", wanted=wanted, guessed=guessed)
             result.picked.connect(self.picked.emit)
             result.ticked.connect(self._count_changed)
             self.column.insertWidget(self.column.count() - 1, result)
@@ -657,10 +1110,21 @@ other are joined by "and", and <code>OR</code> splits the whole query into
 sides &mdash; so <code>vande bharat OR paper:jagran</code> finds the clippings
 that say both those words, plus everything from that paper.</p>
 
-<p style="margin:0"><b>A misread headline still turns up.</b> A reading taken
-off a picture is never perfect, so anything four letters or longer is also
-matched forgivingly &mdash; <code>hydrogen</code> finds
+<p style="margin:0 0 10px 0"><b>A misread headline still turns up.</b> A
+reading taken off a picture is never perfect, so anything four letters or
+longer is also matched forgivingly &mdash; <code>hydrogen</code> finds
 <code>hydr0gen</code>. A quoted phrase is not: that is asked for exactly.</p>
+
+<p style="margin:0 0 10px 0"><b>And its related words.</b> An English word
+finds its other forms: <code>derailment</code> finds <i>derailed</i>,
+<code>electrification</code> finds <i>electrified</i>, and a name spelt a
+letter apart &mdash; <code>jagaran</code>, <i>Jagran</i>. Hindi finds its
+forms already: <code>यात्री</code> finds <i>यात्रियों</i>. A result found only
+this way says <i>close match</i>.</p>
+
+<p style="margin:0">The words found are <b>marked in yellow</b>, and under
+each result is where it came from: its division, and on the board its
+column.</p>
 """
 
 
@@ -867,13 +1331,14 @@ class FindBar(QWidget):
         if len(fold(wanted).replace(" ", "")) < LEAST_LETTERS:
             self.close_box()
             return
-        found = search(self._rows(), wanted)
+        found, total = search_detail(self._rows(), wanted)
         box = self._ensure_box()
         try:
             acts = bool(self._list_actions())
         except Exception:  # noqa: BLE001 - a question, never a crash
             acts = True
-        box.show_results(found, self._numbers, self._places, acts)
+        box.show_results(found, self._numbers, self._places, acts,
+                         wanted=wanted, total=total)
         self._place()
         # Remembered only when it found something. A search that matched
         # nothing is not worth offering back, and half a word typed on the way

@@ -43,6 +43,12 @@ MIN_WIDTH = 420.0
 
 INK = "#1A1F2B"
 LINK_INK = "#0F5F76"
+# The date under the title (2.0.62): the white between the two lines, and how
+# it reads. In INK and nothing else, so a report that comes back without its
+# record still has the whole band - title and date - recognised as ours.
+DATE_GAP = 3.0
+DATE_FORMAT = "%d/%m/%y"
+DATE_FLOOR = 10.0
 # The address is set smaller than the headline, in the same proportion the
 # printed report uses.
 LINK_RATIO = 0.62
@@ -68,14 +74,23 @@ def _measure(page, typeface, text, width, size, style, colour, bold):
 
 def compose(clip: Clip, typeface: "build_pdf.Typeface",
             heading: Optional[layout.HeadingStyle] = None,
-            dpi: int = 200) -> bytes:
+            dpi: int = 200, when: Optional[date] = None) -> bytes:
     """One clipping, its headline and its address, as a single JPEG."""
-    return compose_with_box(clip, typeface, heading, dpi)[0]
+    return compose_with_box(clip, typeface, heading, dpi, when=when)[0]
+
+
+def date_line(heading: Optional[layout.HeadingStyle],
+              when: Optional[date] = None) -> str:
+    """The date burned under the title, or "" when the card has it off."""
+    if heading is None or not getattr(heading, "title_date", False):
+        return ""
+    return (when or date.today()).strftime(DATE_FORMAT)
 
 
 def compose_with_box(clip: Clip, typeface: "build_pdf.Typeface",
                      heading: Optional[layout.HeadingStyle] = None,
-                     dpi: int = 200) -> tuple[bytes, dict]:
+                     dpi: int = 200,
+                     when: Optional[date] = None) -> tuple[bytes, dict]:
     """One clipping, its headline and its address, as a single JPEG.
 
     Returns the picture bytes and where the clipping itself sits inside them.
@@ -98,6 +113,14 @@ def compose_with_box(clip: Clip, typeface: "build_pdf.Typeface",
     title = _wordlist.Sieve().clean(clip.printed_caption.strip())
     address = (clip.url or "").strip()
     link_size = max(7.0, style.size * LINK_RATIO)
+    # Under the title, in the title's face and alignment, a size down unless
+    # the card sets one. A clipping with no title - a web page - still gets
+    # it: every clipping of the day is dated alike.
+    stamp = date_line(style, when)
+    # Never under ten points, and bold when the title is: a thinner line of
+    # figures is one the importer cannot tell for our own type, and a report
+    # that comes back without its record would keep the date on the picture.
+    date_size = style.date_points(floor=DATE_FLOOR) if stamp else 0.0
 
     data = imageops.encode_for_export(clip)
     picture = pymupdf.open(stream=data, filetype="jpeg")
@@ -114,9 +137,16 @@ def compose_with_box(clip: Clip, typeface: "build_pdf.Typeface",
                              INK, style.bold) if title else 0.0)
     link_height = (_measure(probe, typeface, address, width, link_size, style,
                             LINK_INK, False) if address else 0.0)
+    date_height = (_measure(probe, typeface, stamp, width, date_size, style,
+                            INK, style.bold) if stamp else 0.0)
     scratch.close()
 
-    above = (PAD_TOP + title_height + GAP_ABOVE) if title else PAD_TOP
+    # The date sits DATE_GAP under the title, or at the top on its own.
+    date_top = PAD_TOP + (title_height + DATE_GAP if title else 0.0)
+    if stamp:
+        above = date_top + date_height + GAP_ABOVE
+    else:
+        above = (PAD_TOP + title_height + GAP_ABOVE) if title else PAD_TOP
     below = (GAP_BELOW + link_height + PAD_BOTTOM) if address else PAD_BOTTOM
     height = above + float(rect.height) + below
 
@@ -130,6 +160,13 @@ def compose_with_box(clip: Clip, typeface: "build_pdf.Typeface",
             pymupdf.Rect(PAD_SIDE, PAD_TOP, width - PAD_SIDE,
                          PAD_TOP + title_height + 4),
             style.size, align=style.align, colour=INK, bold=style.bold,
+            family=style.family)
+    if stamp:
+        build_pdf._draw_line(
+            page, typeface, stamp,
+            pymupdf.Rect(PAD_SIDE, date_top, width - PAD_SIDE,
+                         date_top + date_height + 4),
+            date_size, align=style.align, colour=INK, bold=style.bold,
             family=style.family)
 
     # Centred when the sheet had to be widened to fit the text, flush otherwise.
@@ -169,7 +206,8 @@ def flatten(clips: Sequence[Clip],
             heading: Optional[layout.HeadingStyle] = None,
             dpi: int = 200,
             warnings: Optional[list] = None,
-            origins: Optional[dict] = None) -> list[Clip]:
+            origins: Optional[dict] = None,
+            when: Optional[date] = None) -> list[Clip]:
     """Copies of ``clips`` whose picture already contains the words.
 
     The headline and the address are cleared on the copies, because they are in
@@ -184,6 +222,9 @@ def flatten(clips: Sequence[Clip],
 
     The originals are untouched - this is an export, and a person's board must
     look the same after it as before.
+
+    ``when`` is the report's date, burned under each title when the heading
+    card asks for it (HeadingStyle.title_date); today when not given.
     """
     warnings = warnings if warnings is not None else []
     typeface = build_pdf.Typeface()
@@ -191,7 +232,8 @@ def flatten(clips: Sequence[Clip],
     for number, clip in enumerate(clips, start=1):
         one = copy.copy(clip)
         try:
-            data, box = compose_with_box(clip, typeface, heading, dpi)
+            data, box = compose_with_box(clip, typeface, heading, dpi,
+                                         when=when)
         except Exception as exc:  # noqa: BLE001 - one bad picture costs one page
             warnings.append(
                 f"Clipping {number} ({clip.effective_label or 'unnamed'}) could "

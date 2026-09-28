@@ -1,8 +1,9 @@
 """Settings: the program's own housekeeping, in one place.
 
-Opened from Settings in the menu at the top left of the window. What it holds
-today is Clean up - the things a program that has been open all morning, every
-morning, accumulates and does not need:
+Opened from Settings in the menu at the top left of the window. It holds the
+colour of the frame the preview puts round a clipping selected in the list
+(2.0.62) - chosen on a colour wheel - and Clean up: the things a program that
+has been open all morning, every morning, accumulates and does not need:
 
   * the duplicate check's measurements of every clipping - the picture prints,
     the ink profile and the headline read off the picture. They are worked out
@@ -30,7 +31,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmapCache
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel,
-                               QPushButton, QVBoxLayout)
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from ..core import duplicates, imageops
 from . import theme
@@ -138,9 +139,30 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setMinimumWidth(520)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(22, 20, 22, 18)
+        # Everything but Close scrolls. The colour wheel made the window taller
+        # than a 768-line screen has room for, and a window held shorter than
+        # its contents squeezed the wheel until its lightness bar was gone.
+        frame = QVBoxLayout(self)
+        frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        outer = QVBoxLayout(body)
+        outer.setContentsMargins(22, 20, 22, 8)
         outer.setSpacing(12)
+        scroll.setWidget(body)
+        frame.addWidget(scroll, 1)
+        self._body = body
+        self._scroll = scroll
+
+        self._build_outline(outer)
+        top_rule = QFrame()
+        top_rule.setFrameShape(QFrame.HLine)
+        top_rule.setStyleSheet(f"color: {theme.HAIRLINE};")
+        outer.addWidget(top_rule)
 
         title = QLabel("Clean up")
         title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {theme.NAVY};")
@@ -201,12 +223,129 @@ class SettingsDialog(QDialog):
         outer.addWidget(about)
 
         close_row = QHBoxLayout()
+        close_row.setContentsMargins(22, 8, 22, 16)
         close_row.addStretch(1)
         close = QPushButton("Close")
         close.setCursor(Qt.PointingHandCursor)
         close.clicked.connect(self.accept)
         close_row.addWidget(close)
-        outer.addLayout(close_row)
+        frame.addLayout(close_row)
+        # Enter and Space close the window. Neither may land on "Back to
+        # yellow", the first button in it, which would throw a chosen colour
+        # away without asking - nor on "Clean up now".
+        close.setDefault(True)
+        close.setFocus()
+        self.close_btn = close
+
+        # As tall as what is in it, as far as the screen allows; past that it
+        # scrolls rather than squeezing anything.
+        try:
+            need = outer.totalHeightForWidth(520) + 60
+            screen = self.screen().availableGeometry().height()
+            self.resize(560, max(360, min(need, screen - 80)))
+        except Exception:  # noqa: BLE001 - Qt's own size then
+            pass
+
+    # ------------------------------------------------ the selected clipping
+    def _build_outline(self, outer) -> None:
+        """The colour of the frame round a selected clipping in the preview."""
+        from .colourwheel import ColourWheel, outline_colour
+
+        title = QLabel("Selected clipping in the preview")
+        title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {theme.NAVY};")
+        outer.addWidget(title)
+        said = QLabel(
+            "A clipping selected in the list is framed in this colour when it "
+            "is open in the preview, so you can see at a glance which ones "
+            "you have picked out. Choose the colour on the wheel; the bar "
+            "under it makes it lighter or darker.")
+        said.setWordWrap(True)
+        said.setStyleSheet(f"color: {theme.MUTED};")
+
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        self.wheel = ColourWheel(outline_colour())
+        self.wheel.changed.connect(self._outline_moving)
+        self.wheel.picked.connect(self._outline_picked)
+        row.addWidget(self.wheel, 0, Qt.AlignTop)
+
+        # The words beside the wheel rather than over it, where there is room
+        # going spare: over it they made the section too tall for the window.
+        side = QVBoxLayout()
+        side.setSpacing(8)
+        side.addWidget(said)
+        # What it will look like: a small dark window with a picture framed.
+        self.outline_sample = QLabel()
+        self.outline_sample.setFixedSize(150, 96)
+        side.addWidget(self.outline_sample)
+        self.outline_code = QLabel()
+        self.outline_code.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.outline_code.setStyleSheet(
+            f"color: {theme.INK}; font-size: 12px; font-weight: 700;")
+        side.addWidget(self.outline_code)
+        self.outline_reset = QPushButton("Back to yellow")
+        self.outline_reset.setCursor(Qt.PointingHandCursor)
+        self.outline_reset.setToolTip("The frame's own colour, the yellow it "
+                                      "starts as.")
+        self.outline_reset.clicked.connect(self._outline_reset)
+        self.outline_reset.setAutoDefault(False)
+        side.addWidget(self.outline_reset, 0, Qt.AlignLeft)
+        side.addStretch(1)
+        row.addLayout(side, 1)
+        outer.addLayout(row)
+        self._show_outline(outline_colour())
+
+    def _show_outline(self, colour: str) -> None:
+        """The sample and the colour's code, for this colour."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+
+        sample = QPixmap(self.outline_sample.size())
+        sample.fill(QColor(theme.DARK_VIEWPORT))
+        painter = QPainter(sample)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        picture = QRectF(40, 20, 70, 56)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#F8F6F1"))
+        painter.drawRect(picture)
+        painter.setBrush(QColor("#1F2937"))
+        painter.drawRect(QRectF(46, 26, 58, 9))
+        painter.setBrush(QColor("#9CA3AF"))
+        for line in range(4):
+            painter.drawRect(QRectF(46, 40 + line * 8, 58 - line * 9, 4))
+        painter.setPen(QPen(QColor(colour), 4))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(picture.adjusted(-5, -5, 5, 5), 4, 4)
+        painter.end()
+        self.outline_sample.setPixmap(sample)
+        self.outline_code.setText(colour.upper())
+
+    def _outline_to_preview(self, colour: str) -> None:
+        preview = getattr(self.window, "preview", None)
+        if preview is not None and hasattr(preview, "set_ring_colour"):
+            preview.set_ring_colour(colour)
+
+    def _outline_moving(self, colour) -> None:
+        # Shown as it is chosen - on the sample and on an open preview - and
+        # kept only once the button is let go.
+        name = colour.name().upper()
+        self._show_outline(name)
+        self._outline_to_preview(name)
+
+    def _outline_picked(self, colour) -> None:
+        from .colourwheel import set_outline_colour
+
+        kept = set_outline_colour(colour.name())
+        self._show_outline(kept)
+        self._outline_to_preview(kept)
+
+    def _outline_reset(self) -> None:
+        from .colourwheel import OUTLINE_DEFAULT, set_outline_colour
+
+        kept = set_outline_colour(OUTLINE_DEFAULT)
+        self.wheel.set_colour(kept)
+        self._show_outline(kept)
+        self._outline_to_preview(kept)
 
     def clean_up(self) -> list:
         """Do what is ticked, and say what was done. Returns the lines said."""
@@ -235,4 +374,13 @@ class SettingsDialog(QDialog):
             said.append("Nothing was ticked, so nothing was done.")
         self.result.setText("\n".join(said))
         self.result.show()
+        # Brought into view: on a short screen the window scrolls, and the
+        # lines saying what was done came in below the fold, so pressing the
+        # button looked like nothing had happened.
+        scroll = getattr(self, "_scroll", None)
+        if scroll is not None:
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, lambda: scroll.ensureWidgetVisible(
+                self.result, 0, 8))
         return said

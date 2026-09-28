@@ -16,6 +16,43 @@ program and not by anyone who works on it:
 
 ---
 
+## 2.0.62
+
+Changed
+
+  * **The date under the newspaper's name, in the burned-headlines report.**
+    Every clipping in the sentiment board's burned report now carries the
+    report's date, DD/MM/YY, on a line under the name above it - the way
+    the JPEG pictures do. A switch in the board's Heading & Document Layout,
+    "Today's date under the title", turns it off and on.
+  * **Two new sizes in the board's Heading & Document Layout.** "Date size"
+    sets how big that date is, in the burned report and on the JPEG
+    pictures; Auto keeps it a little smaller than the name, as before.
+    "Category size" sets how big "Positive News", "Negative News" and the
+    other category headings print in the dossier; 30 is the size they have
+    always been.
+  * **Select a clipping from the preview.** A yellow button on the preview's
+    right edge, under the newspad buttons, selects the clipping in the list,
+    as its tick box would; press it again to take it out. On the press
+    report and on the sentiment board, when a category is open as a list.
+  * **A selected clipping is framed in the preview.** While a clipping is
+    selected in the list, its picture in the preview has a yellow frame
+    round it. Choose the frame's colour on a colour wheel in Settings.
+  * **Captured links go to the bottom of the list,** in the order they were
+    captured, like an imported file. They no longer go in under Clipboard
+    images at the top and push everything else down. Links already in a
+    newspad stay where they are.
+  * **The words found by a search are marked in yellow** on each result.
+  * **The search finds related words.** An English word finds its other
+    forms - "derailment" finds "derailed", "electrification" finds
+    "electrified" - and a name spelt a letter differently, such as Jagaran
+    and Jagran. A result found this way says "close match".
+  * **Each search result says which division it came from,** and where
+    there is no division - a pasted picture, a captured link - where it came
+    from instead. Point at it to see the file's name.
+
+---
+
 ## 2.0.61
 
 Fixed

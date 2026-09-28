@@ -14,7 +14,7 @@ import io
 
 from PySide6.QtCore import (QEvent, QSize, QStringListModel, Qt, QTimer,
                             Signal)
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -159,6 +159,10 @@ class PreviewDialog(QDialog):
     boxReadRequested = Signal(int, tuple)
     #: Words to look for in the list - the OCR headline's search button.
     findRequested = Signal(str)
+    #: (row id, selected) - the rail's select button was pressed: select this
+    #: clipping in the list, or take it out of the selection. The window does
+    #: it; this only asks.
+    pickToggled = Signal(int, bool)
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
@@ -177,6 +181,9 @@ class PreviewDialog(QDialog):
         self._zoom_index = ZOOM_STEPS.index(1.0)
         self._position = self._total = 0
         self._found = False
+        from .colourwheel import outline_colour
+
+        self._ring_colour = outline_colour()
         self._pixmap: QPixmap | None = None
 
         self.setWindowTitle("Clipping")
@@ -415,7 +422,28 @@ class PreviewDialog(QDialog):
             "#PreviewRail QToolButton:pressed {"
             " background: rgba(255, 255, 255, 0.24); }"
             "#PreviewRail QToolButton::menu-indicator { image: none;"
-            " width: 0; height: 0; }")
+            " width: 0; height: 0; }"
+            # The select button (2.0.62), yellow. Every state sets its own
+            # ground, colour and edge: Qt merges a sheet property by property,
+            # so a state that left one out would take the rail's grey hover,
+            # or the page's white from the application's QWidget rule.
+            "#PreviewRail QToolButton#PreviewPick {"
+            f" background: rgba(253, 224, 71, 0.14); color: {theme.HIGHLIGHT};"
+            " border: 1px solid rgba(253, 224, 71, 0.55); border-radius: 9px; }"
+            "#PreviewRail QToolButton#PreviewPick:hover {"
+            f" background: rgba(253, 224, 71, 0.28); color: {theme.HIGHLIGHT};"
+            f" border: 1px solid {theme.HIGHLIGHT}; }}"
+            "#PreviewRail QToolButton#PreviewPick:pressed {"
+            f" background: rgba(253, 224, 71, 0.42); color: {theme.HIGHLIGHT};"
+            f" border: 1px solid {theme.HIGHLIGHT}; }}"
+            "#PreviewRail QToolButton#PreviewPick:checked {"
+            f" background: {theme.HIGHLIGHT}; color: {theme.HIGHLIGHT_INK};"
+            f" border: 1px solid {theme.HIGHLIGHT}; }}"
+            "#PreviewRail QToolButton#PreviewPick:checked:hover {"
+            " background: #FEF08A; color: #111827; border: 1px solid #FEF08A; }"
+            "#PreviewRail QToolButton#PreviewPick:disabled {"
+            " background: rgba(255, 255, 255, 0.04); color: #5B6678;"
+            " border: 1px dashed rgba(255, 255, 255, 0.18); }")
         column = QVBoxLayout(rail)
         column.setContentsMargins(self.RAIL_PAD, self.RAIL_PAD,
                                   self.RAIL_PAD, self.RAIL_PAD)
@@ -484,8 +512,84 @@ class PreviewDialog(QDialog):
                 lambda _checked=False, n=number: self._send_to(n))
             self.newspad_btns[number] = button
             column.addWidget(button)
+
+        # SELECT THIS CLIPPING IN THE LIST (2.0.62), under the newspads. Going
+        # through clippings in here and picking out the ones to do something
+        # with - move, exclude, send - used to mean closing this window and
+        # finding each of them again in the list. Pressed, it is selected
+        # there as its own tick box would; pressed again, it is not. Lit
+        # yellow while it is, and the picture gets a frame (see refresh_ticked).
+        pick_line = QFrame(rail)
+        pick_line.setFixedHeight(1)
+        pick_line.setStyleSheet("background: rgba(255, 255, 255, 0.16);"
+                                " border: none;")
+        column.addWidget(pick_line)
+        self.pick_btn = QToolButton(rail)
+        self.pick_btn.setObjectName("PreviewPick")
+        self.pick_btn.setFixedSize(self.RAIL_BUTTON, self.RAIL_BUTTON)
+        self.pick_btn.setCursor(Qt.PointingHandCursor)
+        self.pick_btn.setCheckable(True)
+        # Two faces, swapped by the checked state alone - no restyling on a
+        # press, and so nothing to flicker.
+        face = QIcon()
+        face.addPixmap(icon_pixmap("square", theme.HIGHLIGHT, 20),
+                       QIcon.Normal, QIcon.Off)
+        face.addPixmap(icon_pixmap("check_square", theme.HIGHLIGHT_INK, 20),
+                       QIcon.Normal, QIcon.On)
+        face.addPixmap(icon_pixmap("square", "#5B6678", 20),
+                       QIcon.Disabled, QIcon.Off)
+        self.pick_btn.setIcon(face)
+        self.pick_btn.setIconSize(QSize(20, 20))
+        self.pick_btn.setToolTip(self.PICK_TIP)
+        # clicked, not toggled: only a press asks for anything. Setting the
+        # button to follow the list (refresh_ticked) must never ask back.
+        self.pick_btn.clicked.connect(self._pick_clicked)
+        column.addWidget(self.pick_btn)
         self._match_newspads(rail)
         return rail
+
+    PICK_TIP = ("Select this clipping in the list - as its tick box does - to "
+                "move it, leave it out or send it with others. Press again to "
+                "take it out of the selection.")
+    PICK_TIP_ON = ("Selected in the list. Press to take it out of the "
+                   "selection.")
+
+    def _pick_clicked(self, checked: bool) -> None:
+        if self.row is None or self._loading:
+            return
+        self.pickToggled.emit(self.row.id, bool(checked))
+
+    def refresh_ticked(self) -> None:
+        """Whether this clipping is selected in the list, shown: the button
+        lit, and the picture framed in the colour chosen in Settings.
+
+        Asked of the window through ``pick_state`` - it knows whether the
+        clipping is in a list that can be selected in at all - and never by
+        redrawing the clipping: a trim half drawn over the picture must
+        survive a tick made in the list behind this window.
+        """
+        row = self.row
+        if row is None:
+            return
+        ask = getattr(self, "pick_state", None)
+        if callable(ask):
+            ticked, allowed, why = ask(row)
+        else:
+            chosen = getattr(self.model, "is_selected", None)
+            ticked, allowed, why = bool(chosen and chosen(row.id)), True, ""
+        button = getattr(self, "pick_btn", None)
+        if button is not None:
+            button.setEnabled(bool(allowed))
+            button.setChecked(bool(ticked and allowed))
+            button.setToolTip(why if not allowed else
+                              self.PICK_TIP_ON if ticked else self.PICK_TIP)
+        self.canvas.set_ring(self._ring_colour if ticked else None)
+
+    def set_ring_colour(self, colour: str) -> None:
+        """The frame's colour, changed in Settings: shown at once."""
+        self._ring_colour = colour or theme.HIGHLIGHT
+        if getattr(self.canvas, "ring", None) is not None:
+            self.canvas.set_ring(self._ring_colour)
 
     def _match_newspads(self, rail=None) -> None:
         """Offer every newspad but the one that is open, as it is NOW.
@@ -1284,6 +1388,9 @@ class PreviewDialog(QDialog):
             self.next_btn.setEnabled(position < total)
 
         self._match_newspads()
+        from .colourwheel import outline_colour
+
+        self._ring_colour = outline_colour()
         glass = getattr(self, "_ocr_box", None)
         if glass is not None:
             glass.busy(False)
@@ -1353,6 +1460,10 @@ class PreviewDialog(QDialog):
         self.setWindowTitle(name)
         self._loading = False
         self._connect_once()
+        # Selected in the list or not - the button and the frame. Every way
+        # of arriving at a clipping comes through here, including the undo
+        # steps that change the selection without saying so.
+        self.refresh_ticked()
 
     def _fill(self, combo: QComboBox, items: list[str], value: str) -> None:
         combo.blockSignals(True)

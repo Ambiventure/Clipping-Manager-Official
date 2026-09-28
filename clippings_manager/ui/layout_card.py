@@ -85,6 +85,13 @@ def offered_families() -> list:
         return list(FAMILIES)
 SIZES = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 26, 28,
          30, 32, 36, 40, 44, 48]
+#: The category headings: not below 14, where "Positive News" stops reading as
+#: the heading of a section, and not past 48, where "Advertisement" would wrap
+#: on A4 - and a heading on two lines is one the importer cannot find again.
+CATEGORY_SIZES = [size for size in SIZES if size >= 14]
+#: The date under a burned title: ten points and up, where the importer can
+#: still tell it for our own type, and no more than 36.
+DATE_SIZES = [size for size in SIZES if 10 <= size <= 36]
 ALIGNMENTS = [("left", "Left"), ("center", "Centre"), ("right", "Right")]
 
 # What a fresh installation starts with. These are the sizes asked for after
@@ -105,6 +112,12 @@ DEFAULTS = {
 # The two panels stay separate: they are different documents.
 DOSSIER_DEFAULTS = {
     **DEFAULTS, "size": 16, "align": "left", "bold": True,
+    # Today's date under the title burned into each clipping - on, because the
+    # office asked for it - its size (0 is Auto: the JPEGs' proportion of the
+    # title), and the size of the category headings (2.0.62).
+    "title_date": True,
+    "date_size": 0,
+    "category_size": 30,
     # The categories in the order the dossier reads them, and which of them
     # print even when they are empty. See core/sentiment.printing_plan.
     sentiment.PRINT_ORDER_KEY: [column.value for column in sentiment.COLUMNS],
@@ -198,6 +211,11 @@ def normalise_layout(key: str, saved) -> dict:
         data["align"] = fallbacks["align"]
     if not 6 <= data["size"] <= 72:
         data["size"] = fallbacks["size"]
+    if "date_size" in data and data["date_size"] != 0 and not (
+            10 <= data["date_size"] <= 36):
+        data["date_size"] = fallbacks["date_size"]
+    if "category_size" in data and not 8 <= data["category_size"] <= 72:
+        data["category_size"] = fallbacks["category_size"]
     if sentiment.PRINT_ORDER_KEY in fallbacks:
         plan = sentiment.printing_plan(saved.get(sentiment.PRINT_ORDER_KEY),
                                        saved.get(sentiment.PRINT_SWITCH_KEY))
@@ -337,6 +355,52 @@ class HeadingLayoutCard(QFrame, DesignFile):
         self.group_btn.clicked.connect(self.groupSocial.emit)
         controls.addWidget(self.group_btn)
 
+        # The dossier alone: the date under a burned title, and the size of
+        # the category headings. The press report has neither.
+        if self.key == "sentiment":
+            self.date_box = QCheckBox("Today's date under the title")
+            self.date_box.setCursor(Qt.PointingHandCursor)
+            self.date_box.setToolTip(
+                "On: the burned-headlines report prints the date, DD/MM/YY, on "
+                "a line under the newspaper's name above every clipping - the "
+                "report's date, today unless the cover says otherwise. Off: the "
+                "name alone, as before. (The JPEG pictures always carry the "
+                "date.)")
+            self.date_box.setStyleSheet(
+                f"QCheckBox {{ color: {theme.INK}; font-size: 11px;"
+                f" font-weight: 700; background: transparent; }}")
+            self.date_box.toggled.connect(lambda _v: self._read())
+            controls.addWidget(self.date_box)
+
+            self.date_size_pick = QComboBox()
+            self.date_size_pick.addItem("Auto", 0)
+            for points in DATE_SIZES:
+                self.date_size_pick.addItem(f"{points}pt", points)
+            self.date_size_pick.setToolTip(
+                "The size of the date under the title - in the burned-headlines "
+                "report and on the JPEG pictures. Auto sets it a little smaller "
+                "than the title, as the JPEGs always have.")
+            self._dress(self.date_size_pick, 86)
+            self.date_size_pick.currentIndexChanged.connect(
+                lambda _i: self._read())
+            controls.addWidget(self._labelled("Date size", self.date_size_pick))
+
+            self.category_pick = QComboBox()
+            for points in CATEGORY_SIZES:
+                self.category_pick.addItem(
+                    f"{points}pt" + ("  (Standard)"
+                                     if points == self._defaults["category_size"]
+                                     else ""),
+                    points)
+            self.category_pick.setToolTip(
+                "The size of the category headings in the dossier - "
+                "\u201cPositive News\u201d, \u201cNegative News\u201d and the rest.")
+            self._dress(self.category_pick, 104)
+            self.category_pick.currentIndexChanged.connect(
+                lambda _i: self._read())
+            controls.addWidget(self._labelled("Category size",
+                                              self.category_pick))
+
         # The dossier alone: the press report is one running order, not
         # categories, so there is nothing here for it to order.
         if self.key == "sentiment":
@@ -408,6 +472,14 @@ class HeadingLayoutCard(QFrame, DesignFile):
         self.bold_box.setChecked(bool(self._values["bold"]))
         self.page_box.setChecked(bool(self._values["page_numbers"]))
         self.align_pick.set_value(self._values["align"])
+        if self.key == "sentiment":
+            self.date_box.setChecked(bool(self._values.get("title_date", True)))
+            self.date_size_pick.setCurrentIndex(
+                max(0, self.date_size_pick.findData(
+                    self._values.get("date_size", 0))))
+            self.category_pick.setCurrentIndex(
+                max(0, self.category_pick.findData(
+                    self._values.get("category_size", 30))))
 
     def _read(self) -> None:
         """Take the values off the controls and remember them."""
@@ -425,6 +497,13 @@ class HeadingLayoutCard(QFrame, DesignFile):
             "align": self.align_pick.value(),
             "page_numbers": self.page_box.isChecked(),
         }
+        if self.key == "sentiment":
+            self._values.update({
+                "title_date": self.date_box.isChecked(),
+                "date_size": self.date_size_pick.currentData() or 0,
+                "category_size": (self.category_pick.currentData()
+                                  or self._defaults["category_size"]),
+            })
         self._changed_design()
         self.changed.emit()
 
@@ -478,7 +557,9 @@ class HeadingLayoutCard(QFrame, DesignFile):
         self._loading = True
         blockers = [QSignalBlocker(control) for control in (
             self.page_pick, self.family_pick, self.size_pick, self.bold_box,
-            self.page_box, self.align_pick)]
+            self.page_box, self.align_pick,
+            *((self.date_box, self.date_size_pick, self.category_pick)
+              if self.key == "sentiment" else ()))]
         try:
             self._apply()
         finally:

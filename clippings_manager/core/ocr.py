@@ -624,8 +624,13 @@ def ready_to_read(image):
     return blank_stamps(strip_band(image))
 
 
-def band_text(image) -> str:
+def band_text(image, lines: bool = False) -> str:
     """Every word on one strip of a picture, read as a single block.
+
+    ``lines`` keeps the reader's own line breaks, one line of the band to a
+    line of the answer: the date build_burned sets under a title (2.0.62) is
+    found as the band's last line, and taken off as a line rather than guessed
+    at inside one long string - see reportrecord.undated.
 
     For the band a burned report draws its headline onto (export/build_burned,
     found again by core/reportrecord.recover_bands). It is not a page: it is one
@@ -661,7 +666,11 @@ def band_text(image) -> str:
         api.SetPageSegMode(tesserocr.PSM.SINGLE_BLOCK)
         try:
             api.SetImage(image)
-            return " ".join(_tidy(api.GetUTF8Text()).split())
+            said = _tidy(api.GetUTF8Text())
+            if lines:
+                return chr(10).join(" ".join(line.split())
+                                 for line in said.splitlines() if line.strip())
+            return " ".join(said.split())
         finally:
             api.SetPageSegMode(before)
     except Exception:  # noqa: BLE001 - never let OCR break an import

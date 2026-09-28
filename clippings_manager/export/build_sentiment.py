@@ -251,8 +251,10 @@ class SentimentOptions:
     page: str = "a4"
     cover_config: object | None = None
     # The dossier's own heading settings, from the panel on the sentiment page.
-    # It governs the clipping titles and the paper - not the coloured category
-    # headers, which are the dossier's identity rather than a typographic choice.
+    # It governs the clipping titles and the paper, and - since 2.0.62, when
+    # the office asked for it - the SIZE of the coloured category headings
+    # (HeadingStyle.category_size). Their colours and words stay the
+    # dossier's own.
     heading: object | None = None
     # ((category value, print it even when empty), ...) - the print order card
     # on the sentiment page. Empty means the old behaviour: every category that
@@ -653,6 +655,17 @@ def _pdf_link_pill(
     return LINK_BLOCK
 
 
+def category_points(style=None) -> float:
+    """The category headings' size: the heading card's, when it says one
+    (2.0.62), else the 30 they have always been."""
+    try:
+        size = float(getattr(style, "category_size", CATEGORY_SIZE)
+                     or CATEGORY_SIZE)
+    except (TypeError, ValueError):
+        return CATEGORY_SIZE
+    return size if 8.0 <= size <= 72.0 else CATEGORY_SIZE
+
+
 def _pdf_head(
     sheet, typeface: Typeface, options: SentimentOptions, page_width: float,
     banner: str, column: Section, first_in_category: bool,
@@ -665,13 +678,16 @@ def _pdf_head(
         cursor = HEADER_BOTTOM
     if options.include_category_headers and first_in_category:
         heading, colour = _category_style(column)
+        size = category_points(style)
         _draw_line(
             sheet, typeface, heading,
             pymupdf.Rect(MARGIN, cursor, page_width - MARGIN,
-                         cursor + CATEGORY_SIZE * 1.5),
-            CATEGORY_SIZE, align="left", colour=colour, bold=True,
+                         cursor + size * 1.5),
+            size, align="left", colour=colour, bold=True,
         )
-        cursor += CATEGORY_ADVANCE
+        # The room under it grows and shrinks with it: at 30 it is the 36 it
+        # has always been.
+        cursor += CATEGORY_ADVANCE * size / CATEGORY_SIZE
     if platform:
         # In the colour the headings panel is set to, so the platform lines in
         # the dossier and in the press report are the same colour.
@@ -772,7 +788,7 @@ def build_pdf(
             # reader knows the category was looked at and was empty.
             sheet = document.new_page(width=page_width, height=page_height)
             cursor = _pdf_head(sheet, typeface, options, page_width, banner,
-                               column, True)
+                               column, True, style=style)
             _draw_line(
                 sheet, typeface, nil_line(options, column),
                 pymupdf.Rect(MARGIN, cursor, page_width - MARGIN,
@@ -985,10 +1001,13 @@ def _docx_head(
         used += DOCX_HEADER_COST
     if options.include_category_headers and first_in_category:
         heading, colour = _category_style(column)
+        size = category_points(style)
         paragraph = document.add_paragraph()
-        _docx_run(paragraph, heading, CATEGORY_SIZE, colour, bold=True)
+        _docx_run(paragraph, heading, size, colour, bold=True)
         paragraph.paragraph_format.space_after = Pt(8)
-        used += DOCX_CATEGORY_COST
+        # Reserved in proportion, so a larger heading never pushes its picture
+        # onto a page of its own - the stranded heading this cost is set for.
+        used += DOCX_CATEGORY_COST * size / CATEGORY_SIZE
     if platform:
         ink = getattr(style, "colour", "") or _category_style(column)[1]
         paragraph = document.add_paragraph()
@@ -1140,7 +1159,7 @@ def build_docx(
                 document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
             started = True
             pages += 1
-            _docx_head(document, options, banner, column, True)
+            _docx_head(document, options, banner, column, True, style=style)
             paragraph = document.add_paragraph()
             _docx_run(paragraph, nil_line(options, column), NIL_SIZE,
                       TITLE_COLOUR)

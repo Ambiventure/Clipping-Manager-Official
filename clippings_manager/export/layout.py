@@ -60,6 +60,17 @@ class HeadingStyle:
     bold: bool = False
     align: str = "center"
     page_numbers: bool = False
+    # The dossier's own three (the board's card alone offers them, 2.0.62).
+    # Today's date on a line under the title burned into each clipping, DD/MM/YY.
+    # Off unless the card says so: the press report burns nothing, and a style
+    # built in code is the one that has always been.
+    title_date: bool = False
+    # That date's size, and the JPEG export's date line: 0 is "Auto", the
+    # proportion of the title the JPEGs have always used.
+    date_size: float = 0.0
+    # The coloured category headings - "Positive News" and the rest - in every
+    # dossier, plain or burned. 30 is what they have always been.
+    category_size: float = 30.0
 
     @classmethod
     def from_settings(cls, data) -> "HeadingStyle":
@@ -84,7 +95,29 @@ class HeadingStyle:
             style.align = align
         style.bold = bool(data.get("bold", style.bold))
         style.page_numbers = bool(data.get("page_numbers", style.page_numbers))
+        style.title_date = bool(data.get("title_date", style.title_date))
+        try:
+            size = float(data.get("date_size", style.date_size))
+            if size == 0.0 or 6.0 <= size <= 72.0:
+                style.date_size = size
+        except (TypeError, ValueError):
+            pass
+        try:
+            size = float(data.get("category_size", style.category_size))
+            if 8.0 <= size <= 72.0:
+                style.category_size = size
+        except (TypeError, ValueError):
+            pass
         return style
+
+    def date_points(self, ratio: float = 12.5 / 15.0,
+                    floor: float = 7.0) -> float:
+        """How big a date line is set: the size asked for, or on Auto the
+        proportion of the title the JPEG export has always used - never under
+        ``floor`` (the burned report asks for ten, the JPEGs keep their seven)."""
+        if self.date_size:
+            return max(floor, float(self.date_size))
+        return max(floor, self.size * ratio)
 
     def leading(self) -> float:
         """Line spacing follows the type size, as it always did at 15pt."""

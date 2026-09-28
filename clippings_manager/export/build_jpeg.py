@@ -169,7 +169,10 @@ def render(clip: Clip, when: date, typeface: "build_pdf.Typeface",
     style = heading or layout.HeadingStyle(**{
         "size": 15.0, "align": "left", "bold": True, "family": "sans"})
     line_one = style.size
-    line_two = max(7.0, style.size * SECOND_LINE_RATIO)
+    # The date line: the size the card sets, else the proportion it always had.
+    line_two = (style.date_points(SECOND_LINE_RATIO)
+                if hasattr(style, "date_points")
+                else max(7.0, style.size * SECOND_LINE_RATIO))
     data = imageops.encode_for_export(clip)
     picture = pymupdf.open(stream=data, filetype="png")
     rect = picture[0].rect if picture.page_count else pymupdf.Rect(0, 0, 400, 300)

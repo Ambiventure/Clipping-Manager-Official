@@ -943,8 +943,9 @@ class MainWindow(QMainWindow):
         self.main_menu.setToolTipsVisible(True)
         self.settings_action = self.main_menu.addAction("Settings…")
         self.settings_action.setToolTip(
-            "Clean up: measure every clipping again for the duplicate check, "
-            "empty the browser's saved pages, free memory and delete "
+            "The colour a selected clipping is framed in, in the preview. "
+            "And Clean up: measure every clipping again for the duplicate "
+            "check, empty the browser's saved pages, free memory and delete "
             "temporary files. Your clippings and settings are not touched.")
         self.settings_action.triggered.connect(self.open_settings)
         self.main_menu.addSeparator()
@@ -2624,29 +2625,35 @@ class MainWindow(QMainWindow):
 
         ``links`` is a page captured from a link: it goes under the "Imported
         links" bracket, not "Clipboard images" - the office wants the two
-        apart - which starts under the clipboard's, at the top of the list.
+        apart - and at the FOOT of the list, after everything already in it,
+        the way an imported file goes (2.0.62). Put under the clipboard's
+        bracket at the top, every link pushed the whole list down a place,
+        and a batch of them landed above the files that came in before it.
         """
         if self._refuse_if_read_only():
             return []
         target = self.pool()
         self._stamp_pending(clips)
         tidied = self._tidy_screenshots(clips, tidy)
-        if links:
-            key = LINKS_KEY
-            rows = target.make_rows(clips, "link", LINKS_TITLE, LINKS_KEY)
-        else:
-            key = LOOSE_KEY
-            rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
-        at = target.loose_insert_point(key)
         scope = getattr(target, "scope", None)
-        if (target is getattr(self, "board_model", None) and scope is not None
+        if links:
+            # Last in the list, in the order captured. At the end of the pool
+            # is at the end of a category opened out too: its rows are the
+            # pool's, in the pool's order.
+            rows = target.make_rows(clips, "link", LINKS_TITLE, LINKS_KEY)
+            at = -1
+        else:
+            rows = target.make_rows(clips, "clipboard", LOOSE_TITLE, LOOSE_KEY)
+            at = target.loose_insert_point()
+        if (not links and target is getattr(self, "board_model", None)
+                and scope is not None
                 and clips and all(scope.holds(clip) for clip in clips)):
             # Into a category opened out as a list: at the top of ITS loose
             # clippings, as the press report puts them. The pool's own rule is
             # kept for a clipping that went to another category (Collect's
             # column option), which would otherwise be put among this one's,
             # and scoped_insert_point falls back to it in an empty category.
-            at = target.scoped_insert_point(key)
+            at = target.scoped_insert_point()
         self.stack_for(target).push(
             commands.AddClips(
                 target, rows,
@@ -3238,6 +3245,7 @@ class MainWindow(QMainWindow):
         bar = getattr(self, "find_bar", None)
         if self.mode == "sentiment" and bar is not None:
             bar.look_again()
+        self._sync_preview_ticked()
         # Collect's bar names the column a collected photo goes in, which is
         # the one opened out.
         collector = getattr(self, "collector", None)
@@ -3476,6 +3484,72 @@ class MainWindow(QMainWindow):
             self._board_last_clicked_id = clip_id
         else:
             self._last_clicked_id = clip_id
+
+    # ------------------------------------------- selecting from the preview
+    #: Said on the preview's select button where there is nothing to select in.
+    NO_PICK = ("Open this category as a list to select clippings in it - over "
+               "the four columns of cards there is no list to select in, and "
+               "opening one clears what was selected.")
+    #: ... and where the clipping has left the list on show.
+    NO_PICK_GONE = ("This clipping is no longer in the list - it was taken out "
+                    "of it or deleted - so there is nothing to select it in.")
+    NO_PICK_ELSEWHERE = ("This clipping is no longer in the category open as a "
+                         "list - it was given another Sentiment - so it cannot "
+                         "be selected in it.")
+
+    def _preview_pick_state(self, row) -> tuple:
+        """(selected, can be selected, why not) for the clipping on show.
+
+        On the board's four columns of cards nothing can be: no bar acts on a
+        selection there, and opening a category clears it (ClipModel.set_scope)
+        - so a clipping selected from the preview would lose it unseen.
+        """
+        pool = self._preview_pool()
+        if pool is None or row is None or pool.row_for(row.id) is None:
+            return False, False, self.NO_PICK_GONE
+        board = pool is getattr(self, "board_model", None)
+        scope = getattr(pool, "scope", None)
+        if board and scope is None:
+            return False, False, self.NO_PICK
+        if board and not pool.in_scope(row):
+            return False, False, self.NO_PICK_ELSEWHERE
+        return bool(pool.is_selected(row.id)), True, ""
+
+    def _preview_pick(self, row_id: int, on: bool) -> None:
+        """The preview's select button: select this clipping in its list, or
+        take it out - as its own tick box would, adding to what is selected,
+        and the end a shift-click in the list would run from."""
+        pool = self._preview_pool()
+        row = pool.row_for(row_id) if pool is not None else None
+        _ticked, allowed, why = self._preview_pick_state(row)
+        if not allowed:
+            self._sync_preview_ticked()
+            preview = self.preview
+            if preview is not None and preview.isVisible():
+                preview.told("Not selected - " + why.split(" - ")[0].lower())
+            return
+        pool.set_selected([row_id], bool(on))
+        if pool is getattr(self, "board_model", None):
+            self._board_last_clicked_id = row_id
+        else:
+            self._last_clicked_id = row_id
+        self._sync_preview_ticked()
+        preview = self.preview
+        if preview is not None and preview.isVisible():
+            # Said here: the list and its bar are behind this window.
+            many = len(pool.selected)
+            preview.told(
+                (f"Selected - {many} selected in the list" if many != 1
+                 else "Selected in the list") if on else
+                ("Taken out of the selection" + (
+                    f" - {many} still selected" if many else "")))
+
+    def _sync_preview_ticked(self, *_args) -> None:
+        """The open preview's button and frame, after the selection changed."""
+        preview = getattr(self, "preview", None)
+        if preview is None or not preview.isVisible() or preview.row is None:
+            return
+        preview.refresh_ticked()
 
     # -------------------------------------------------------------- batch
     def _selected_ids(self, pool=None) -> list[int]:
@@ -3904,12 +3978,43 @@ class MainWindow(QMainWindow):
         return board.card_place(row_id)[1] if board is not None else 0
 
     def _find_place(self, row_id: int) -> str:
-        """Which column a result's card is in, over the board's four columns -
-        where every column counts from 1."""
-        if self.mode != "sentiment" or self._board_list_open():
+        """Where a result comes from, under its line: over the board's four
+        columns the column its card is in - every column counts from 1 - and
+        everywhere the division it belongs to (2.0.62)."""
+        parts = []
+        if self.mode == "sentiment" and not self._board_list_open():
+            board = getattr(self, "board", None)
+            if board is not None:
+                parts.append(board.card_place(row_id)[0])
+        parts.append(self._division_words(row_id))
+        return "  ·  ".join(part for part in parts if part)
+
+    def _division_words(self, row_id: int) -> str:
+        """The division a clipping belongs to, by name - "Delhi Division".
+
+        Its own, first: an imported file's clippings were given it from the
+        file's name as they came in. Else what the file's name says now. And
+        a clipping of no division at all - a picture pasted in, a captured
+        link - is named by where it came from instead, so a result always
+        says something about that.
+        """
+        pool = self.pool()
+        row = pool.row_for(row_id) if pool is not None else None
+        if row is None or row.clip is None:
             return ""
-        board = getattr(self, "board", None)
-        return board.card_place(row_id)[0] if board is not None else ""
+        clip = row.clip
+        origin = str(row.source_name or "").split("  ·  ")[0].strip()
+        code = str(clip.division or "").strip()
+        if not code:
+            named = str(clip.source_file or "") or origin
+            try:
+                code = detect_division(Path(named).name, self.config) or ""
+            except Exception:  # noqa: BLE001 - no name, no division
+                code = ""
+        if code:
+            found = sentiment.division_by_code(code, self.config)
+            return found.full_name if found is not None else code
+        return origin
 
     def _go_to_clip(self, row_id: int) -> None:
         """Scroll the list to a clipping and open it - what picking a search
@@ -4765,6 +4870,18 @@ class MainWindow(QMainWindow):
             self.preview.newspad_here = lambda: self.newspad
             self.preview.reviewRequested.connect(
                 lambda: self.review_duplicates(pool=self._preview_pool()))
+            # Selecting from the preview, and the preview following whatever
+            # is selected in the list behind it - the button and the frame.
+            # Both pools, once: the window was made for one and serves both.
+            self.preview.pickToggled.connect(self._preview_pick)
+            self.preview.pick_state = self._preview_pick_state
+            self.model.selectionChanged.connect(self._sync_preview_ticked)
+            self.board_model.selectionChanged.connect(self._sync_preview_ticked)
+            # And after any change to the clippings: one given another
+            # Sentiment from the preview leaves the category open as a list
+            # without anything selected changing, and the button must follow.
+            self.model.countsChanged.connect(self._sync_preview_ticked)
+            self.board_model.countsChanged.connect(self._sync_preview_ticked)
         # Set before the row is shown: it decides whether the Section control
         # is the heading picker or the board's sentiment control, and showing
         # the row is what reads it.
@@ -6095,9 +6212,12 @@ class MainWindow(QMainWindow):
 
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
+                # The report's date goes under each title when the board's
+                # heading card asks for it: the same day the JPEGs and the
+                # file's name carry, already refused if it were tomorrow.
                 clips = build_burned.flatten(clips, board_style,
                                              warnings=burn_warnings,
-                                             origins=origins)
+                                             origins=origins, when=stamp)
             finally:
                 QApplication.restoreOverrideCursor()
 
